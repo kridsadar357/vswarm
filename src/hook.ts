@@ -98,7 +98,8 @@ export function map(p: Payload, now = Date.now()): Stamped[] {
     case "PostToolUse":
     case "PostToolUseFailure":
       if (p.hook_event_name === "PostToolUseFailure" || failed(p)) {
-        out.push({ t, type: "error", text: `${p.tool_name}${agentId ? ` (${p.agent_type})` : ""} failed` });
+        const why = String(p.error ?? "").split("\n").find((l) => l.trim() && !/^exit code/i.test(l.trim()));
+        out.push({ t, type: "error", text: `${p.tool_name}${agentId ? ` (${p.agent_type})` : ""} failed${why ? ` · ${why.trim()}` : ""}` });
       }
       break;
     case "SubagentStart": {

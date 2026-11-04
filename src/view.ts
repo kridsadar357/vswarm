@@ -295,7 +295,7 @@ export function draw(s: State, frame: number, now = Date.now()): Screen {
     sx = scr.put(sx, 46, label + " ", S.muted);
     sx = scr.put(sx, 46, `[${value}]`, st) + 4;
   };
-  seg(swarm.toLowerCase(), running ? "swarming" : s.spawned ? "idle" : "standby", S.blueB);
+  seg(swarmModel(s).toLowerCase() || "swarm", running ? "swarming" : s.spawned ? "idle" : "standby", S.blueB);
   seg("subagents", `${running}/${s.spawned}`, S.blueB);
   seg(hasAdvisor ? modelName(s.advisor.model).toLowerCase() : "phase", hasAdvisor ? s.advisor.status : s.phase, S.purpleB);
   seg("jev", `${forks} forks`, S.greenB);

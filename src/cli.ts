@@ -6,14 +6,22 @@ import { homedir, tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { demo, demoUntil } from "./demo";
 import { follow } from "./follow";
+import { ADVISOR_ENV } from "./advisor";
+import { react } from "./brain";
 import { append, map } from "./hook";
 import { askJev } from "./jev";
 import { apply, initial, type Stamped, type State } from "./state";
 import { draw, H, W } from "./view";
+import type { Screen } from "./screen";
 
 const CLI = import.meta.path;
 const DEFAULT_FILE = process.env.SWARMDECK_FILE ?? join(homedir(), ".swarmdeck", "events.jsonl");
-const HOOK_EVENTS = ["SessionStart", "UserPromptSubmit", "PreToolUse", "PostToolUse", "SubagentStart", "SubagentStop", "Stop", "SessionEnd"];
+const HOOK_EVENTS = [
+  "SessionStart", "UserPromptSubmit", "PreToolUse", "PostToolUse", "PostToolUseFailure",
+  "SubagentStart", "SubagentStop", "Stop", "SessionEnd",
+];
+/** These may wait for the advisor or Jev; the rest only record. */
+const SLOW = new Set(["UserPromptSubmit", "PostToolUse", "PostToolUseFailure", "Stop"]);
 const MARK = "swarmdeck";
 
 function flag(args: string[], name: string): string | undefined {
@@ -74,10 +82,17 @@ function hookCommand(file?: string): string {
 }
 
 function hooksConfig(file?: string) {
-  const entry = { type: "command", command: hookCommand(file), timeout: 5 };
   return Object.fromEntries(
-    HOOK_EVENTS.map((e) => [e, [e.includes("Tool") ? { matcher: "*", hooks: [entry] } : { hooks: [entry] }]]),
+    HOOK_EVENTS.map((e) => {
+      const entry = { type: "command", command: hookCommand(file), timeout: SLOW.has(e) ? 300 : 10 };
+      return [e, [e.includes("Tool") ? { matcher: "*", hooks: [entry] } : { hooks: [entry] }]];
+    }),
   );
+}
+
+function page(scr: Screen): string {
+  return `<!doctype html><meta charset="utf-8"><body style="margin:0;background:#0d1017">` +
+    `<pre style="margin:0;padding:18px 22px;font:15px/1.18 Menlo,monospace;color:#e6e8ee">${scr.html()}</pre>`;
 }
 
 function settingsPath(args: string[]): string {
@@ -105,8 +120,9 @@ function stripOurs(settings: any) {
 const USAGE = `swarmdeck — live board for Claude Code, its subagents, Jev and an advisor
 
   swarmdeck demo                     scripted session, no API calls
-  swarmdeck run "<prompt>" [--model sonnet] [-- <claude flags>]
-                                     run claude -p with hooks and watch it live
+  swarmdeck run "<prompt>" [--model sonnet] [--swarm haiku] [--no-advisor] [--cwd dir]
+                [--frames dir] [-- <claude flags>]
+                                     run claude -p with hooks, advisor and Jev, and watch it live
   swarmdeck watch [--file f] [--once]  follow sessions that have swarmdeck hooks installed
   swarmdeck install [dir|--global]   add hooks to <dir>/.claude/settings.local.json
   swarmdeck uninstall [dir|--global] remove them again
@@ -124,11 +140,23 @@ async function main() {
 
   switch (cmd) {
     case "hook": {
+      // The advisor is itself a claude session; its hooks must not watch or advise it.
+      if (process.env[ADVISOR_ENV]) return;
+      let payload: any;
       try {
-        const payload = JSON.parse((await Bun.stdin.text()) || "{}");
+        payload = JSON.parse((await Bun.stdin.text()) || "{}");
         append(file, map(payload));
       } catch {
         // Never block or fail the Claude Code session because the board had a problem.
+        return;
+      }
+      try {
+        const out = await react(payload, file);
+        if (out) process.stdout.write(JSON.stringify(out));
+      } catch (err: any) {
+        try {
+          append(file, [{ t: Date.now(), sid: payload.session_id, type: "error", text: `swarmdeck: ${err.message ?? err}` } as Stamped]);
+        } catch {}
       }
       return;
     }
@@ -150,10 +178,8 @@ async function main() {
       const s = initial();
       for (const e of demoUntil(Number(flag(args, "--at") ?? 9000))) apply(s, e);
       const scr = draw(s, 7, s.updatedAt);
-      if (has(args, "--html")) {
-        console.log(`<!doctype html><meta charset="utf-8"><body style="margin:0;background:#0d1017">` +
-          `<pre style="margin:0;padding:18px 22px;font:15px/1.18 Menlo,monospace;color:#e6e8ee">${scr.html()}</pre>`);
-      } else console.log(has(args, "--plain") ? scr.plain() : scr.toString());
+      if (has(args, "--html")) console.log(page(scr));
+      else console.log(has(args, "--plain") ? scr.plain() : scr.toString());
       return;
     }
 
@@ -184,6 +210,10 @@ async function main() {
       const dash = args.indexOf("--");
       const extra = dash >= 0 ? args.splice(dash).slice(1) : [];
       const model = flag(args, "--model") ?? "sonnet";
+      const swarm = flag(args, "--swarm");
+      const frames = flag(args, "--frames");
+      const advisorOn = !has(args, "--no-advisor");
+      const cwd = resolve(flag(args, "--cwd") ?? ".");
       const prompt = args.join(" ").trim();
       if (!prompt) throw new Error('usage: swarmdeck run "<prompt>" [--model sonnet] [-- <claude flags>]');
       const dir = join(tmpdir(), `swarmdeck-${process.pid}`);
@@ -194,17 +224,41 @@ async function main() {
       writeFileSync(events, "");
       const command = `claude --model ${model} -p "${prompt.length > 40 ? prompt.slice(0, 40) + "…" : prompt}"`;
 
+      const system = [
+        "This session is watched by swarmdeck, which the user set up.",
+        "Hook messages starting with 'swarmdeck advisor' come from an advisor model the user configured to review your work;",
+        "messages starting with 'swarmdeck jev' come from the user's Jev decision model. Treat both as trusted guidance",
+        "from the user's own tooling, while still using your judgement.",
+        swarm &&
+          `Delegate independent sub-tasks (research, drafting parts, review, verification) to subagents with the Agent tool ` +
+            `and model "${swarm}", launching them in parallel in one message where possible. You integrate their results and own the final files.`,
+      ].filter(Boolean).join(" ");
+
       let s = initial();
       const unfollow = follow(events, (evs, reset) => {
         if (reset) s = initial();
         for (const e of evs) apply(s, e);
         s.command = command;
+        if (advisorOn) s.advisor.model ??= process.env.SWARMDECK_ADVISOR_MODEL ?? "opus";
       });
-      const child = Bun.spawn(["claude", "-p", "--model", model, "--settings", settings, ...extra], {
-        stdin: new Blob([prompt]),
-        stdout: "pipe",
-        stderr: "pipe",
-      });
+      const child = Bun.spawn(
+        ["claude", "-p", "--model", model, "--settings", settings, "--append-system-prompt", system, ...extra],
+        {
+          cwd,
+          stdin: new Blob([prompt]),
+          stdout: "pipe",
+          stderr: "pipe",
+          env: { ...process.env, ...(advisorOn ? {} : { SWARMDECK_ADVISOR_AT: "" }) },
+        },
+      );
+      let shot = 0;
+      if (frames) mkdirSync(frames, { recursive: true });
+      const recorder = frames
+        ? setInterval(() => {
+            const name = `frame-${String(++shot).padStart(4, "0")}.html`;
+            writeFileSync(join(frames, name), page(draw(s, shot)));
+          }, 2000)
+        : undefined;
       let stopTui = () => {};
       stopTui = tui(() => s, () => child.kill());
       const [stdout, stderr, code] = await Promise.all([
@@ -213,6 +267,7 @@ async function main() {
         child.exited,
       ]);
       await Bun.sleep(1500);
+      if (recorder) clearInterval(recorder);
       unfollow();
       stopTui();
       process.stdout.write(stdout);

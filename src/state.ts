@@ -16,7 +16,7 @@ export type DeckEvent =
   | { type: "error"; text: string }
   | { type: "log"; who: string; text: string };
 
-export type Stamped = DeckEvent & { t?: number };
+export type Stamped = DeckEvent & { t?: number; sid?: string };
 
 export type Phase = "idle" | "lead" | "delegating" | "review" | "done";
 

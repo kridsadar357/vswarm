@@ -105,3 +105,36 @@ describe("rendering", () => {
     expect(draw(initial(), 0).plain()).toContain("SWARMDECK");
   });
 });
+
+import { digest, parseAdvice } from "../src/advisor";
+import { signature } from "../src/brain";
+
+describe("advisor and jev glue", () => {
+  test("the same error matches across changing numbers and paths", () => {
+    const a = signature("Bash", "Exit code 1\nls: /tmp/run-123/x: No such file or directory");
+    const b = signature("Bash", "Exit code 2\nls: /tmp/run-456/y: No such file or directory");
+    expect(a).toBe(b);
+    expect(signature("Read", "ls: /a: No such file")).not.toBe(a);
+  });
+
+  test("advice JSON is read even inside fences or prose", () => {
+    const r = parseAdvice('Sure:\n```json\n{"ok": false, "headline": "missing B- label", "advice": ["label B-", "add hub IN"]}\n```');
+    expect(r).toEqual({ ok: false, headline: "missing B- label", advice: ["label B-", "add hub IN"] });
+    expect(parseAdvice("not json at all").ok).toBe(true);
+  });
+
+  test("digest keeps text, tool calls and results", () => {
+    const dir = mkdtempSync(join(tmpdir(), "deck-"));
+    const f = join(dir, "t.jsonl");
+    writeFileSync(f, [
+      JSON.stringify({ type: "user", message: { content: "build the diagram" } }),
+      JSON.stringify({ type: "assistant", message: { content: [{ type: "tool_use", name: "Write", input: { file_path: "index.html" } }] } }),
+      JSON.stringify({ type: "user", message: { content: [{ type: "tool_result", is_error: true, content: "denied" }] } }),
+      "not json",
+    ].join("\n"));
+    const d = digest(f);
+    expect(d).toContain("USER: build the diagram");
+    expect(d).toContain("[tool Write]");
+    expect(d).toContain("[result ERROR] denied");
+  });
+});
