@@ -54,7 +54,7 @@ async function advise(file: string, sid: string, moment: Moment, mark: string, p
   const post = (e: Stamped) => append(file, [{ t: Date.now(), sid, ...e } as Stamped]);
   post({ type: "advisor", model: process.env.SWARMDECK_ADVISOR_MODEL ?? "opus", status: "reading", mark });
   try {
-    const a = await askAdvisor(moment, p.transcript_path, extra);
+    const a = await askAdvisor(moment, p.transcript_path, extra, p.cwd);
     post({ type: "advisor", model: a.model, status: "on call", note: a.headline || (a.ok ? "looks right" : "needs fixes"), tokens: a.tokens });
     for (const line of a.advice) post({ type: "log", who: a.model ?? "advisor", text: line });
     return a;

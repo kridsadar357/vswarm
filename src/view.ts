@@ -121,12 +121,15 @@ export function draw(s: State, frame: number, now = Date.now()): Screen {
   const ix = LX + 2, iw = LW - 4;
   scr.center(LX + 1, LW - 2, LY + 1, hasAdvisor ? modelName(s.advisor.model).toUpperCase() : "SESSION", S.purpleB);
   scr.center(LX + 1, LW - 2, LY + 2, hasAdvisor ? `advisor · ${s.advisor.status}` : "hooks · live", S.purple);
-  const marks = hasAdvisor
-    ? [s.advisor.marks[0] ?? "before a plan", s.advisor.marks[1] ?? "same error x2", s.advisor.marks[2] ?? "before done"]
-    : ["session start", s.errors ? `errors x${s.errors}` : "on error", "on stop"];
+  // Each moment has its own slot; a filled diamond means the advisor was called there.
+  const marks = hasAdvisor ? ["before a plan", "same error x2", "before done"] : ["session start", s.errors ? `errors x${s.errors}` : "on error", "on stop"];
+  const fired = (i: number) => hasAdvisor && s.advisor.marks.includes(marks[i]);
   const anchors = [LY + 3, LY + 22, LY + 30];
   scr.vline(ix, LY + 4, LY + 29, "┆", S.dim);
-  anchors.forEach((y, i) => scr.put(ix, y, "◇ " + clip(marks[i], iw - 2), S.text));
+  anchors.forEach((y, i) => {
+    scr.put(ix, y, fired(i) ? "◆" : "◇", fired(i) ? S.purpleB : S.text);
+    scr.put(ix + 2, y, clip(marks[i], iw - 2), S.text);
+  });
 
   const body = (y: number, text: string, st: Style = S.text) => scr.put(ix + 2, y, clip(text, iw - 2), st);
   if (hasAdvisor) {

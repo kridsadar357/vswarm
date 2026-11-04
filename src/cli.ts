@@ -231,7 +231,9 @@ async function main() {
         "from the user's own tooling, while still using your judgement.",
         swarm &&
           `Delegate independent sub-tasks (research, drafting parts, review, verification) to subagents with the Agent tool ` +
-            `and model "${swarm}", launching them in parallel in one message where possible. You integrate their results and own the final files.`,
+            `and model "${swarm}", launching them in parallel in one message where possible. You integrate their results and own the final files. ` +
+            `Before you finish, launch at least two of these subagents in parallel, each checking a different aspect of your output ` +
+            `against the request, and fix what they find.`,
       ].filter(Boolean).join(" ");
 
       let s = initial();
@@ -239,6 +241,7 @@ async function main() {
         if (reset) s = initial();
         for (const e of evs) apply(s, e);
         s.command = command;
+        s.lead.model ??= model;
         if (advisorOn) s.advisor.model ??= process.env.SWARMDECK_ADVISOR_MODEL ?? "opus";
       });
       const child = Bun.spawn(

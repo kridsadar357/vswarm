@@ -72,10 +72,11 @@ const ASK: Record<Moment, string> = {
     "Set ok=false only if something required is missing or wrong, and say exactly what to fix.",
 };
 
-export function advisorPrompt(moment: Moment, session: string, extra = ""): string {
+export function advisorPrompt(moment: Moment, session: string, extra = "", cwd?: string): string {
   return [
     "You are the advisor for a Claude Code session. You read the session and give advice;",
     "you never write code or files yourself, and you must not use any tools.",
+    cwd && `The session's working directory is ${cwd}. You run elsewhere, so judge paths against that directory, not your own.`,
     ASK[moment],
     "Reply with only a JSON object, no prose around it:",
     '{"ok": true|false, "headline": "<at most 22 characters>", "advice": ["<short, concrete point>", "... at most 3"]}',
@@ -99,9 +100,9 @@ export function parseAdvice(text: string): Omit<Advice, "tokens" | "model"> {
   }
 }
 
-export async function askAdvisor(moment: Moment, transcriptPath: string | undefined, extra = ""): Promise<Advice> {
+export async function askAdvisor(moment: Moment, transcriptPath: string | undefined, extra = "", cwd?: string): Promise<Advice> {
   const model = process.env.SWARMDECK_ADVISOR_MODEL ?? "opus";
-  const prompt = advisorPrompt(moment, digest(transcriptPath), extra);
+  const prompt = advisorPrompt(moment, digest(transcriptPath), extra, cwd);
   const child = Bun.spawn(["claude", "-p", "--model", model, "--output-format", "json"], {
     cwd: tmpdir(),
     stdin: new Blob([prompt]),

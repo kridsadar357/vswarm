@@ -181,10 +181,7 @@ export function apply(s: State, e: Stamped): State {
       if (e.model) s.advisor.model = e.model;
       if (e.status) s.advisor.status = e.status;
       if (e.tokens) s.advisor.tokens += e.tokens;
-      if (e.mark) {
-        s.advisor.marks.push(e.mark);
-        if (s.advisor.marks.length > 3) s.advisor.marks.shift();
-      }
+      if (e.mark && !s.advisor.marks.includes(e.mark)) s.advisor.marks.push(e.mark);
       if (e.note) {
         s.advisor.calls++;
         s.advisor.notes.push(e.note);
