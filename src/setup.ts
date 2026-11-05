@@ -278,15 +278,17 @@ export const GATE_START = "# >>> vswarm gate >>>";
 const GATE_END = "# <<< vswarm gate <<<";
 
 /** The ~/.ssh/config block: hosts matching the patterns connect only when preflight passes. */
-export function sshGate(patterns: string[], launcher: string[]): string {
+export function sshGate(patterns: string[], launcher: string[], opt: { cert?: { key: string; cert: string } } = {}): string {
   // The command sits inside ssh's double quotes; a part with spaces gets single quotes of its own.
   const q = launcher.map((p) => (/\s/.test(p) ? `'${p}'` : p)).join(" ");
   return [
     GATE_START,
     `# Hosts below connect only after \`vswarm preflight\` passes. Remove with: vswarm gate remove`,
     // originalhost is the name you typed (ssh vrfix-prod), before any HostName substitution.
-    `Match originalhost ${patterns.join(",")} !exec "${q} preflight --quiet --host %h"`,
+    `Match originalhost ${patterns.join(",")} !exec "${q} ${opt.cert ? "cert" : "preflight"} --quiet --host %h"`,
     `    ProxyCommand /bin/sh -c 'echo "vswarm: this machine did not pass preflight; run: vswarm preflight" >&2; exit 1'`,
+    // With certificates: log in with the fresh session key and its certificate first.
+    ...(opt.cert ? [`Match originalhost ${patterns.join(",")}`, `    IdentityFile ${opt.cert.key}`, `    CertificateFile ${opt.cert.cert}`] : []),
     GATE_END,
   ].join("\n");
 }
@@ -307,7 +309,12 @@ export async function gate(args: string[]) {
   if (old) writeFileSync(backup, old, { mode: 0o600 });
   const rest = old.replace(re, "\n").replace(/\n{3,}/g, "\n\n").trimEnd();
   // ssh uses the first value it sees for most options, so the gate goes first in the file.
-  const next = action === "ssh" ? `${sshGate(args, existsSync(launcherPath()) ? [launcherPath()] : [process.execPath, CLI])}\n\n${rest}\n` : `${rest}\n`;
+  const certAt = args.indexOf("--cert");
+  const withCert = certAt >= 0;
+  if (withCert) args.splice(certAt, 1);
+  if (withCert && !existsSync(join(HOME, "ca", "ca_key"))) throw new Error("no CA yet: vswarm ca init");
+  const cert = withCert ? { key: join(HOME, "ca", "session"), cert: join(HOME, "ca", "session-cert.pub") } : undefined;
+  const next = action === "ssh" ? `${sshGate(args, existsSync(launcherPath()) ? [launcherPath()] : [process.execPath, CLI], { cert })}\n\n${rest}\n` : `${rest}\n`;
   mkdirSync(dirname(cfgPath), { recursive: true, mode: 0o700 });
   writeFileSync(cfgPath, next, { mode: 0o600 });
   ok(action === "ssh" ? `ssh gate added for ${args.join(", ")}` : "ssh gate removed", cfgPath);

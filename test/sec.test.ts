@@ -177,3 +177,58 @@ describe("vswarm try", () => {
     }
   }, 120_000);
 });
+
+describe("short-lived SSH certificates", () => {
+  test.skipIf(!existsSync("/usr/sbin/sshd"))("vswarm cert issues only after preflight; sshd accepts the cert and refuses the bare key", async () => {
+    const root = mkdtempSync(join(tmpdir(), "vs-ca-"));
+    const sec = join(root, "sec"), ca = join(root, "ca");
+    mkdirSync(sec, { recursive: true });
+    const env = { ...process.env, VSWARM_SEC_DIR: sec, VSWARM_CA_DIR: ca, NO_COLOR: "1" };
+    const cli = join(import.meta.dir, "../src/cli.ts");
+    const vs = async (...a: string[]) => {
+      const p = Bun.spawn([process.execPath, cli, ...a], { env, stdin: "ignore", stdout: "pipe", stderr: "pipe" });
+      return { code: await p.exited, err: await new Response(p.stderr).text() };
+    };
+    const last = (verdict: string) => writeFileSync(join(sec, "last.json"), JSON.stringify({ verdict, findings: [], at: Date.now(), scan: {} }));
+    // A throwaway CA without a passphrase, for this test only.
+    expect((await vs("ca", "init", "--no-passphrase", "--ttl", "5m")).code).toBe(0);
+    last("block");
+    expect((await vs("cert", "--quiet")).code).toBe(3);
+    expect(existsSync(join(ca, "session-cert.pub"))).toBe(false);
+    last("pass");
+    expect((await vs("cert")).code).toBe(0);
+    expect(existsSync(join(ca, "session-cert.pub"))).toBe(true);
+
+    // A real sshd on localhost that trusts only the CA.
+    const sshd = join(root, "sshd");
+    mkdirSync(sshd);
+    const user = require("node:os").userInfo().username;
+    await Bun.spawn(["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-f", join(sshd, "host_key")]).exited;
+    writeFileSync(join(sshd, "principals"), user + "\n");
+    const port = 20000 + Math.floor(Math.random() * 20000);
+    writeFileSync(join(sshd, "config"), [
+      `Port ${port}`, "ListenAddress 127.0.0.1", `HostKey ${join(sshd, "host_key")}`, `PidFile ${join(sshd, "pid")}`, "UsePAM no", "StrictModes no",
+      "PasswordAuthentication no", "KbdInteractiveAuthentication no", "AuthorizedKeysFile none",
+      `TrustedUserCAKeys ${join(ca, "ca_key.pub")}`, `AuthorizedPrincipalsFile ${join(sshd, "principals")}`,
+    ].join("\n") + "\n");
+    expect(await Bun.spawn(["/usr/sbin/sshd", "-f", join(sshd, "config"), "-E", join(sshd, "log")]).exited).toBe(0);
+    await Bun.sleep(800);
+    const ssh = async (certFile: string) => {
+      const p = Bun.spawn(["ssh", "-F", "/dev/null", "-p", String(port), "-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=no", "-o", "UserKnownHostsFile=/dev/null",
+        "-o", "IdentitiesOnly=yes", "-i", join(ca, "session"), "-o", `CertificateFile=${certFile}`, "127.0.0.1", "echo OK"], { stdout: "pipe", stderr: "pipe" });
+      return (await new Response(p.stdout).text()).trim();
+    };
+    try {
+      expect(await ssh(join(ca, "session-cert.pub"))).toBe("OK");
+      expect(await ssh("/dev/null")).toBe("");
+    } finally {
+      try { process.kill(Number(readFileSync(join(sshd, "pid"), "utf8"))); } catch {}
+    }
+  }, 60_000);
+
+  test("gate --cert writes the session key and certificate into the ssh block", () => {
+    const g = sshGate(["prod-*"], ["/v/vswarm"], { cert: { key: "/v/ca/session", cert: "/v/ca/session-cert.pub" } });
+    expect(g).toContain('!exec "/v/vswarm cert --quiet --host %h"');
+    expect(g).toContain("CertificateFile /v/ca/session-cert.pub");
+  });
+});

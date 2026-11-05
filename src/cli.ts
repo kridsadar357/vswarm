@@ -16,6 +16,8 @@ import { clearLock, files, loadAccepted, loadBaseline, loadLast, loadLock, saveA
 import { RANK, type Finding, type Verdict } from "./sec/types";
 import { ask, banner, canAsk, COMMANDS, completion, doctor, gate, install, uninstall, update } from "./setup";
 import { shot } from "./shot";
+import { verdictNow } from "./sec/gate";
+import { caFiles, caInit, certInfo, issue, loadCaConfig, serverSetup } from "./sec/cert";
 import { cleanTries, listTries, tryIt, type Net } from "./sec/try";
 
 function flag(args: string[], ...names: string[]): string | undefined {
@@ -55,6 +57,8 @@ function usage() {
   row("vswarm preflight [--quiet] [--strict]", "PASS / WARN / BLOCK; exit 3 on BLOCK");
   row("vswarm preflight --then <command…>", "run the command only if this machine passes");
   row('vswarm gate ssh "prod-*" "*.internal"', "ssh to these hosts only after preflight passes");
+  row("vswarm ca init · ca server <account>", "a CA for short-lived SSH certificates");
+  row('vswarm cert · gate ssh --cert "prod-*"', "15-minute certificate, only when preflight passes");
   row("vswarm accept <id…> | --all | --list", "mark reviewed findings as expected");
   console.log(`\n  ${c.bold("run code you do not trust")}`);
   row("vswarm try <folder|git URL|zip> [-- cmd]", "in a sandbox: no secrets, no network; reports what it tried");
@@ -122,30 +126,7 @@ async function main() {
       flag(args, "--host"); // accepted for ssh's %h; the check is about this machine, whatever the host
       const thenAt = args.indexOf("--then");
       const then = thenAt >= 0 ? args.slice(thenAt + 1) : [];
-      // ssh and kubectl call this on every connection, so a verdict from the last couple of minutes is reused.
-      const last = loadLast();
-      const lock = loadLock();
-      let verdict: Verdict;
-      let findings: Finding[];
-      const cached = !fresh && !lock && last !== undefined && Date.now() - last.at < maxAge;
-      if (cached) {
-        verdict = last!.verdict;
-        findings = last!.findings;
-        if (verdict !== "pass") {
-          const n = findings.filter((f) => RANK[f.severity] >= RANK.medium).length;
-          line(`${VERDICT[verdict]} ${c.dim(`vswarm preflight · ${n} finding${n === 1 ? "" : "s"} · details: vswarm preflight --fresh`)}`);
-        }
-      } else {
-        // In the quiet gate the known-malicious lookup uses its cache, so a slow network never delays a login.
-        const r = await check(realCtx(), { offline: offline || quiet });
-        verdict = r.verdict;
-        if (!quiet || verdict === "block") summary(r, { title: "preflight" });
-        else if (verdict === "warn") {
-          const n = r.findings.filter((f) => RANK[f.severity] >= RANK.medium).length;
-          line(`${VERDICT.warn} ${c.dim(`vswarm preflight · ${n} finding${n === 1 ? "" : "s"} · details: vswarm preflight --fresh`)}`);
-        }
-      }
-      if (lock) verdict = "block";
+      const verdict = await verdictNow({ fresh, quiet, offline, maxAge });
       if (verdict === "block" || (strict && verdict === "warn")) {
         process.exitCode = verdict === "block" ? 3 : 2;
         return;
@@ -221,6 +202,49 @@ async function main() {
 
     case "gate":
       return gate(args);
+
+    case "ca": {
+      const action = args.shift() ?? "status";
+      if (action === "init") {
+        const principals = flag(args, "--principal")?.split(",");
+        const ttl = flag(args, "--ttl");
+        const sk = has(args, "--sk");
+        const noPass = has(args, "--no-passphrase");
+        line(c.dim(sk ? "  touch your security key when it blinks" : "  choose a CA passphrase; vswarm asks for it each time it signs a certificate"));
+        const cfg = await caInit({ sk, noPassphrase: noPass, principals, ttl });
+        line(`${c.green("✔")} CA created ${c.dim(caFiles.key())} · principals ${cfg.principals.join(",")} · certificates last ${cfg.ttl}`);
+        line(c.dim(`  next: vswarm ca server <account>   (commands to make a server trust this CA)`));
+        return;
+      }
+      if (action === "server") {
+        if (!existsSync(caFiles.pub())) throw new Error("no CA yet: vswarm ca init");
+        console.log(serverSetup(args[0] ?? "root", loadCaConfig()));
+        return;
+      }
+      if (action === "status") {
+        if (!existsSync(caFiles.key())) return line("no CA yet · vswarm ca init");
+        const cfg = loadCaConfig();
+        const info = await certInfo();
+        line(`CA ${c.dim(caFiles.key())} · principals ${cfg.principals.join(",")} · ttl ${cfg.ttl}`);
+        line(info.valid ? `${c.green("●")} certificate valid for ${Math.floor((info.left ?? 0) / 60)} min more · ${c.dim(info.id ?? "")}` : `${c.dim("○")} no valid certificate · vswarm cert`);
+        return;
+      }
+      throw new Error("usage: vswarm ca init [--sk] [--principal a,b] [--ttl 15m] | ca server <account> | ca status");
+    }
+
+    case "cert": {
+      const quiet = has(args, "--quiet", "-q");
+      const host = flag(args, "--host");
+      const verdict = await verdictNow({ fresh: has(args, "--fresh"), quiet, offline });
+      if (verdict === "block") {
+        line(c.red("vswarm: no certificate for a machine that does not pass preflight"));
+        process.exitCode = 3;
+        return;
+      }
+      const r = await issue({ host });
+      if (!quiet || !r.reused) line(`${c.green("✔")} ${r.reused ? "certificate still valid" : "certificate issued"} for ${Math.floor((r.info.left ?? 0) / 60)} min · ${c.dim(r.info.principals.join(","))}`);
+      return;
+    }
 
     case "try": {
       if (has(args, "--list")) {
