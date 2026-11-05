@@ -208,3 +208,57 @@ describe("claude accounts", () => {
     expect(nameOf(join(homedir(), ".claude"))).toBe("default");
   });
 });
+
+/** A tiny terminal: follows cursor moves, and advances `markWidth` columns for a combining mark, as some terminals do. */
+function emulate(ansi: string, w: number, h: number, markWidth: number): string[][] {
+  const grid = Array.from({ length: h }, () => Array(w).fill(" "));
+  let r = 0, c = 0;
+  const re = /\x1b\[([\d;?]*)([A-Za-z])|([\s\S])/gu;
+  for (const m of ansi.matchAll(re)) {
+    const p = (m[1] ?? "").split(";");
+    if (m[2] === "H") { r = Number(p[0] || 1) - 1; c = Number(p[1] || 1) - 1; continue; }
+    if (m[2] === "G") { c = Number(p[0] || 1) - 1; continue; }
+    if (m[2] || !m[3]) continue;
+    const ch = m[3];
+    if (ch === "\n") { r++; c = 0; continue; }
+    const cw = /\p{M}/u.test(ch) ? markWidth : charWidth(ch);
+    if (cw && r < h && c < w) grid[r][c] = ch;
+    c += cw;
+  }
+  return grid;
+}
+
+import { charWidth } from "../src/screen";
+
+describe("terminal output", () => {
+  const s = fold(demoUntil(20000));
+  s.chat.push({ t: 0, who: "claude", text: "ผมยังไม่ได้สร้างไฟล์ใดๆ เพราะการเขียนไฟล์ในโปรเจคต้องได้รับอนุญาต ✅ 完成 🚀 ที่นี่" });
+  s.log.push({ t: 0, who: "claude", text: "ผมยังไม่ได้สร้างไฟล์ใดๆ เพราะการเขียนไฟล์ ✅" });
+  const scr = draw(s, 3, s.updatedAt, { w: 130, h: 40, ui: { mode: "run" } });
+
+  test("rows line up even in a terminal that miscounts Thai marks", () => {
+    const want = scr.plain().split("\n");
+    for (const markWidth of [0, 1]) {
+      const got = emulate(scr.toString(), scr.w, scr.h, markWidth);
+      // Every border glyph must land in the same column as on our grid.
+      want.forEach((row, y) => {
+        let x = 0;
+        for (const ch of row) {
+          if (/\p{M}/u.test(ch)) continue;
+          if ("│╮╯╭╰".includes(ch)) expect(got[y][x]).toBe(ch);
+          x += charWidth(ch);
+        }
+      });
+    }
+  });
+
+  test("wide glyphs take two columns and every row is exactly the board width", () => {
+    for (const row of scr.plain().split("\n")) expect(width(row)).toBeLessThanOrEqual(130);
+    const t = new Screen(6, 1);
+    t.put(0, 0, "a🚀b");
+    expect(t.plain()).toBe("a🚀b");
+    // Writing over the second half of the rocket blanks its first half.
+    t.put(2, 0, "x");
+    expect(t.plain()).toBe("a xb");
+  });
+});

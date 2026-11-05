@@ -317,7 +317,7 @@ async function main() {
         : { mode: "demo" };
       const scr = draw(s, 7, s.updatedAt, { ui, w: Number(flag(args, "--w") ?? 0) || undefined, h: Number(flag(args, "--h") ?? 0) || undefined });
       if (has(args, "--html")) console.log(page(scr));
-      else console.log(has(args, "--plain") ? scr.plain() : scr.toString());
+      else console.log(has(args, "--plain") ? scr.plain() : scr.toString(scr.w, scr.h, true));
       return;
     }
 

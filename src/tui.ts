@@ -64,7 +64,8 @@ export interface Board {
 /** Draws `frame(cols, rows, n)` about 8 times a second and hands keys to `onKey`. */
 export function board(frame: (cols: number, rows: number, n: number) => string, onKey: (k: Key) => void): Board {
   const out = process.stdout;
-  out.write("\x1b[?1049h\x1b[?25l\x1b[2J");
+  // Alternate screen, no cursor, and no auto-wrap: a row that comes out too long is cut instead of spilling into the next.
+  out.write("\x1b[?1049h\x1b[?25l\x1b[?7l\x1b[2J");
   let n = 0;
   const render = () => {
     const cols = out.columns ?? W;
@@ -73,7 +74,7 @@ export function board(frame: (cols: number, rows: number, n: number) => string, 
     if (cols < W || rows < H) {
       text += `\x1b[${Math.min(rows, H)};1H\x1b[0;30;43m terminal is ${cols}×${rows}; vswarm needs at least ${W}×${H} \x1b[0m`;
     }
-    out.write("\x1b[H" + text);
+    out.write(text);
   };
   const timer = setInterval(render, 120);
   render();
@@ -89,7 +90,7 @@ export function board(frame: (cols: number, rows: number, n: number) => string, 
     stdin.resume();
     stdin.on("data", onData);
   }
-  const restore = () => out.write("\x1b[0m\x1b[?25h\x1b[?1049l");
+  const restore = () => out.write("\x1b[0m\x1b[?7h\x1b[?25h\x1b[?1049l");
   process.on("exit", restore);
   return {
     kick: render,
