@@ -4,6 +4,7 @@
 import { join } from "node:path";
 import { isDir, ls, mtime, readJson, readText, type Ctx } from "./ctx";
 import type { Finding, Severity } from "./types";
+import { canaryKeyIds, canaryWhere } from "./canary";
 
 const day = 86_400_000;
 const age = (path: string) => {
@@ -113,10 +114,13 @@ export async function secrets(ctx: Ctx): Promise<Finding[]> {
   if (aws) {
     let profile = "default";
     const longTerm: string[] = [];
+    // Your own canary keys are decoys, not exposure.
+    const decoys = canaryKeyIds();
     for (const line of aws.split("\n")) {
       const sec = /^\s*\[([^\]]+)\]/.exec(line);
       if (sec) profile = sec[1];
-      if (/^\s*aws_access_key_id\s*=\s*AKIA/.test(line)) longTerm.push(profile);
+      const id = /^\s*aws_access_key_id\s*=\s*(AKIA\w+)/.exec(line)?.[1];
+      if (id && !decoys.has(id)) longTerm.push(profile);
     }
     if (longTerm.length) {
       out.push(finding("aws", "medium", `AWS long-term access keys in ~/.aws/credentials (${longTerm.length} profile${longTerm.length > 1 ? "s" : ""})`,
@@ -189,6 +193,7 @@ export async function secrets(ctx: Ctx): Promise<Finding[]> {
     for (const proj of ls(root)) {
       for (const f of ls(join(root, proj))) {
         if (!/^\.env(\.|$)/.test(f) || /\.(example|sample|template)$/.test(f)) continue;
+        if (canaryWhere().has(join(root, proj, f))) continue;
         const t = readText(join(root, proj, f), 200_000);
         const names = t ? secretNames(t) : [];
         if (names.length) envHits.push(`~/${base}/${proj}/${f} (${names.length})`);

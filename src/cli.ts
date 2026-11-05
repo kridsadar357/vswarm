@@ -16,6 +16,8 @@ import { clearLock, files, loadAccepted, loadBaseline, loadLast, loadLock, saveA
 import { RANK, type Finding, type Verdict } from "./sec/types";
 import { ask, banner, canAsk, COMMANDS, completion, doctor, gate, install, uninstall, update } from "./setup";
 import { shot } from "./shot";
+import { loadCanaries, plantAws, plantDns, plantEnv, removeCanary } from "./sec/canary";
+import { homedir } from "node:os";
 import { verdictNow } from "./sec/gate";
 import { caFiles, caInit, certInfo, issue, loadCaConfig, serverSetup } from "./sec/cert";
 import { cleanTries, listTries, tryIt, type Net } from "./sec/try";
@@ -58,6 +60,7 @@ function usage() {
   row("vswarm preflight --then <command…>", "run the command only if this machine passes");
   row('vswarm gate ssh "prod-*" "*.internal"', "ssh to these hosts only after preflight passes");
   row("vswarm ca init · ca server <account>", "a CA for short-lived SSH certificates");
+  row("vswarm canary plant aws|dns|env · list", "decoy credentials that alert you when used");
   row('vswarm cert · gate ssh --cert "prod-*"', "15-minute certificate, only when preflight passes");
   row("vswarm accept <id…> | --all | --list", "mark reviewed findings as expected");
   console.log(`\n  ${c.bold("run code you do not trust")}`);
@@ -230,6 +233,38 @@ async function main() {
         return;
       }
       throw new Error("usage: vswarm ca init [--sk] [--principal a,b] [--ttl 15m] | ca server <account> | ca status");
+    }
+
+    case "canary": {
+      const action = args.shift() ?? "list";
+      if (action === "list") {
+        const list = loadCanaries();
+        if (!list.length) return line(`no canaries yet · ${c.dim("vswarm canary plant aws|dns|env")}`);
+        for (const k of list) line(`  ${c.amber("◆")} ${k.id}  ${k.kind.padEnd(4)} ${k.label.padEnd(22)} ${c.dim(k.where.replace(homedir(), "~"))}  ${c.dim(k.token)}`);
+        line(c.dim("\n  Never use these yourself: any use sends you an alert. Remove one with vswarm canary remove <id>."));
+        return;
+      }
+      if (action === "remove") {
+        for (const k of removeCanary(args[0] ?? "")) line(`${c.green("✔")} removed ${k.kind} canary ${k.label} from ${k.where.replace(homedir(), "~")}`);
+        return;
+      }
+      if (action !== "plant") throw new Error("usage: vswarm canary plant aws|dns|env … | canary list | canary remove <id|all>");
+      const kind = args.shift();
+      line(c.dim("  Make the token at https://canarytokens.org with your e-mail (free, by Thinkst). vswarm only plants it."));
+      let k;
+      if (kind === "aws" || kind === "env") {
+        const dir = kind === "env" ? args.shift() : undefined;
+        if (kind === "env" && !dir) throw new Error("usage: vswarm canary plant env <folder>");
+        const keyId = (await ask("Canary AWS access key id (AKIA…):")).trim();
+        const secret = (await ask("Canary AWS secret access key:", { secret: true })).trim();
+        k = kind === "aws" ? plantAws(keyId, secret, { profile: flag(args, "--profile") }) : plantEnv(dir!, keyId, secret);
+      } else if (kind === "dns") {
+        const host = args.shift() ?? (await ask("DNS token hostname (…canarytokens.com):")).trim();
+        k = plantDns(host, { alias: flag(args, "--alias") });
+      } else throw new Error("usage: vswarm canary plant aws [--profile name] | dns <token-host> [--alias name] | env <folder>");
+      line(`${c.green("✔")} planted ${k.kind} canary ${c.bold(k.label)} in ${k.where.replace(homedir(), "~")} ${c.dim(`(id ${k.id})`)}`);
+      line(c.dim(k.kind === "dns" ? `  test it once: dscacheutil -q host -a name ${k.token}  → you should get an e-mail` : `  test it once: aws sts get-caller-identity --profile ${k.label.replace(/[\[\]]/g, "")}  → you should get an e-mail`));
+      return;
     }
 
     case "cert": {

@@ -232,3 +232,37 @@ describe("short-lived SSH certificates", () => {
     expect(g).toContain("CertificateFile /v/ca/session-cert.pub");
   });
 });
+
+import { plantAws, plantDns, removeCanary } from "../src/sec/canary";
+import { secrets as findSecrets } from "../src/sec/secrets";
+
+describe("canary tokens", () => {
+  test("planted decoys are not reported as exposure, real keys still are, and removal restores the files", async () => {
+    const root = mkdtempSync(join(tmpdir(), "vs-can-"));
+    const home = join(root, "home");
+    process.env.VSWARM_SEC_DIR = join(root, "sec");
+    try {
+      mkdirSync(join(home, ".aws"), { recursive: true });
+      mkdirSync(join(home, ".ssh"), { recursive: true });
+      // Fake values built at runtime; no real or real-looking credential sits in the source.
+      const key = (tag: string) => ["AKIA", tag.padEnd(16, "0").toUpperCase()].join("");
+      const secret = "s".repeat(40);
+      const original = `[default]\naws_access_key_id = ${key("REALLOOKING")}\naws_secret_access_key = ${secret}\n`;
+      writeFileSync(join(home, ".aws/credentials"), original);
+      writeFileSync(join(home, ".ssh/config"), "Host work\n    HostName 10.0.0.5\n");
+      const a = plantAws(key("CANARY"), secret, { home });
+      const d = plantDns("abc123.canarytokens.com", { home });
+      expect(readFileSync(join(home, ".aws/credentials"), "utf8")).toContain("[prod-backup-admin]");
+      expect(readFileSync(join(home, ".ssh/config"), "utf8").startsWith("# >>> vswarm canary")).toBe(true);
+      const ctx = { home, pathDirs: [], system: false, host: "t", user: "t", run: async () => undefined } as any;
+      const aws = (await findSecrets(ctx)).find((f) => f.title.startsWith("AWS"));
+      expect(aws?.detail[0]).toBe("profiles: default");
+      removeCanary(a.id);
+      removeCanary(d.id);
+      expect(readFileSync(join(home, ".aws/credentials"), "utf8").trim()).toBe(original.trim());
+      expect(readFileSync(join(home, ".ssh/config"), "utf8").trim()).toBe("Host work\n    HostName 10.0.0.5");
+    } finally {
+      delete process.env.VSWARM_SEC_DIR;
+    }
+  });
+});
