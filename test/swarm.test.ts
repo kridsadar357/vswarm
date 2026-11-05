@@ -350,3 +350,15 @@ describe("resume", () => {
     expect(s.agents[0].status).toBe("failed");
   });
 });
+
+describe("background swarm", () => {
+  test("the lead stopping while subagents run is still the swarm phase", () => {
+    const s = fold([
+      { type: "agent.request", name: "general-purpose", desc: "parts.js model", t: 0 } as Stamped,
+      { type: "agent.start", id: "a", name: "general-purpose", t: 1 } as Stamped,
+      { type: "phase", phase: "done", t: 2 } as Stamped,
+    ]);
+    expect(s.phase).toBe("delegating");
+    expect(draw(s, 0, 3).plain()).toContain("parts.js");
+  });
+});

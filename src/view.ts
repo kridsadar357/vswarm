@@ -154,7 +154,10 @@ function badge(who: string, s: State): [string, Style] {
   if (w === "guard") return ["GUARD", chip(C.rose)];
   if (w === "claude") return ["CLAUDE", { fg: C.amber, bg: C.track, bold: true }];
   if (w.includes("opus") || w === "advisor" || w === (s.advisor.model ?? "").toLowerCase()) return ["ADVISE", chip(C.violet)];
-  return [(w.startsWith("claude-") ? modelName(who) : who).toUpperCase(), chip(C.cyan)];
+  // Subagents log under their type; "general-purpose" says nothing, so show the start of the task instead.
+  const agent = s.agents.find((x) => x.name === who && x.desc);
+  const name = /^general-purpose$/i.test(who) && agent ? (s.agents.filter((x) => x.name === who).length > 1 ? "AGENT" : agent.desc!) : who;
+  return [(name.startsWith("claude-") ? modelName(name) : name).toUpperCase(), chip(C.cyan)];
 }
 
 const PHASES = [
@@ -285,7 +288,9 @@ export function draw(s: State, frame: number, now = Date.now(), opt: { w?: numbe
     const tint = a.status === "failed" ? C.rose : a.status === "done" ? C.lime : C.cyan;
     scr.put(laneX, y, "─▸", { fg: C.cyan });
     scr.put(laneX + 3, y, live ? spin : a.status === "done" ? "✔" : "✖", { fg: tint, bold: true });
-    scr.put(laneX + 5, y, clip(a.name, 12), live ? S.textB : S.text);
+    // Generic agent types say nothing; the task the lead gave them does.
+    const label = /^(general-purpose|agent|task)$/i.test(a.name) && a.desc ? a.desc : a.name;
+    scr.put(laneX + 5, y, clip(label, 12), live ? S.textB : S.text);
     const barX = laneX + 18;
     const room = laneEnd - barX;
     const noteW = room > 52 ? room - 40 : 0;

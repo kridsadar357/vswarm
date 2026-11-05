@@ -146,7 +146,8 @@ export function apply(s: State, e: Stamped): State {
       say(s, t, "you", e.text);
       break;
     case "phase":
-      s.phase = e.phase;
+      // The lead's turn can end while background subagents keep working; that is still the swarm phase.
+      s.phase = e.phase === "done" && s.agents.some((a) => a.status === "running") ? "delegating" : e.phase;
       break;
     case "tool":
       s.lead.tools++;
