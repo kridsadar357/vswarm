@@ -1,4 +1,4 @@
-// Turns the HTML frames written by `swarmdeck run --frames dir` into PNGs and an MP4.
+// Turns the HTML frames written by `v-swarm run --frames dir` into PNGs and an MP4.
 // usage: bun scripts/frames.ts <frames dir> <out.mp4> [--fps 4] [--every 1]
 
 import { readdirSync } from "node:fs";

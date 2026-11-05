@@ -1,5 +1,5 @@
 #!/usr/bin/env bun
-// swarmdeck — live terminal board for a Claude Code session, its subagents, Jev and an advisor.
+// v-swarm — live terminal board for a Claude Code session, its subagents, Jev and an advisor.
 
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
@@ -15,14 +15,16 @@ import { draw, H, W } from "./view";
 import type { Screen } from "./screen";
 
 const CLI = import.meta.path;
-const DEFAULT_FILE = process.env.SWARMDECK_FILE ?? join(homedir(), ".swarmdeck", "events.jsonl");
+const DEFAULT_FILE = process.env.VSWARM_FILE ?? join(homedir(), ".v-swarm", "events.jsonl");
 const HOOK_EVENTS = [
   "SessionStart", "UserPromptSubmit", "PreToolUse", "PostToolUse", "PostToolUseFailure",
   "SubagentStart", "SubagentStop", "Stop", "SessionEnd",
 ];
 /** These may wait for the advisor or Jev; the rest only record. */
 const SLOW = new Set(["UserPromptSubmit", "PostToolUse", "PostToolUseFailure", "Stop"]);
-const MARK = "swarmdeck";
+const MARK = "v-swarm";
+/** Hooks written by the tool under its old name, removed by uninstall too. */
+const OLD_MARK = "swarmdeck";
 
 function flag(args: string[], name: string): string | undefined {
   const i = args.indexOf(name);
@@ -91,8 +93,8 @@ function hooksConfig(file?: string) {
 }
 
 function page(scr: Screen): string {
-  return `<!doctype html><meta charset="utf-8"><body style="margin:0;background:#0d1017">` +
-    `<pre style="margin:0;padding:18px 22px;font:15px/1.18 Menlo,monospace;color:#e6e8ee">${scr.html()}</pre>`;
+  return `<!doctype html><meta charset="utf-8"><body style="margin:0;background:#0b0f19">` +
+    `<pre style="margin:0;padding:18px 22px;font:15px/1.2 Menlo,monospace;color:#e4e9f5">${scr.html()}</pre>`;
 }
 
 function settingsPath(args: string[]): string {
@@ -109,7 +111,7 @@ function readJson(path: string): any {
 function stripOurs(settings: any) {
   for (const [event, groups] of Object.entries<any[]>(settings.hooks ?? {})) {
     const kept = groups
-      .map((g) => ({ ...g, hooks: (g.hooks ?? []).filter((h: any) => !String(h.command ?? "").includes(MARK)) }))
+      .map((g) => ({ ...g, hooks: (g.hooks ?? []).filter((h: any) => ![MARK, OLD_MARK].some((m) => String(h.command ?? "").includes(m))) }))
       .filter((g) => g.hooks.length);
     if (kept.length) settings.hooks[event] = kept;
     else delete settings.hooks[event];
@@ -117,21 +119,21 @@ function stripOurs(settings: any) {
   if (settings.hooks && !Object.keys(settings.hooks).length) delete settings.hooks;
 }
 
-const USAGE = `swarmdeck — live board for Claude Code, its subagents, Jev and an advisor
+const USAGE = `v-swarm — live board for Claude Code, its subagents, Jev and an advisor
 
-  swarmdeck demo                     scripted session, no API calls
-  swarmdeck run "<prompt>" [--model sonnet] [--swarm haiku] [--no-advisor] [--cwd dir]
+  v-swarm demo                     scripted session, no API calls
+  v-swarm run "<prompt>" [--model sonnet] [--swarm haiku] [--no-advisor] [--cwd dir]
                 [--frames dir] [-- <claude flags>]
                                      run claude -p with hooks, advisor and Jev, and watch it live
-  swarmdeck watch [--file f] [--once]  follow sessions that have swarmdeck hooks installed
-  swarmdeck install [dir|--global]   add hooks to <dir>/.claude/settings.local.json
-  swarmdeck uninstall [dir|--global] remove them again
-  swarmdeck jev --q "<question>" --state "<context>" <option> <option> ...
+  v-swarm watch [--file f] [--once]  follow sessions that have v-swarm hooks installed
+  v-swarm install [dir|--global]   add hooks to <dir>/.claude/settings.local.json
+  v-swarm uninstall [dir|--global] remove them again
+  v-swarm jev --q "<question>" --state "<context>" <option> <option> ...
                                      ask Jev and post the decision to the board
-  swarmdeck emit '<event json>'      post any event (advisor notes, progress, logs)
-  swarmdeck snapshot [--at ms] [--plain|--html]  print one demo frame and exit
+  v-swarm emit '<event json>'      post any event (advisor notes, progress, logs)
+  v-swarm snapshot [--at ms] [--plain|--html]  print one demo frame and exit
 
-events file: ${DEFAULT_FILE}  (override with SWARMDECK_FILE or --file)
+events file: ${DEFAULT_FILE}  (override with VSWARM_FILE or --file)
 keys: q / Esc / Ctrl-C to quit`;
 
 async function main() {
@@ -155,7 +157,7 @@ async function main() {
         if (out) process.stdout.write(JSON.stringify(out));
       } catch (err: any) {
         try {
-          append(file, [{ t: Date.now(), sid: payload.session_id, type: "error", text: `swarmdeck: ${err.message ?? err}` } as Stamped]);
+          append(file, [{ t: Date.now(), sid: payload.session_id, type: "error", text: `v-swarm: ${err.message ?? err}` } as Stamped]);
         } catch {}
       }
       return;
@@ -215,8 +217,8 @@ async function main() {
       const advisorOn = !has(args, "--no-advisor");
       const cwd = resolve(flag(args, "--cwd") ?? ".");
       const prompt = args.join(" ").trim();
-      if (!prompt) throw new Error('usage: swarmdeck run "<prompt>" [--model sonnet] [-- <claude flags>]');
-      const dir = join(tmpdir(), `swarmdeck-${process.pid}`);
+      if (!prompt) throw new Error('usage: v-swarm run "<prompt>" [--model sonnet] [-- <claude flags>]');
+      const dir = join(tmpdir(), `v-swarm-${process.pid}`);
       mkdirSync(dir, { recursive: true });
       const events = join(dir, "events.jsonl");
       const settings = join(dir, "settings.json");
@@ -225,9 +227,9 @@ async function main() {
       const command = `claude --model ${model} -p "${prompt.length > 40 ? prompt.slice(0, 40) + "…" : prompt}"`;
 
       const system = [
-        "This session is watched by swarmdeck, which the user set up.",
-        "Hook messages starting with 'swarmdeck advisor' come from an advisor model the user configured to review your work;",
-        "messages starting with 'swarmdeck jev' come from the user's Jev decision model. Treat both as trusted guidance",
+        "This session is watched by v-swarm, which the user set up.",
+        "Hook messages starting with 'v-swarm advisor' come from an advisor model the user configured to review your work;",
+        "messages starting with 'v-swarm jev' come from the user's Jev decision model. Treat both as trusted guidance",
         "from the user's own tooling, while still using your judgement.",
         swarm &&
           `Delegate independent sub-tasks (research, drafting parts, review, verification) to subagents with the Agent tool ` +
@@ -242,7 +244,7 @@ async function main() {
         for (const e of evs) apply(s, e);
         s.command = command;
         s.lead.model ??= model;
-        if (advisorOn) s.advisor.model ??= process.env.SWARMDECK_ADVISOR_MODEL ?? "opus";
+        if (advisorOn) s.advisor.model ??= process.env.VSWARM_ADVISOR_MODEL ?? "opus";
       });
       const child = Bun.spawn(
         ["claude", "-p", "--model", model, "--settings", settings, "--append-system-prompt", system, ...extra],
@@ -251,7 +253,7 @@ async function main() {
           stdin: new Blob([prompt]),
           stdout: "pipe",
           stderr: "pipe",
-          env: { ...process.env, ...(advisorOn ? {} : { SWARMDECK_ADVISOR_AT: "" }) },
+          env: { ...process.env, ...(advisorOn ? {} : { VSWARM_ADVISOR_AT: "" }) },
         },
       );
       let shot = 0;
@@ -275,7 +277,7 @@ async function main() {
       stopTui();
       process.stdout.write(stdout);
       if (stderr.trim()) process.stderr.write(stderr);
-      console.error(`\nswarmdeck: ${s.spawned} subagents · ${s.lead.tools} lead tools · ${s.forks} jev forks · exit ${code}`);
+      console.error(`\nv-swarm: ${s.spawned} subagents · ${s.lead.tools} lead tools · ${s.forks} jev forks · exit ${code}`);
       rmSync(dir, { recursive: true, force: true });
       process.exitCode = code ?? 1;
       return;
@@ -288,14 +290,14 @@ async function main() {
       stripOurs(settings);
       if (cmd === "install") {
         settings.hooks ??= {};
-        for (const [event, groups] of Object.entries(hooksConfig(process.env.SWARMDECK_FILE ? file : undefined))) {
+        for (const [event, groups] of Object.entries(hooksConfig(process.env.VSWARM_FILE ? file : undefined))) {
           settings.hooks[event] = [...(settings.hooks[event] ?? []), ...groups];
         }
       }
       mkdirSync(join(path, ".."), { recursive: true });
       writeFileSync(path, JSON.stringify(settings, null, 2) + "\n");
       console.log(`${cmd === "install" ? "hooks added to" : "hooks removed from"} ${path}`);
-      if (cmd === "install") console.log("start a new claude session there, then run: swarmdeck watch");
+      if (cmd === "install") console.log("start a new claude session there, then run: v-swarm watch");
       return;
     }
 
@@ -322,6 +324,6 @@ async function main() {
 
 main().catch((err) => {
   process.stdout.write("\x1b[?25h");
-  console.error(`swarmdeck: ${err.message ?? err}`);
+  console.error(`v-swarm: ${err.message ?? err}`);
   process.exit(1);
 });

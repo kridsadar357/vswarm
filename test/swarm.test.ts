@@ -70,10 +70,10 @@ describe("state", () => {
     expect(s.sid).toBe("b");
   });
 
-  test("decisions keep the latest answer per question, three at most", () => {
-    const s = fold(["a", "b", "a", "c", "d"].map((q, i) => ({ type: "decision", q, p: i / 10, answer: "x" }) as Stamped));
-    expect(s.forks).toBe(5);
-    expect(s.decisions.map((d) => d.q)).toEqual(["a", "c", "d"]);
+  test("decisions keep the latest answer per question, five at most", () => {
+    const s = fold(["a", "b", "a", "c", "d", "e", "f"].map((q, i) => ({ type: "decision", q, p: i / 10, answer: "x" }) as Stamped));
+    expect(s.forks).toBe(7);
+    expect(s.decisions.map((d) => d.q)).toEqual(["a", "c", "d", "e", "f"]);
   });
 });
 
@@ -102,7 +102,7 @@ describe("rendering", () => {
   });
 
   test("an empty board renders", () => {
-    expect(draw(initial(), 0).plain()).toContain("SWARMDECK");
+    expect(draw(initial(), 0).plain()).toContain("V-SWARM");
   });
 });
 

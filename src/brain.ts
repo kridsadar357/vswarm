@@ -1,4 +1,4 @@
-// What swarmdeck does back to the session, on top of recording events:
+// What v-swarm does back to the session, on top of recording events:
 //   before a plan   → the advisor reads the request and the session, its advice goes to the lead
 //   a tool fails    → Jev decides retry or stop; sharp answers are acted on, split ones left to the lead
 //   same error x2   → the advisor explains the root cause
@@ -20,10 +20,10 @@ interface Memory {
   reviewed?: boolean;
 }
 
-const DIR = join(homedir(), ".swarmdeck", "sessions");
+const DIR = join(homedir(), ".v-swarm", "sessions");
 
 function moments(): Set<Moment> {
-  const v = process.env.SWARMDECK_ADVISOR_AT ?? "plan,error,done";
+  const v = process.env.VSWARM_ADVISOR_AT ?? "plan,error,done";
   return new Set(v.split(",").map((s) => s.trim()).filter(Boolean) as Moment[]);
 }
 
@@ -52,7 +52,7 @@ function context(event: string, text: string): HookOutput {
 
 async function advise(file: string, sid: string, moment: Moment, mark: string, p: Payload, extra = ""): Promise<Advice | undefined> {
   const post = (e: Stamped) => append(file, [{ t: Date.now(), sid, ...e } as Stamped]);
-  post({ type: "advisor", model: process.env.SWARMDECK_ADVISOR_MODEL ?? "opus", status: "reading", mark });
+  post({ type: "advisor", model: process.env.VSWARM_ADVISOR_MODEL ?? "opus", status: "reading", mark });
   try {
     const a = await askAdvisor(moment, p.transcript_path, extra, p.cwd);
     post({ type: "advisor", model: a.model, status: "on call", note: a.headline || (a.ok ? "looks right" : "needs fixes"), tokens: a.tokens });
@@ -77,7 +77,7 @@ export async function react(p: Payload, file: string): Promise<HookOutput> {
     if (!at.has("plan") || prompt.startsWith("<task-notification>")) return;
     const a = await advise(file, sid, "plan", "before a plan", p, `New request:\n${prompt.slice(0, 8000)}`);
     if (!a?.advice.length) return;
-    return context(event, `swarmdeck advisor (${a.model}) — notes before you plan:\n${bullets(a)}`);
+    return context(event, `v-swarm advisor (${a.model}) — notes before you plan:\n${bullets(a)}`);
   }
 
   if (event === "PostToolUseFailure" || event === "PostToolUse") {
@@ -111,8 +111,8 @@ export async function react(p: Payload, file: string): Promise<HookOutput> {
         append(file, [{ ...d, sid }]);
         notes.push(
           d.p >= SHARP
-            ? `swarmdeck jev: ${d.answer === "stop" ? "stop repeating this call and change approach" : "retrying this step is fine"} (confidence ${d.p.toFixed(2)}).`
-            : `swarmdeck jev was unsure whether to retry or stop (confidence ${d.p.toFixed(2)}); use your own judgement.`,
+            ? `v-swarm jev: ${d.answer === "stop" ? "stop repeating this call and change approach" : "retrying this step is fine"} (confidence ${d.p.toFixed(2)}).`
+            : `v-swarm jev was unsure whether to retry or stop (confidence ${d.p.toFixed(2)}); use your own judgement.`,
         );
       } catch (err: any) {
         append(file, [{ t: Date.now(), sid, type: "error", text: `jev: ${err.message ?? err}` }]);
@@ -120,7 +120,7 @@ export async function react(p: Payload, file: string): Promise<HookOutput> {
     }
     if (n === 2 && at.has("error")) {
       const a = await advise(file, sid, "error", "same error x2", p, `Failing call: ${tool}\nError:\n${error.slice(0, 3000)}`);
-      if (a?.advice.length) notes.push(`swarmdeck advisor (${a.model}) on this repeated error:\n${bullets(a)}`);
+      if (a?.advice.length) notes.push(`v-swarm advisor (${a.model}) on this repeated error:\n${bullets(a)}`);
     }
     return notes.length ? context(event, notes.join("\n\n")) : undefined;
   }
@@ -135,7 +135,7 @@ export async function react(p: Payload, file: string): Promise<HookOutput> {
     if (!a || a.ok) return;
     return {
       decision: "block",
-      reason: `swarmdeck advisor (${a.model}) reviewed the result before you finish. Fix these, then finish:\n${bullets(a)}`,
+      reason: `v-swarm advisor (${a.model}) reviewed the result before you finish. Fix these, then finish:\n${bullets(a)}`,
     };
   }
 }

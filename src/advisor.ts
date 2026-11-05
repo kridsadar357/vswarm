@@ -15,7 +15,7 @@ export interface Advice {
 }
 
 /** Marks the nested advisor process so its own hooks do nothing. */
-export const ADVISOR_ENV = "SWARMDECK_ADVISOR";
+export const ADVISOR_ENV = "VSWARM_ADVISOR";
 
 function textOf(content: any): string[] {
   if (typeof content === "string") return [content];
@@ -101,7 +101,7 @@ export function parseAdvice(text: string): Omit<Advice, "tokens" | "model"> {
 }
 
 export async function askAdvisor(moment: Moment, transcriptPath: string | undefined, extra = "", cwd?: string): Promise<Advice> {
-  const model = process.env.SWARMDECK_ADVISOR_MODEL ?? "opus";
+  const model = process.env.VSWARM_ADVISOR_MODEL ?? "opus";
   const prompt = advisorPrompt(moment, digest(transcriptPath), extra, cwd);
   const child = Bun.spawn(["claude", "-p", "--model", model, "--output-format", "json"], {
     cwd: tmpdir(),
@@ -110,7 +110,7 @@ export async function askAdvisor(moment: Moment, transcriptPath: string | undefi
     stderr: "pipe",
     env: { ...process.env, [ADVISOR_ENV]: "1" },
   });
-  const timer = setTimeout(() => child.kill(), Number(process.env.SWARMDECK_ADVISOR_TIMEOUT ?? 240) * 1000);
+  const timer = setTimeout(() => child.kill(), Number(process.env.VSWARM_ADVISOR_TIMEOUT ?? 240) * 1000);
   const out = await new Response(child.stdout).text();
   clearTimeout(timer);
   await child.exited;

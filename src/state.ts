@@ -1,7 +1,7 @@
 // Normalised event stream and the dashboard state it folds into.
 // Every source (Claude Code hooks, Jev, the demo) speaks these events.
 
-export type DeckEvent =
+export type SwarmEvent =
   | { type: "session"; sid?: string; lead?: string; effort?: string; command?: string }
   | { type: "prompt"; text: string }
   | { type: "phase"; phase: Phase }
@@ -16,7 +16,7 @@ export type DeckEvent =
   | { type: "error"; text: string }
   | { type: "log"; who: string; text: string };
 
-export type Stamped = DeckEvent & { t?: number; sid?: string };
+export type Stamped = SwarmEvent & { t?: number; sid?: string };
 
 export type Phase = "idle" | "lead" | "delegating" | "review" | "done";
 
@@ -172,7 +172,7 @@ export function apply(s: State, e: Stamped): State {
       const d = { q: e.q, p: e.p, answer: e.answer };
       if (i >= 0) s.decisions.splice(i, 1);
       s.decisions.push(d);
-      if (s.decisions.length > 3) s.decisions.shift();
+      if (s.decisions.length > 5) s.decisions.shift();
       const verdict = e.p >= SHARP ? "sharp → code" : "split → lead";
       log(s, t, "jev", `${e.q} → ${e.answer}  p=${e.p.toFixed(2)}  ${verdict}`);
       break;

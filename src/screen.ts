@@ -45,10 +45,23 @@ export function clip(text: string, max: number): string {
 export class Screen {
   private chars: string[][];
   private styles: (Style | undefined)[][];
+  /** Background layer, separate so text drawn later keeps the panel colour under it. */
+  private bgs: (string | undefined)[][];
 
   constructor(readonly w: number, readonly h: number) {
     this.chars = Array.from({ length: h }, () => Array(w).fill(" "));
     this.styles = Array.from({ length: h }, () => Array(w).fill(undefined));
+    this.bgs = Array.from({ length: h }, () => Array(w).fill(undefined));
+  }
+
+  private cell(x: number, y: number): Style | undefined {
+    const s = this.styles[y][x], bg = this.bgs[y][x];
+    return bg ? { ...s, bg } : s;
+  }
+
+  fill(x: number, y: number, w: number, h: number, bg: string) {
+    for (let r = y; r < y + h; r++)
+      for (let c = x; c < x + w; c++) if (r >= 0 && r < this.h && c >= 0 && c < this.w) this.bgs[r][c] = bg;
   }
 
   put(x: number, y: number, text: string, style?: Style): number {
@@ -62,6 +75,7 @@ export class Screen {
       if (cx >= 0 && cx < this.w) {
         this.chars[y][cx] = ch;
         this.styles[y][cx] = style;
+        if (style?.bg) this.bgs[y][cx] = style.bg;
       }
       cx++;
     }
@@ -89,6 +103,20 @@ export class Screen {
     this.put(x, y + h - 1, "└" + "─".repeat(w - 2) + "┘", style);
   }
 
+  /** Rounded panel with a title tab cut into the top edge. */
+  panel(x: number, y: number, w: number, h: number, line: Style, title?: [string, Style][]) {
+    this.put(x, y, "╭" + "─".repeat(w - 2) + "╮", line);
+    for (let r = 1; r < h - 1; r++) {
+      this.put(x, y + r, "│", line);
+      this.put(x + w - 1, y + r, "│", line);
+    }
+    this.put(x, y + h - 1, "╰" + "─".repeat(w - 2) + "╯", line);
+    if (title) {
+      let cx = x + 2;
+      for (const [t, s] of title) cx = this.put(cx, y, t, s);
+    }
+  }
+
   hline(x1: number, x2: number, y: number, ch: string, style?: Style) {
     for (let x = Math.min(x1, x2); x <= Math.max(x1, x2); x++) this.put(x, y, ch, style);
   }
@@ -102,12 +130,13 @@ export class Screen {
     const rows: string[] = [];
     for (let y = 0; y < Math.min(this.h, lines); y++) {
       let row = "";
-      let last: Style | undefined | null = null;
+      let last: string | null = null;
       for (let x = 0; x < Math.min(this.w, cols); x++) {
-        const s = this.styles[y][x];
-        if (s !== last) {
+        const s = this.cell(x, y);
+        const key = JSON.stringify(s ?? null);
+        if (key !== last) {
           row += sgr(s);
-          last = s;
+          last = key;
         }
         row += this.chars[y][x];
       }
@@ -123,9 +152,9 @@ export class Screen {
       .map((row, y) =>
         row
           .map((ch, x) => {
-            const s = this.styles[y][x];
+            const s = this.cell(x, y);
             if (!s) return esc(ch);
-            const css = [s.fg && `color:${s.fg}`, s.bold && "font-weight:700", s.dim && "opacity:.6"].filter(Boolean).join(";");
+            const css = [s.fg && `color:${s.fg}`, s.bg && `background:${s.bg}`, s.bold && "font-weight:700", s.dim && "opacity:.6"].filter(Boolean).join(";");
             return `<span style="${css}">${esc(ch)}</span>`;
           })
           .join(""),

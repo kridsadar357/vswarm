@@ -1,39 +1,52 @@
-// Draws the whole dashboard onto a 92×47 grid.
+// Draws the v-swarm board onto a 120×36 grid: phase rail on top, lead and advisor on the left,
+// the swarm as lanes and the Jev forks on the right, a badge feed and a status rail at the bottom.
 
 import { Screen, clip, width, type Style } from "./screen";
 import { SHARP, type Agent, type State } from "./state";
 
-export const W = 92;
-export const H = 47;
+export const W = 120;
+export const H = 36;
 
 const C = {
-  orange: "#f0915a",
-  blue: "#7aa2f7",
-  green: "#6fd49a",
-  purple: "#a99cf2",
-  text: "#e6e8ee",
-  muted: "#8b93a7",
-  dim: "#4a5163",
-  red: "#f38ba8",
+  bg: "#0b0f19",
+  bar: "#131a2a",
+  track: "#1c2436",
+  line: "#2b3550",
+  amber: "#f5b453",
+  cyan: "#4fd8e8",
+  lime: "#9be36a",
+  violet: "#b48cff",
+  rose: "#ff6b8b",
+  text: "#e4e9f5",
+  muted: "#7d88a6",
+  dim: "#454f6b",
+  ink: "#0b0f19",
 };
 
 const S = {
-  orange: { fg: C.orange },
-  orangeB: { fg: C.orange, bold: true },
-  blue: { fg: C.blue },
-  blueB: { fg: C.blue, bold: true },
-  green: { fg: C.green },
-  greenB: { fg: C.green, bold: true },
-  purple: { fg: C.purple },
-  purpleB: { fg: C.purple, bold: true },
+  amber: { fg: C.amber },
+  amberB: { fg: C.amber, bold: true },
+  cyan: { fg: C.cyan },
+  cyanB: { fg: C.cyan, bold: true },
+  lime: { fg: C.lime },
+  limeB: { fg: C.lime, bold: true },
+  violet: { fg: C.violet },
+  violetB: { fg: C.violet, bold: true },
+  rose: { fg: C.rose },
+  roseB: { fg: C.rose, bold: true },
   text: { fg: C.text },
   textB: { fg: C.text, bold: true },
   muted: { fg: C.muted },
   dim: { fg: C.dim },
-  red: { fg: C.red },
+  line: { fg: C.line },
 } satisfies Record<string, Style>;
 
-const SPIN = ["◐", "◓", "◑", "◒"];
+/** Dark text on a coloured chip. */
+const chip = (bg: string): Style => ({ fg: C.ink, bg, bold: true });
+
+const SPIN = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+const EIGHTHS = ["", "▏", "▎", "▍", "▌", "▋", "▊", "▉"];
+const SPARK = "▁▂▃▄▅▆▇█";
 const EFFORT: Record<string, number> = { low: 1, medium: 2, high: 3, xhigh: 4, max: 5 };
 
 /** "claude-sonnet-5-5" → "Sonnet 5.5", "haiku" → "Haiku". */
@@ -57,29 +70,6 @@ function hhmmss(t: number): string {
   return [d.getHours(), d.getMinutes(), d.getSeconds()].map((n) => String(n).padStart(2, "0")).join(":");
 }
 
-function whoStyle(who: string, s: State): Style {
-  const w = who.toLowerCase();
-  if (w === "jev") return S.greenB;
-  if (w === "error") return S.red;
-  if (w === "lead" || w === "prompt") return S.orangeB;
-  if (w.includes("opus") || w === "advisor" || w === (s.advisor.model ?? "").toLowerCase()) return S.purpleB;
-  return S.blueB;
-}
-
-function bar(scr: Screen, x: number, y: number, w: number, frac: number, on: Style, off: Style = S.dim) {
-  const n = Math.round(Math.max(0, Math.min(1, frac)) * w);
-  scr.put(x, y, "█".repeat(n), on);
-  scr.put(x + n, y, "░".repeat(w - n), off);
-}
-
-/** Up to three agents: running ones first, then the most recently finished. */
-function visibleAgents(s: State): Agent[] {
-  const running = s.agents.filter((a) => a.status === "running");
-  const finished = s.agents.filter((a) => a.status !== "running").sort((a, b) => (b.endedAt ?? 0) - (a.endedAt ?? 0));
-  // Keep start order so boxes do not swap places when one finishes.
-  return [...running, ...finished].slice(0, 3).sort((a, b) => a.startedAt - b.startedAt);
-}
-
 function fmtTokens(n: number): string {
   return n >= 1e6 ? `${(n / 1e6).toFixed(1)}M` : n >= 1e3 ? `${Math.round(n / 1e3)}k` : String(n);
 }
@@ -89,218 +79,259 @@ function elapsed(ms: number): string {
   return s < 60 ? `${s}s` : `${Math.floor(s / 60)}m${String(s % 60).padStart(2, "0")}`;
 }
 
+function mix(a: string, b: string, t: number): string {
+  const p = (c: string) => [1, 3, 5].map((i) => parseInt(c.slice(i, i + 2), 16));
+  const [x, y] = [p(a), p(b)];
+  return "#" + x.map((v, i) => Math.round(v + (y[i] - v) * t).toString(16).padStart(2, "0")).join("");
+}
+
+/** Smooth bar in eighth-cells on a dark track, its colour shading from `from` to `to`. */
+function meter(scr: Screen, x: number, y: number, w: number, frac: number, from: string, to = from) {
+  const f = Math.max(0, Math.min(1, frac)) * w;
+  for (let i = 0; i < w; i++) {
+    const fg = mix(from, to, w > 1 ? i / (w - 1) : 0);
+    const part = Math.max(0, Math.min(1, f - i));
+    const ch = part >= 1 ? "█" : EIGHTHS[Math.floor(part * 8)] || " ";
+    scr.put(x + i, y, ch, { fg, bg: C.track });
+  }
+}
+
+/** Running agents first, then the most recently finished; kept in start order so lanes do not jump. */
+function visibleAgents(s: State, n: number): Agent[] {
+  const running = s.agents.filter((a) => a.status === "running");
+  const finished = s.agents.filter((a) => a.status !== "running").sort((a, b) => (b.endedAt ?? 0) - (a.endedAt ?? 0));
+  return [...running, ...finished].slice(0, n).sort((a, b) => a.startedAt - b.startedAt);
+}
+
+function badge(who: string, s: State): [string, Style] {
+  const w = who.toLowerCase();
+  if (w === "jev") return ["JEV", chip(C.lime)];
+  if (w === "error") return ["ERROR", chip(C.rose)];
+  if (w === "prompt") return ["PROMPT", chip(C.text)];
+  if (w === "lead") return ["LEAD", chip(C.amber)];
+  if (w.includes("opus") || w === "advisor" || w === (s.advisor.model ?? "").toLowerCase()) return ["ADVISE", chip(C.violet)];
+  return [(w.startsWith("claude-") ? modelName(who) : who).toUpperCase(), chip(C.cyan)];
+}
+
+const PHASES = [
+  { key: "lead", label: "PLAN", color: C.amber },
+  { key: "delegating", label: "SWARM", color: C.cyan },
+  { key: "review", label: "REVIEW", color: C.violet },
+  { key: "done", label: "DONE", color: C.lime },
+] as const;
+
 export function draw(s: State, frame: number, now = Date.now()): Screen {
   const scr = new Screen(W, H);
+  scr.fill(0, 0, W, H, C.bg);
   const lead = modelName(s.lead.model) || "Lead";
   const swarm = swarmModel(s) || "subagents";
-  const hasAdvisor = Boolean(s.advisor.model);
+  const adv = modelName(s.advisor.model);
   const running = s.agents.filter((a) => a.status === "running").length;
-  const spin = SPIN[frame % SPIN.length];
-
-  // Header and legend
-  scr.centerRuns(0, W, 0, [
-    ["SWARMDECK", S.textB],
-    ["  ·  ", S.dim],
-    [lead.toUpperCase(), S.orangeB],
-    [" LEADS", S.text],
-    ["  ·  ", S.dim],
-    [swarm.toUpperCase(), S.blueB],
-    [" SWARMS", S.text],
-  ]);
-  scr.hline(1, W - 2, 1, "━", S.dim);
-  scr.centerRuns(0, W, 2, [
-    ["■ ", S.orange], [`${lead.toLowerCase()} · lead`, S.muted], ["    ", S.dim],
-    ["■ ", S.blue], [`${swarm.toLowerCase()} · swarm`, S.muted], ["    ", S.dim],
-    ["■ ", S.green], ["jev · forks", S.muted], ["    ", S.dim],
-    ["■ ", S.purple], [hasAdvisor ? `${modelName(s.advisor.model).toLowerCase()} · advisor` : "hooks · watch", S.muted],
-  ]);
-
-  // Left column: advisor, or session stats when no advisor is attached
-  const LX = 1, LY = 4, LW = 23, LH = 34;
-  scr.box(LX, LY, LW, LH, S.purple);
-  const ix = LX + 2, iw = LW - 4;
-  scr.center(LX + 1, LW - 2, LY + 1, hasAdvisor ? modelName(s.advisor.model).toUpperCase() : "SESSION", S.purpleB);
-  scr.center(LX + 1, LW - 2, LY + 2, hasAdvisor ? `advisor · ${s.advisor.status}` : "hooks · live", S.purple);
-  // Each moment has its own slot; a filled diamond means the advisor was called there.
-  const marks = hasAdvisor ? ["before a plan", "same error x2", "before done"] : ["session start", s.errors ? `errors x${s.errors}` : "on error", "on stop"];
-  const fired = (i: number) => hasAdvisor && s.advisor.marks.includes(marks[i]);
-  const anchors = [LY + 3, LY + 22, LY + 30];
-  scr.vline(ix, LY + 4, LY + 29, "┆", S.dim);
-  anchors.forEach((y, i) => {
-    scr.put(ix, y, fired(i) ? "◆" : "◇", fired(i) ? S.purpleB : S.text);
-    scr.put(ix + 2, y, clip(marks[i], iw - 2), S.text);
-  });
-
-  const body = (y: number, text: string, st: Style = S.text) => scr.put(ix + 2, y, clip(text, iw - 2), st);
-  if (hasAdvisor) {
-    ["reads the whole", "session, every", "tool call and", "every result"].forEach((l, i) => body(LY + 5 + i, l));
-    body(LY + 10, "last advice:");
-    const notes = s.advisor.notes.length ? s.advisor.notes : ["—"];
-    notes.slice(-2).forEach((n, i) => body(LY + 11 + i, "» " + n, S.purpleB));
-    scr.put(ix + 2, LY + 14, "calls", S.text);
-    scr.put(ix + iw - String(s.advisor.calls).length, LY + 14, String(s.advisor.calls), S.purpleB);
-    body(LY + 15, "tokens read");
-    body(LY + 16, "  " + fmtTokens(s.advisor.tokens), S.purpleB);
-    ["silent on every", "routine turn"].forEach((l, i) => body(LY + 18 + i, l));
-    ["never writes", "code itself.", lead, "applies advice."].forEach((l, i) => body(LY + 24 + i, l));
-  } else {
-    ["every tool call", "and subagent", "from Claude Code", "hooks"].forEach((l, i) => body(LY + 5 + i, l));
-    const stat = (y: number, label: string, value: string, st: Style) => {
-      scr.put(ix + 2, y, label, S.text);
-      scr.put(ix + iw - width(value), y, value, st);
-    };
-    stat(LY + 10, "lead tools", String(s.lead.tools), S.orangeB);
-    stat(LY + 11, "subagents", String(s.spawned), S.blueB);
-    stat(LY + 12, "agent tools", String(s.agents.reduce((n, a) => n + a.tools, 0)), S.blueB);
-    stat(LY + 13, "jev forks", String(s.forks), S.greenB);
-    stat(LY + 14, "errors", String(s.errors), s.errors ? S.red : S.muted);
-    if (s.startedAt) stat(LY + 16, "elapsed", elapsed((s.updatedAt ?? now) - s.startedAt), S.muted);
-    if (s.prompt) {
-      body(LY + 18, "prompt:", S.muted);
-      body(LY + 19, s.prompt, S.text);
-    }
-  }
-
-  // Advisor connectors
-  const CX = 58;
-  const arrowsHot = [s.phase === "lead", s.phase === "delegating" && s.errors > 0, s.phase === "review"];
-  const conn = (y: number, toX: number, hot: boolean) => {
-    scr.hline(LX + LW, toX - 2, y, "┈", hot ? S.purple : S.dim);
-    scr.put(toX - 1, y, "▸", hot ? S.purple : S.dim);
-  };
-
-  // Lead box
-  const BX = 44, BW = 30;
-  scr.box(BX, 4, BW, 5, S.orange);
-  scr.centerRuns(BX, BW, 5, [[`${lead} · main session`, S.orangeB]]);
-  scr.center(BX, BW, 6, s.lead.lastTool ? `last: ${s.lead.lastTool} · ${s.lead.tools} tools` : "edits + runs tests", S.text);
-  const eff = s.lead.effort ?? "";
-  scr.centerRuns(BX, BW, 7, eff
-    ? [["effort ", S.muted], ["▮".repeat(EFFORT[eff] ?? 2), S.orange], [" " + eff, S.orange]]
-    : [[s.command ? clip(s.command, BW - 4) : "--model " + (s.lead.model ?? "?"), S.muted]]);
-  conn(anchors[0], BX, arrowsHot[0]);
-  scr.put(CX, 9, "●", S.orange);
-  scr.put(CX, 10, "│", S.dim);
-
-  // Jev fork layer
-  const FX = 34, FW = 49, FY = 11;
-  scr.box(FX, FY, FW, 7, S.green);
-  scr.put(FX + 2, FY + 1, "JEV · fork layer", S.greenB);
+  const spin = SPIN[Math.floor(frame) % SPIN.length];
   const forks = s.forks.toLocaleString("en-US");
-  scr.put(FX + FW - 3 - forks.length, FY + 1, forks, S.greenB);
-  scr.put(FX + FW - 3 - forks.length - 7, FY + 1, "forks", S.muted);
-  if (!s.decisions.length) {
-    scr.center(FX + 1, FW - 2, FY + 3, "no decisions yet · swarmdeck jev …", S.muted);
-  }
-  s.decisions.forEach((d, i) => {
-    const y = FY + 2 + i;
-    const sharp = d.p >= SHARP;
-    scr.put(FX + 2, y, clip(d.q, 17), S.text);
-    bar(scr, FX + 20, y, 14, d.p, sharp ? S.green : S.orange);
-    scr.put(FX + 36, y, d.p.toFixed(2), sharp ? S.text : S.orangeB);
-    scr.put(FX + 41, y, sharp ? "sharp" : "split", sharp ? S.green : S.orangeB);
+
+  // ── Title rail
+  scr.fill(0, 0, W, 1, C.bar);
+  let x = scr.put(1, 0, " ▼ ", chip(C.violet));
+  const logo = "V-SWARM";
+  [...logo].forEach((ch, i) => scr.put(x + 1 + i, 0, ch, { fg: mix(C.cyan, C.violet, i / (logo.length - 1)), bold: true }));
+  x += logo.length + 3;
+  for (const [t, st] of [
+    [lead.toLowerCase(), S.amberB], [" leads  ", S.muted],
+    [swarm.toLowerCase(), S.cyanB], [s.spawned ? ` ×${s.spawned}` : "", S.cyan], [" swarm  ", S.muted],
+    ...(adv ? [[adv.toLowerCase(), S.violetB], [" advises", S.muted]] : []),
+  ] as [string, Style][]) x = scr.put(x, 0, t, st);
+  const clock = `${s.startedAt ? "⏱ " + elapsed((s.updatedAt ?? now) - s.startedAt) + "   " : ""}${hhmmss(s.updatedAt ?? now)} `;
+  scr.put(W - width(clock), 0, clock, S.muted);
+
+  // ── Phase rail
+  const at = PHASES.findIndex((p) => p.key === s.phase);
+  x = 1;
+  PHASES.forEach((p, i) => {
+    const state = s.phase === "done" || i < at ? "past" : i === at ? "now" : "next";
+    const label = ` ${state === "past" ? "✓" : state === "now" ? spin : "○"} ${i + 1} ${p.label} `;
+    x = scr.put(x, 2, label, state === "now" ? chip(p.color) : state === "past" ? { fg: p.color } : S.dim);
+    if (i < PHASES.length - 1) x = scr.put(x, 2, " ━━━ ", i < at || s.phase === "done" ? { fg: p.color } : S.line);
   });
-  scr.put(FX + 2, FY + 5, "sharp → runs in code", S.green);
-  scr.put(FX + 26, FY + 5, `split → ${lead}`, S.muted);
-  scr.put(CX, FY + 7, "│", S.dim);
+  if (s.prompt) scr.put(x + 3, 2, clip("❯ " + s.prompt.replace(/\s+/g, " "), W - x - 4), S.text);
 
-  // Delegation fan-out
-  scr.centerRuns(0, W + 24, 19, [["delegate to subagents · ", S.text], [swarm.toLowerCase(), S.blueB]]);
-  scr.put(CX, 20, "●", S.blue);
-  const slots = [36, 58, 80];
-  const shown = visibleAgents(s);
-  scr.hline(slots[0], slots[2], 21, "─", S.dim);
-  scr.put(slots[0], 21, "┌", S.dim);
-  scr.put(slots[2], 21, "┐", S.dim);
-  scr.put(CX, 21, "┼", S.dim);
-  if (running) {
-    const k = frame % 22;
-    scr.put(CX - k, 21, "●", S.blue);
-    scr.put(CX + k, 21, "●", S.blue);
+  // ── Lead
+  const LX = 0, LW = 38;
+  scr.panel(LX, 4, LW, 11, S.line, [[" LEAD ", chip(C.amber)], [" main session ", S.muted]]);
+  const lx = LX + 2, lw = LW - 4;
+  scr.put(lx, 5, lead, S.amberB);
+  const eff = s.lead.effort;
+  if (eff) {
+    const n = EFFORT[eff] ?? 2;
+    const t = `${"●".repeat(n)}${"○".repeat(5 - n)} ${eff}`;
+    scr.put(lx + lw - width(t), 5, t, S.amber);
   }
-  slots.forEach((cx, i) => scr.put(cx, 22, "▼", shown[i] ? S.blue : S.dim));
+  scr.put(lx, 7, "tools", S.muted);
+  scr.put(lx + 7, 7, String(s.lead.tools), S.textB);
+  if (s.lead.lastTool) {
+    scr.put(lx + 12, 7, "last", S.muted);
+    scr.put(lx + 17, 7, clip(s.lead.lastTool, lw - 17), S.text);
+  }
+  // Activity: every logged event in the last minute, 3 s per column.
+  const cols = lw - 9, span = 3000;
+  const end = s.updatedAt ?? now;
+  const buckets = Array(cols).fill(0);
+  for (const l of s.log) {
+    const k = cols - 1 - Math.floor((end - l.t) / span);
+    if (k >= 0 && k < cols) buckets[k]++;
+  }
+  const peak = Math.max(1, ...buckets);
+  scr.put(lx, 9, "activity", S.muted);
+  buckets.forEach((b, i) =>
+    scr.put(lx + 9 + i, 9, b ? SPARK[Math.min(7, Math.round((b / peak) * 7))] : "▁", { fg: b ? mix(C.amber, C.cyan, i / cols) : C.track }),
+  );
+  const cmd = s.command ?? (s.lead.model ? `claude --model ${s.lead.model}` : "claude");
+  scr.put(lx, 12, clip("$ " + cmd, lw), S.dim);
 
-  const AY = 23, AW = 21, AH = 6;
-  slots.forEach((cx, i) => {
+  // ── Advisor, or plain session stats without one
+  const AY = 15, AH = 10;
+  if (adv) {
+    scr.panel(LX, AY, LW, AH, S.line, [[" ADVISOR ", chip(C.violet)], [` ${adv} `, S.violet]]);
+    const status = ` ${s.advisor.status.toUpperCase()} `;
+    scr.put(LX + LW - 2 - width(status), AY, status, s.advisor.status === "reading" ? chip(C.violet) : S.violetB);
+    // Checkpoint track: one node per moment the advisor can be called.
+    const marks = ["before a plan", "same error x2", "before done"];
+    const short = ["plan", "error ×2", "done"];
+    const nodes = [lx + 1, lx + Math.floor(lw / 2), lx + lw - 2];
+    scr.hline(nodes[0], nodes[2], AY + 1, "─", S.line);
+    nodes.forEach((nx, i) => {
+      const hit = s.advisor.marks.includes(marks[i]);
+      scr.put(nx, AY + 1, hit ? "◆" : "◇", hit ? S.violetB : S.muted);
+      const lbl = short[i];
+      const lx0 = i === 0 ? nx - 1 : i === 2 ? nx + 2 - width(lbl) : nx - Math.floor(width(lbl) / 2);
+      scr.put(lx0, AY + 2, lbl, hit ? S.violet : S.dim);
+    });
+    scr.put(lx, AY + 4, "latest advice", S.muted);
+    const notes = s.advisor.notes.length ? s.advisor.notes.slice(-3) : ["silent — nothing to flag"];
+    notes.forEach((n, i) => scr.put(lx, AY + 5 + i, clip((s.advisor.notes.length ? "› " : "  ") + n, lw), s.advisor.notes.length ? S.text : S.dim));
+    scr.put(lx, AY + 8, "calls", S.muted);
+    scr.put(lx + 6, AY + 8, String(s.advisor.calls), S.violetB);
+    scr.put(lx + 11, AY + 8, "read", S.muted);
+    scr.put(lx + 16, AY + 8, fmtTokens(s.advisor.tokens), S.violetB);
+    scr.put(lx + lw - 13, AY + 8, "advises only", S.dim);
+  } else {
+    scr.panel(LX, AY, LW, AH, S.line, [[" SESSION ", chip(C.violet)], [" hooks · live ", S.muted]]);
+    const stat = (r: number, label: string, value: string, st: Style) => {
+      scr.put(lx, AY + r, label, S.muted);
+      scr.put(lx + lw - width(value), AY + r, value, st);
+      scr.hline(lx + width(label) + 1, lx + lw - width(value) - 2, AY + r, "·", S.line);
+    };
+    stat(2, "lead tools", String(s.lead.tools), S.amberB);
+    stat(3, "subagents", String(s.spawned), S.cyanB);
+    stat(4, "agent tools", String(s.agents.reduce((n, a) => n + a.tools, 0)), S.cyanB);
+    stat(5, "jev forks", forks, S.limeB);
+    stat(6, "errors", String(s.errors), s.errors ? S.roseB : S.muted);
+    if (s.startedAt) stat(8, "elapsed", elapsed((s.updatedAt ?? now) - s.startedAt), S.text);
+  }
+
+  // ── Swarm lanes
+  const RX = LW + 1, RW = W - RX;
+  const SY = 4, LANES = 5;
+  scr.panel(RX, SY, RW, LANES + 6, S.line, [[" SWARM ", chip(C.cyan)], [` ${swarm.toLowerCase()} `, S.cyan]]);
+  const counts = `${running} running · ${s.agents.filter((a) => a.status === "done").length} done${s.agents.some((a) => a.status === "failed") ? ` · ${s.agents.filter((a) => a.status === "failed").length} failed` : ""}`;
+  scr.put(RX + RW - 3 - width(counts), SY, ` ${counts} `, S.muted);
+  const col = { st: RX + 2, name: RX + 5, bar: RX + 21, pct: RX + 40, tools: RX + 46, time: RX + 52, note: RX + 59 };
+  const noteW = RX + RW - 2 - col.note;
+  const hy = SY + 1;
+  for (const [k, t] of [["name", "AGENT"], ["bar", "PROGRESS"], ["tools", "TOOLS"], ["time", "TIME"], ["note", "NOW"]] as const)
+    scr.put(col[k], hy, t, S.dim);
+  const shown = visibleAgents(s, LANES);
+  for (let i = 0; i < LANES; i++) {
+    const y = hy + 1 + i;
     const a = shown[i];
-    const x = cx - 10;
     if (!a) {
-      scr.box(x, AY, AW, AH, S.dim);
-      scr.center(x, AW, AY + 2, "idle", S.dim);
-      return;
+      scr.put(col.st, y, "·", S.line);
+      if (i === 0) scr.put(col.name, y, s.requests.length ? `${s.requests.length} requested, waiting to start…` : "no subagents yet", S.dim);
+      continue;
     }
-    const st = a.status === "failed" ? S.red : a.status === "done" ? S.green : S.blue;
-    scr.box(x, AY, AW, AH, a.status === "running" ? S.blue : st);
-    scr.center(x + 1, AW - 2, AY + 1, a.name, S.textB);
-    scr.center(x + 1, AW - 2, AY + 2, modelName(a.model) || "subagent", S.blue);
-    if (a.pct !== undefined) {
-      bar(scr, x + 2, AY + 3, 12, a.pct, S.blue);
-      const pct = `${Math.round(a.pct * 100)}%`;
-      scr.put(x + AW - 2 - pct.length, AY + 3, pct, S.muted);
-    } else {
-      bar(scr, x + 2, AY + 3, 8, Math.min(a.tools, 20) / 20, S.blue);
-      const n = `${a.tools} ${a.tools === 1 ? "tool" : "tools"}`;
-      scr.put(x + AW - 2 - n.length, AY + 3, n, S.muted);
-    }
-    scr.center(x + 1, AW - 2, AY + 4, a.note ?? a.desc ?? a.lastTool ?? "", S.text);
-    const status =
-      a.status === "running"
-        ? `${spin} running ${elapsed(now - a.startedAt)}`
-        : a.status === "done"
-          ? `✓ done ${elapsed((a.endedAt ?? now) - a.startedAt)}`
-          : "✗ failed";
-    scr.put(x, AY + AH - 1, "└" + "─".repeat(AW - 2) + "┘", a.status === "running" ? S.blue : st);
-    scr.center(x + 1, AW - 2, AY + AH - 1, ` ${status} `, st);
-  });
-  const extra = s.agents.filter((a) => a.status === "running").length - shown.filter((a) => a.status === "running").length;
-  if (extra > 0) scr.put(slots[2] + 4, 22, `+${extra} more`, S.blue);
-  conn(AY + 3, slots[0] - 10, arrowsHot[1]);
-
-  // Merge back to the lead
-  slots.forEach((cx) => scr.put(cx, AY + AH, "│", S.dim));
-  scr.hline(slots[0], slots[2], 30, "─", S.dim);
-  scr.put(slots[0], 30, "└", S.dim);
-  scr.put(slots[2], 30, "┘", S.dim);
-  scr.put(CX, 30, "┴", S.dim);
-  if (s.phase === "review" || s.agents.some((a) => a.status !== "running")) {
-    const k = 21 - (frame % 22);
-    if (s.phase === "review") {
-      scr.put(CX - k, 30, "●", S.orange);
-      scr.put(CX + k, 30, "●", S.orange);
-    }
+    if (i % 2 === 0) scr.fill(RX + 1, y, RW - 2, 1, "#0f1422");
+    const live = a.status === "running";
+    const tint = a.status === "failed" ? C.rose : a.status === "done" ? C.lime : C.cyan;
+    scr.put(col.st, y, live ? spin : a.status === "done" ? "✔" : "✖", { fg: tint, bold: true });
+    const nx = scr.put(col.name, y, clip(a.name, 14), live ? S.textB : S.text);
+    // The panel title names the swarm model; only an agent on a different one says so.
+    const own = modelName(a.model);
+    if (own && own !== swarm && nx < col.bar - 3) scr.put(nx + 1, y, clip(own.split(" ")[0].toLowerCase(), col.bar - nx - 2), S.muted);
+    const frac = a.pct ?? (a.status === "done" ? 1 : Math.min(a.tools, 20) / 20);
+    meter(scr, col.bar, y, 17, frac, a.status === "failed" ? C.rose : C.cyan, a.status === "failed" ? C.rose : C.lime);
+    if (a.pct !== undefined || a.status === "done") scr.put(col.pct, y, `${Math.round(frac * 100)}%`.padStart(4), S.text);
+    scr.put(col.tools, y, String(a.tools).padStart(3), S.text);
+    scr.put(col.time, y, elapsed((live ? now : a.endedAt ?? now) - a.startedAt).padStart(5), live ? S.cyan : S.muted);
+    scr.put(col.note, y, clip(a.note ?? a.lastTool ?? a.desc ?? "", noteW), live ? S.text : S.muted);
   }
-  scr.put(CX, 31, "▼", s.phase === "review" || s.phase === "done" ? S.orange : S.dim);
-  const RX = 42, RW = 33;
-  const reviewing = s.phase === "review" || s.phase === "done";
-  scr.box(RX, 32, RW, 4, reviewing ? S.orange : S.dim);
-  scr.center(RX, RW, 33, `back to ${lead} · lead`, reviewing ? S.orangeB : S.muted);
-  scr.center(RX, RW, 34, s.phase === "done" ? "✓ finished" : "review + verify", reviewing ? S.text : S.dim);
-  conn(anchors[2], RX, arrowsHot[2]);
+  const more = s.agents.filter((a) => a.status === "running").length - shown.filter((a) => a.status === "running").length;
+  if (more > 0) scr.put(RX + 2, SY + LANES + 4, `+${more} more running`, S.cyan);
 
-  // Session log
-  const GY = 38, GH = 7;
-  scr.box(1, GY, W - 2, GH, S.dim);
-  scr.put(3, GY, " session log ", S.muted);
+  // Flow strip: lead → fan-out → lanes → merge → review, with a pulse on the active leg.
+  const fy = SY + LANES + 3;
+  const legs: [string, number, string][] = [
+    ["lead", 0, C.amber], ["fan-out", 1, C.cyan], [`${running}/${s.spawned} lanes`, 1, C.cyan], ["merge", 2, C.violet], ["review", 2, C.violet],
+  ];
+  let fx = RX + 4;
+  const starts: number[] = [];
+  legs.forEach(([t, ph, color], i) => {
+    const on = at >= ph || s.phase === "done";
+    starts.push(fx);
+    fx = scr.put(fx, fy, t, on ? { fg: color, bold: at === ph } : S.dim);
+    if (i < legs.length - 1) {
+      const len = 9;
+      const hot = at === legs[i + 1][1] && s.phase !== "done";
+      for (let k = 0; k < len; k++) {
+        const pulse = hot && (frame + len - k) % len === 0;
+        scr.put(fx + 1 + k, fy, k === len - 1 ? "▸" : pulse ? "●" : "─", pulse ? { fg: legs[i + 1][2], bold: true } : on ? { fg: color } : S.line);
+      }
+      fx += len + 2;
+    }
+  });
+
+  // ── Jev forks
+  const JY = SY + LANES + 6, JH = AY + AH - JY;
+  scr.panel(RX, JY, RW, JH, S.line, [[" JEV ", chip(C.lime)], [" decision forks ", S.lime]]);
+  const ft = ` ${forks} forks `;
+  scr.put(RX + RW - 3 - width(ft), JY, ft, S.limeB);
+  const jx = RX + 2;
+  if (!s.decisions.length) scr.put(jx, JY + 2, "no decisions yet · v-swarm jev --q … <option> <option>", S.dim);
+  s.decisions.forEach((d, i) => {
+    const y = JY + 1 + i;
+    const sharp = d.p >= SHARP;
+    scr.put(jx, y, clip(d.q, 16), S.text);
+    meter(scr, jx + 17, y, 24, d.p, sharp ? C.lime : C.amber, sharp ? C.lime : C.rose);
+    // Threshold tick on the track.
+    const tick = jx + 17 + Math.round(SHARP * 24) - 1;
+    if (d.p * 24 < SHARP * 24 - 1) scr.put(tick, y, "┊", { fg: C.muted, bg: C.track });
+    scr.put(jx + 43, y, d.p.toFixed(2), sharp ? S.textB : S.amberB);
+    scr.put(jx + 49, y, sharp ? " SHARP " : " SPLIT ", chip(sharp ? C.lime : C.amber));
+    scr.put(jx + 57, y, clip(`${sharp ? "→ code" : "→ " + lead} · ${d.answer}`, RW - 61), S.muted);
+  });
+  scr.put(jx, JY + JH - 2, `┊ ${SHARP.toFixed(2)} line — sharp runs in code, split goes back to ${lead}`, S.dim);
+
+  // ── Feed
+  const GY = AY + AH, GH = H - 1 - GY;
+  scr.panel(0, GY, W, GH, S.line, [[" FEED ", chip(C.text)]]);
   s.log.slice(-(GH - 2)).forEach((l, i) => {
     const y = GY + 1 + i;
-    scr.put(3, y, hhmmss(l.t), S.dim);
-    scr.put(13, y, clip(l.who.startsWith("claude-") ? modelName(l.who) : l.who, 11), whoStyle(l.who, s));
-    scr.put(26, y, clip(l.text.replace(/\s+/g, " "), W - 30), S.text);
+    scr.put(2, y, hhmmss(l.t), S.dim);
+    const [label, st] = badge(l.who, s);
+    scr.put(11, y, " " + clip(label, 8).padEnd(8) + " ", st);
+    scr.put(23, y, clip(l.text.replace(/\s+/g, " "), W - 26), l.who === "error" ? S.rose : S.text);
   });
 
-  // Prompt and status line
-  const cursor = frame % 6 < 3 ? "█" : " ";
-  const cmd = s.command ?? (s.lead.model ? `claude --model ${s.lead.model}` : "claude");
-  const px = scr.put(1, 45, "~/app $ ", S.green);
-  scr.put(scr.put(px, 45, clip(cmd, W - 12), S.text) + 1, 45, cursor, S.green);
-  let sx = 1;
-  const seg = (label: string, value: string, st: Style) => {
-    sx = scr.put(sx, 46, label + " ", S.muted);
-    sx = scr.put(sx, 46, `[${value}]`, st) + 4;
-  };
-  seg(swarmModel(s).toLowerCase() || "swarm", running ? "swarming" : s.spawned ? "idle" : "standby", S.blueB);
-  seg("subagents", `${running}/${s.spawned}`, S.blueB);
-  seg(hasAdvisor ? modelName(s.advisor.model).toLowerCase() : "phase", hasAdvisor ? s.advisor.status : s.phase, S.purpleB);
-  seg("jev", `${forks} forks`, S.greenB);
+  // ── Status rail
+  const y = H - 1;
+  scr.fill(0, y, W, 1, C.bar);
+  let sx = 0;
+  const seg = (t: string, st: Style) => (sx = scr.put(sx, y, ` ${t} `, st) + 1);
+  seg("v-swarm", chip(C.violet));
+  seg(`${running ? spin + " swarming" : s.spawned ? "◼ idle" : "◻ standby"} ${running}/${s.spawned}`, { fg: C.cyan, bg: C.bar, bold: true });
+  if (adv) seg(`◆ ${adv.toLowerCase()} ${s.advisor.status}`, { fg: C.violet, bg: C.bar, bold: true });
+  seg(`⑂ ${forks} forks`, { fg: C.lime, bg: C.bar, bold: true });
+  seg(`✖ ${s.errors} error${s.errors === 1 ? "" : "s"}`, s.errors ? chip(C.rose) : { fg: C.dim, bg: C.bar });
+  const keys = "q quit ";
+  scr.put(W - width(keys), y, keys, { fg: C.muted, bg: C.bar });
   return scr;
 }

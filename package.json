@@ -1,9 +1,9 @@
 {
-  "name": "swarmdeck",
+  "name": "v-swarm",
   "version": "0.1.0",
   "description": "Live terminal board for a Claude Code session, its subagents, Jev decisions and an advisor",
   "type": "module",
-  "bin": { "swarmdeck": "src/cli.ts" },
+  "bin": { "v-swarm": "src/cli.ts" },
   "scripts": {
     "demo": "bun src/cli.ts demo",
     "watch": "bun src/cli.ts watch",
