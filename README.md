@@ -12,16 +12,9 @@ access (ssh, AWS, Kubernetes) from a machine that does not pass.
 
 [ภาษาไทย](README.th.md)
 
-```
-$ ssh prod-wallet-01
-▼ vswarm preflight · 1172 items · 190 ms
-  HIGH  New third-party Homebrew tap: aitools-dev/tools
-        from https://github.com/aitools-dev/homebrew-tools
-        installed from it: ai-coder 1.4.2
-  HIGH  Login job com.apple.updater.helper starts a program that runs from a hidden folder (~/.cache)
-BLOCK · do not use this machine for production access · vswarm respond
-vswarm: this machine did not pass preflight; run: vswarm preflight
-```
+![vswarm try stopping a fake job-interview repo, and preflight blocking ssh](docs/poc.png)
+
+<sub>Output from the test runs: `test/fixtures/fake-interview` (harmless imitation) and the selftest's planted Homebrew tap.</sub>
 
 ## Install
 
@@ -68,6 +61,33 @@ users:
 
 `vswarm preflight` exits **0** on PASS and WARN, **3** on BLOCK (and **2** on WARN with `--strict`). A verdict is
 reused for two minutes, so gating every `kubectl` call costs about 20 ms. A fresh check takes about 0.2 s.
+
+### Short-lived SSH certificates
+
+Servers trust a CA instead of keys. vswarm issues a fresh key with a 15-minute certificate, and only when the machine
+passes preflight. A stolen key file is trusted nowhere, and a stolen certificate expires before it is worth much.
+
+```bash
+vswarm ca init                      # CA key protected by a passphrase you type at each signing (or: --sk, a hardware key touch)
+vswarm ca server root               # prints the sshd commands to trust the CA; review them and run them on the server
+vswarm gate ssh --cert prod-*       # ssh gets a certificate automatically when it connects
+```
+
+Tested end to end against a real `sshd`: the certificate logs in, the bare key is refused, an expired certificate is
+refused, and no certificate is issued while preflight says BLOCK.
+
+### Canary tokens
+
+Decoy credentials placed where stealers look. Nobody has a reason to use them, so any use means the machine or a copy
+of its files is in someone else's hands. Make the tokens at [canarytokens.org](https://canarytokens.org) (free, by
+Thinkst) with your e-mail; vswarm plants and tracks them, and does not report your own decoys as exposure.
+
+```bash
+vswarm canary plant aws             # a decoy profile in ~/.aws/credentials
+vswarm canary plant dns <token-host> # a decoy host at the top of ~/.ssh/config
+vswarm canary plant env ~/develop/old-project
+vswarm canary list · vswarm canary remove <id>
+```
 
 ### Run code you do not trust
 

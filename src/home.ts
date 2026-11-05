@@ -7,7 +7,7 @@ import { existsSync, mkdirSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
-export const VERSION = "2.0.0";
+export const VERSION = "2.1.0";
 
 export const HOME = process.env.VSWARM_HOME ?? join(homedir(), ".vswarm");
 

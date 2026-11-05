@@ -27,6 +27,8 @@ vswarm gate ssh "prod-*"             # ssh เข้า prod-* ได้เฉ�
 vswarm respond                       # เจอของผิดปกติ: ล็อก เก็บหลักฐาน เปลี่ยน credential กักกัน รายงาน
 vswarm selftest                      # ฝังภัยจำลองใน home ปลอม แล้ววัดว่าจับได้กี่ข้อ
 vswarm try ./assignment -- npm install   # รันโค้ดที่ไม่ไว้ใจใน sandbox แล้วรายงานว่ามันพยายามทำอะไร
+vswarm ca init && vswarm gate ssh --cert "prod-*"   # ใบรับรอง ssh อายุ 15 นาที ออกให้เมื่อเครื่องผ่านเท่านั้น
+vswarm canary plant aws                  # วาง credential ล่อ ถ้ามีคนใช้จะได้ e-mail เตือน
 ```
 
 ### vswarm try: รันโค้ดที่ไม่ไว้ใจ
