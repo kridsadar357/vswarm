@@ -338,3 +338,15 @@ describe("chat markdown", () => {
     expect(plain(t)).toBe("Run this:\n    !curl -s http://localhost:5281/\nไม่ได้รัน open ตามที่ขอ");
   });
 });
+
+describe("resume", () => {
+  test("subagents of a finished process do not count as running after a restart", () => {
+    const s = fold([
+      // `claude --resume` keeps the session id, so the board is not reset by it.
+      { type: "session", sid: "x", start: true, t: 0 } as Stamped,
+      { type: "agent.start", id: "a", name: "parts", t: 1 } as Stamped,
+      { type: "session", sid: "x", start: true, t: 2 } as Stamped,
+    ]);
+    expect(s.agents[0].status).toBe("failed");
+  });
+});

@@ -2,7 +2,7 @@
 // Every source (Claude Code hooks, Jev, the demo) speaks these events.
 
 export type SwarmEvent =
-  | { type: "session"; sid?: string; lead?: string; effort?: string; command?: string }
+  | { type: "session"; sid?: string; lead?: string; effort?: string; command?: string; start?: boolean }
   | { type: "prompt"; text: string }
   | { type: "phase"; phase: Phase }
   | { type: "tool"; tool: string; detail?: string }
@@ -122,6 +122,15 @@ export function apply(s: State, e: Stamped): State {
         // A resumed session continues the same conversation, so its chat stays too.
         Object.assign(s, initial(), keep, { startedAt: t, updatedAt: t });
         s.sid = e.sid;
+      }
+      // A fresh claude process: subagents of an earlier one that never reported back are gone.
+      if (e.start) {
+        for (const a of s.agents) {
+          if (a.status !== "running") continue;
+          a.status = "failed";
+          a.endedAt = t;
+          a.note = "stopped with its session";
+        }
       }
       if (e.lead) s.lead.model = e.lead;
       if (e.effort) s.lead.effort = e.effort;

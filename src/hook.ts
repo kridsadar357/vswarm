@@ -53,7 +53,7 @@ export function map(p: Payload, now = Date.now()): Stamped[] {
 
   switch (p.hook_event_name) {
     case "SessionStart":
-      out.push({ t, type: "session", sid, lead: p.model ?? modelFromTranscript(p.transcript_path), effort });
+      out.push({ t, type: "session", sid, lead: p.model ?? modelFromTranscript(p.transcript_path), effort, start: true });
       break;
     case "UserPromptSubmit": {
       out.push({ t, type: "session", sid, effort, lead: modelFromTranscript(p.transcript_path) });

@@ -388,6 +388,8 @@ export async function runSession(o: RunOptions): Promise<number> {
   const finish = async (status: RunMeta["status"]) => {
     ended = true;
     clearInterval(nudger);
+    // Ending the session stops its subagents; say so, or a later resume would wait for them.
+    for (const a of s.agents) if (a.status === "running") post({ type: "agent.stop", id: a.id, ok: false });
     const p = child;
     if (p) {
       try {
