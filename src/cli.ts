@@ -14,7 +14,7 @@ import { globalSettings, hasHooks, projectSettings, setHooks } from "./hooks";
 import { askJev, jevKey } from "./jev";
 import type { Screen } from "./screen";
 import { runSession } from "./session";
-import { banner, c, COMMANDS, completion, doctor, install, uninstall, update } from "./setup";
+import { ask, banner, c, canAsk, COMMANDS, completion, doctor, install, uninstall, update } from "./setup";
 import { apply, initial, type Stamped, type State } from "./state";
 import { board, type Key } from "./tui";
 import { draw, questionOptions, type Ui } from "./view";
@@ -125,31 +125,8 @@ async function config(args: string[]) {
     case "jev": {
       let k = value;
       if (!k) {
-        if (!process.stdin.isTTY) throw new Error("usage: vswarm config jev <key>");
-        process.stdout.write(`${c.cyan("?")} Jev API key: `);
-        k = (await new Promise<string>((r) => {
-          let v = "";
-          process.stdin.setRawMode(true);
-          process.stdin.resume();
-          const on = (b: Buffer) => {
-            for (const ch of b.toString()) {
-              if (ch === "\r" || ch === "\n") {
-                process.stdin.off("data", on);
-                process.stdin.setRawMode(false);
-                process.stdin.pause();
-                process.stdout.write("\n");
-                return r(v);
-              }
-              if (ch === "\x03") process.exit(130);
-              if (ch === "\x7f") v = v.slice(0, -1);
-              else if (ch >= " ") {
-                v += ch;
-                process.stdout.write("•");
-              }
-            }
-          };
-          process.stdin.on("data", on);
-        })).trim();
+        if (!canAsk()) throw new Error("usage: vswarm config jev <key>");
+        k = await ask("Jev API key:", { secret: true });
       }
       if (!k) return;
       ensureHome();

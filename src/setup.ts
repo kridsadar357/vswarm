@@ -1,7 +1,8 @@
 // Installing vswarm on a machine: launcher on PATH, shell completions, data folder, config, optional Jev key
 // and hooks. Also `doctor` (check everything), `update` (git pull) and `uninstall`.
 
-import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, openSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { ReadStream } from "node:tty";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { DEFAULTS, ensureHome, HOME, loadConfig, paths, saveConfig, VERSION } from "./home";
@@ -33,30 +34,55 @@ const bad = (t: string, d = "") => console.log(`  ${c.rose("✖")} ${t}${d ? "  
 const step = (t: string) => console.log(`\n  ${c.bold(t)}`);
 
 // ── Questions on the terminal
-async function ask(question: string, { secret = false } = {}): Promise<string> {
-  if (!process.stdin.isTTY) return "";
+// Keys are read from /dev/tty, not stdin: under `curl … | sh` stdin is the script, and Bun gets no keys
+// from a stdin that was redirected from /dev/tty.
+function keyboard(): (NodeJS.ReadStream & { setRawMode(m: boolean): void }) | undefined {
+  if (!WIN) {
+    try {
+      return new ReadStream(openSync("/dev/tty", "r")) as any;
+    } catch {}
+  }
+  return process.stdin.isTTY ? (process.stdin as any) : undefined;
+}
+
+export function canAsk(): boolean {
+  const k = keyboard();
+  if (!k) return false;
+  if (k !== (process.stdin as any)) k.destroy();
+  return true;
+}
+
+export async function ask(question: string, { secret = false } = {}): Promise<string> {
+  const k = keyboard();
+  if (!k) return "";
   process.stdout.write(`  ${c.cyan("?")} ${question} `);
-  const stdin = process.stdin;
-  stdin.setRawMode(true);
-  stdin.resume();
+  k.setRawMode(true);
+  k.resume();
   let value = "";
   return new Promise((done) => {
+    const close = () => {
+      k.off("data", onData);
+      k.setRawMode(false);
+      if (k === (process.stdin as any)) k.pause();
+      else k.destroy();
+    };
     const onData = (b: Buffer) => {
-      for (const ch of b.toString("utf8")) {
+      // A paste comes wrapped in bracketed-paste markers.
+      const text = b.toString("utf8").replace(/\x1b\[20[01]~/g, "");
+      for (const ch of text) {
         if (ch === "\r" || ch === "\n") {
-          stdin.off("data", onData);
-          stdin.setRawMode(false);
-          stdin.pause();
+          close();
           process.stdout.write("\n");
           return done(value.trim());
         }
         if (ch === "\x03") {
+          close();
           process.stdout.write("\n");
           process.exit(130);
         }
         if (ch === "\x7f" || ch === "\b") {
           if (value) {
-            value = value.slice(0, -1);
+            value = [...value].slice(0, -1).join("");
             process.stdout.write("\b \b");
           }
           continue;
@@ -66,7 +92,7 @@ async function ask(question: string, { secret = false } = {}): Promise<string> {
         process.stdout.write(secret ? "•" : ch);
       }
     };
-    stdin.on("data", onData);
+    k.on("data", onData);
   });
 }
 
@@ -243,7 +269,7 @@ export async function doctor(): Promise<boolean> {
 
 // ── Commands
 export async function install(args: string[]) {
-  const auto = args.includes("--yes") || args.includes("-y") || !process.stdin.isTTY;
+  const auto = args.includes("--yes") || args.includes("-y") || !canAsk();
   banner("install");
   step("1  files");
   ensureHome();

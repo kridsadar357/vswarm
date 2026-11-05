@@ -38,6 +38,5 @@ fi
 
 cd "$APP"
 "$BUN" install --production --silent >/dev/null 2>&1 || true
-# The installer asks its questions on the terminal even when this script came through a pipe.
-if (: </dev/tty) 2>/dev/null; then exec "$BUN" "$APP/src/cli.ts" install "$@" </dev/tty; fi
-exec "$BUN" "$APP/src/cli.ts" install --yes "$@"
+# vswarm reads its questions from /dev/tty itself, so they work even though this script came through a pipe.
+exec "$BUN" "$APP/src/cli.ts" install "$@"
