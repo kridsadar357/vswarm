@@ -160,7 +160,24 @@ export async function runSession(o: RunOptions): Promise<number> {
     }
   };
 
+  /** Set while the lead's turn is over but its background subagents are still at work. */
+  let waitingSince = 0;
+  let confirmEnd = false;
+  let lastMessageAt = Date.now();
+  // When the last subagent is done and the lead has not started a turn of its own, prompt it to collect the results.
+  const nudger = setInterval(() => {
+    if (!waitingSince || !child) return;
+    if (s.agents.some((a) => a.status === "running")) return;
+    if (Date.now() - lastMessageAt < 8000) return;
+    waitingSince = 0;
+    const p = child;
+    (p.stdin as any).write(JSON.stringify({ type: "user", message: { role: "user", content: "All your subagents have finished. Collect their results and continue the task." } }) + "\n");
+    (p.stdin as any).flush?.();
+    note("subagents finished · asked the lead to continue");
+  }, 1000);
+
   const onMessage = (m: any) => {
+    lastMessageAt = Date.now();
     if (m.type === "system" && m.subtype === "init" && m.session_id) {
       meta.sid = m.session_id;
       saveMeta(meta);
@@ -184,6 +201,7 @@ export async function runSession(o: RunOptions): Promise<number> {
       return;
     }
     if (m.type === "result") {
+      waitingSince = 0;
       ui.busy = false;
       ui.partial = "";
       meta.turns++;
@@ -217,6 +235,13 @@ export async function runSession(o: RunOptions): Promise<number> {
       ui.options = outside.length ? outside.map((d) => `/add-dir ${d}`) : [...openables(lastText, o.cwd), ...questionOptions(lastText)].slice(0, 9);
       ui.pick = -1;
       ui.hint = ui.options.length ? "" : `turn ${meta.turns} done · $${meta.costUsd.toFixed(3)} · reply to continue, esc to end`;
+      // Background subagents outlive the lead's turn; the lead picks up their results in a turn of its own.
+      const running = s.agents.filter((a) => a.status === "running").length;
+      if (running) {
+        ui.busy = true;
+        waitingSince = Date.now();
+        ui.hint = `lead is waiting for ${running} subagent${running > 1 ? "s" : ""}`;
+      }
       saveMeta(meta);
       resolveTurn?.();
     }
@@ -362,6 +387,7 @@ export async function runSession(o: RunOptions): Promise<number> {
 
   const finish = async (status: RunMeta["status"]) => {
     ended = true;
+    clearInterval(nudger);
     const p = child;
     if (p) {
       try {
@@ -422,6 +448,13 @@ export async function runSession(o: RunOptions): Promise<number> {
         child?.kill();
         return done("interrupted");
       case "esc":
+        if (waitingSince) {
+          // Ending now would stop subagents mid-work, so it takes a second press.
+          if (confirmEnd) return done("interrupted");
+          confirmEnd = true;
+          ui.hint = "subagents are still working · esc again to stop them and end";
+          return;
+        }
         return ui.busy ? interrupt() : done("done");
       case "ctrl-d":
         if (!ui.busy && !ui.input) done("done");
