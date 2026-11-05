@@ -1,4 +1,4 @@
-// Turns the HTML frames written by `v-swarm run --frames dir` into PNGs and an MP4.
+// Turns the HTML frames written by `vswarm run --frames dir` into PNGs and an MP4.
 // usage: bun scripts/frames.ts <frames dir> <out.mp4> [--fps 4] [--every 1]
 
 import { readdirSync } from "node:fs";
@@ -19,7 +19,7 @@ const frames = readdirSync(dir).filter((f) => /^frame-\d+\.html$/.test(f)).sort(
 
 async function shot(html: string, png: string) {
   const p = Bun.spawn([CHROME, "--headless=new", "--disable-gpu", "--hide-scrollbars", "--force-device-scale-factor=2",
-    "--window-size=860,850", `--screenshot=${png}`, `file://${html}`], { stdout: "ignore", stderr: "ignore" });
+    "--window-size=1130,700", `--screenshot=${png}`, `file://${html}`], { stdout: "ignore", stderr: "ignore" });
   await p.exited;
 }
 
@@ -33,5 +33,5 @@ await Promise.all(Array.from({ length: POOL }, async () => {
 }));
 
 const ff = Bun.spawn(["ffmpeg", "-y", "-loglevel", "error", "-framerate", String(fps), "-i", join(dir, "png-%04d.png"),
-  "-vf", "scale=1720:-2", "-c:v", "libx264", "-pix_fmt", "yuv420p", "-crf", "22", out], { stdout: "inherit", stderr: "inherit" });
+  "-vf", "scale=2260:-2", "-c:v", "libx264", "-pix_fmt", "yuv420p", "-crf", "22", out], { stdout: "inherit", stderr: "inherit" });
 process.exit(await ff.exited);

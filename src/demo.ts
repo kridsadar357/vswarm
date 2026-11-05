@@ -18,6 +18,7 @@ function script(run: number): Step[] {
     [0, { type: "advisor", model: "claude-opus-5-5", status: "on call" }],
     [0, { type: "decision", q: "which tool", p: 0.62, answer: "Grep", count: 1787 }],
     [500, { type: "prompt", text: "add rate limiting to /api/login and cover it with tests" }],
+    [400, { type: "say", who: "claude", text: "I'll read the login handler first, then split the work: one subagent maps the repo, one finds every call site, one runs the tests in a worktree." }],
     [700, { type: "tool", tool: "Read", detail: "src/api/login.ts" }],
     [600, { type: "advisor", mark: "before a plan", note: "plan skips auth", tokens: 412_000 }],
     [700, { type: "advisor", note: "split in 3 PRs", tokens: 354_000 }],
@@ -59,6 +60,7 @@ function script(run: number): Step[] {
     [900, { type: "advisor", mark: "before done", note: "verify 429 headers", tokens: 128_000 }],
     [900, { type: "tool", tool: "Edit", detail: "src/api/login.ts" }],
     [900, { type: "phase", phase: "done" }],
+    [200, { type: "say", who: "claude", text: "Rate limiting is on /api/login (5 tries per minute per IP) and the new tests pass.\n\nWhere should the limit counters live?\n1) In memory (simple, resets on restart)\n2) Redis (shared across servers)\n3) The existing Postgres table" }],
     [5000, { type: "log", who: "lead", text: "restarting demo" }],
   );
   return steps;

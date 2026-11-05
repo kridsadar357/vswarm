@@ -2,8 +2,7 @@
 // Same request shape as ~/develop/jev-compute/jev-drive.ts.
 
 import { readFileSync } from "node:fs";
-import { homedir } from "node:os";
-import { join } from "node:path";
+import { paths } from "./home";
 import type { Stamped } from "./state";
 
 export interface JevAsk {
@@ -16,18 +15,18 @@ export interface JevAsk {
 
 export type JevDecision = Extract<Stamped, { type: "decision" }>;
 
-/** JEV_API_KEY, else ~/.v-swarm/jev.key. */
+/** JEV_API_KEY, else ~/.vswarm/jev.key. */
 export function jevKey(): string {
   if (process.env.JEV_API_KEY) return process.env.JEV_API_KEY;
   try {
-    return readFileSync(join(homedir(), ".v-swarm", "jev.key"), "utf8").trim();
+    return readFileSync(paths.jevKey(), "utf8").trim();
   } catch {
     return "";
   }
 }
 
 export async function askJev(ask: JevAsk, key = jevKey()): Promise<JevDecision> {
-  if (!key) throw new Error("no Jev key: set JEV_API_KEY or write ~/.v-swarm/jev.key");
+  if (!key) throw new Error("no Jev key: set JEV_API_KEY or run: vswarm config jev");
   const criteria = Array.isArray(ask.options) ? Object.fromEntries(ask.options.map((o) => [o, o])) : ask.options;
   if (Object.keys(criteria).length < 2) throw new Error("need at least two options");
   const res = await fetch(process.env.JEV_URL ?? "https://api.typesafe.ai/v1/systemone", {

@@ -1,0 +1,6 @@
+#!/bin/sh
+# Run vswarm straight from a checkout: ./vswarm install
+DIR=$(cd "$(dirname "$0")" && pwd)
+command -v bun >/dev/null 2>&1 || [ -x "$HOME/.bun/bin/bun" ] || { echo "vswarm needs Bun: curl -fsSL https://bun.sh/install | bash" >&2; exit 1; }
+BUN=$(command -v bun || echo "$HOME/.bun/bin/bun")
+exec "$BUN" "$DIR/src/cli.ts" "$@"

@@ -14,6 +14,8 @@ export type SwarmEvent =
   | { type: "decision"; q: string; p: number; answer: string; count?: number }
   | { type: "advisor"; model?: string; status?: string; note?: string; mark?: string; tokens?: number }
   | { type: "error"; text: string }
+  /** A message in the conversation: what Claude said, or a note from vswarm itself. */
+  | { type: "say"; who: "claude" | "you" | "vswarm"; text: string }
   | { type: "log"; who: string; text: string };
 
 export type Stamped = SwarmEvent & { t?: number; sid?: string };
@@ -40,6 +42,12 @@ export interface Decision {
   answer: string;
 }
 
+export interface ChatLine {
+  t: number;
+  who: "claude" | "you" | "vswarm";
+  text: string;
+}
+
 export interface LogLine {
   t: number;
   who: string;
@@ -58,7 +66,9 @@ export interface State {
   requests: { name: string; model?: string; desc?: string }[];
   forks: number;
   decisions: Decision[];
-  advisor: { model?: string; status: string; notes: string[]; calls: number; tokens: number; marks: string[] };
+  lastDecisionAt?: number;
+  advisor: { model?: string; status: string; notes: string[]; calls: number; tokens: number; marks: string[]; current?: string };
+  chat: ChatLine[];
   errors: number;
   log: LogLine[];
   startedAt?: number;
@@ -80,10 +90,20 @@ export function initial(): State {
     advisor: { status: "idle", notes: [], calls: 0, tokens: 0, marks: [] },
     errors: 0,
     log: [],
+    chat: [],
   };
 }
 
 const LOG_KEEP = 50;
+const CHAT_KEEP = 200;
+
+function say(s: State, t: number, who: ChatLine["who"], text: string) {
+  const last = s.chat.at(-1);
+  // The stream and the Stop hook can both report the same final message.
+  if (last && last.who === who && last.text === text) return;
+  s.chat.push({ t, who, text });
+  if (s.chat.length > CHAT_KEEP) s.chat.splice(0, s.chat.length - CHAT_KEEP);
+}
 
 function log(s: State, t: number, who: string, text: string) {
   s.log.push({ t, who, text });
@@ -98,8 +118,9 @@ export function apply(s: State, e: Stamped): State {
     case "session":
       if (e.sid && e.sid !== s.sid) {
         // A new session starts a clean board, keeping only the log for context.
-        const keepLog = s.log;
-        Object.assign(s, initial(), { log: keepLog, startedAt: t, updatedAt: t });
+        const keep = { log: s.log, chat: s.chat };
+        // A resumed session continues the same conversation, so its chat stays too.
+        Object.assign(s, initial(), keep, { startedAt: t, updatedAt: t });
         s.sid = e.sid;
       }
       if (e.lead) s.lead.model = e.lead;
@@ -109,7 +130,11 @@ export function apply(s: State, e: Stamped): State {
     case "prompt":
       s.prompt = e.text;
       s.phase = "lead";
+      // A new turn: the swarm of the previous turn is history now.
+      s.agents = s.agents.filter((a) => a.status === "running");
+      s.advisor.marks = [];
       log(s, t, "prompt", e.text);
+      say(s, t, "you", e.text);
       break;
     case "phase":
       s.phase = e.phase;
@@ -168,6 +193,7 @@ export function apply(s: State, e: Stamped): State {
     }
     case "decision": {
       s.forks += e.count ?? 1;
+      s.lastDecisionAt = t;
       const i = s.decisions.findIndex((d) => d.q === e.q);
       const d = { q: e.q, p: e.p, answer: e.answer };
       if (i >= 0) s.decisions.splice(i, 1);
@@ -182,6 +208,7 @@ export function apply(s: State, e: Stamped): State {
       if (e.status) s.advisor.status = e.status;
       if (e.tokens) s.advisor.tokens += e.tokens;
       if (e.mark && !s.advisor.marks.includes(e.mark)) s.advisor.marks.push(e.mark);
+      if (e.status) s.advisor.current = e.status === "reading" ? e.mark : undefined;
       if (e.note) {
         s.advisor.calls++;
         s.advisor.notes.push(e.note);
@@ -195,6 +222,11 @@ export function apply(s: State, e: Stamped): State {
       break;
     case "log":
       log(s, t, e.who, e.text);
+      break;
+    case "say":
+      if (e.who === "claude" && s.chat.at(-1)?.text !== e.text) log(s, t, "claude", e.text.split("\n").find((l) => l.trim()) ?? "");
+      if (e.who === "vswarm") log(s, t, "vswarm", e.text);
+      say(s, t, e.who, e.text);
       break;
   }
   return s;

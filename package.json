@@ -1,17 +1,21 @@
 {
-  "name": "v-swarm",
-  "version": "0.1.0",
-  "description": "Live terminal board for a Claude Code session, its subagents, Jev decisions and an advisor",
+  "name": "vswarm",
+  "version": "1.0.0",
+  "description": "Live terminal board for Claude Code: lead, subagents, Jev decisions, an advisor, and a chat to answer Claude",
   "type": "module",
-  "bin": { "v-swarm": "src/cli.ts" },
+  "bin": {
+    "vswarm": "src/cli.ts"
+  },
   "scripts": {
     "demo": "bun src/cli.ts demo",
-    "watch": "bun src/cli.ts watch",
     "test": "bun test",
     "typecheck": "tsc --noEmit"
   },
   "devDependencies": {
     "@types/bun": "1.2.23",
     "typescript": "5.9.3"
+  },
+  "engines": {
+    "bun": ">=1.2"
   }
 }

@@ -1,12 +1,12 @@
-// What v-swarm does back to the session, on top of recording events:
+// What vswarm does back to the session, on top of recording events:
 //   before a plan   → the advisor reads the request and the session, its advice goes to the lead
 //   a tool fails    → Jev decides retry or stop; sharp answers are acted on, split ones left to the lead
 //   same error x2   → the advisor explains the root cause
 //   before done     → the advisor reviews the result and can send the lead back to fix it (once)
 
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { homedir } from "node:os";
 import { join } from "node:path";
+import { paths } from "./home";
 import { askAdvisor, type Advice, type Moment } from "./advisor";
 import { append } from "./hook";
 import { askJev, jevKey } from "./jev";
@@ -20,7 +20,7 @@ interface Memory {
   reviewed?: boolean;
 }
 
-const DIR = join(homedir(), ".v-swarm", "sessions");
+const DIR = paths.sessions();
 
 function moments(): Set<Moment> {
   const v = process.env.VSWARM_ADVISOR_AT ?? "plan,error,done";
@@ -77,7 +77,7 @@ export async function react(p: Payload, file: string): Promise<HookOutput> {
     if (!at.has("plan") || prompt.startsWith("<task-notification>")) return;
     const a = await advise(file, sid, "plan", "before a plan", p, `New request:\n${prompt.slice(0, 8000)}`);
     if (!a?.advice.length) return;
-    return context(event, `v-swarm advisor (${a.model}) — notes before you plan:\n${bullets(a)}`);
+    return context(event, `vswarm advisor (${a.model}) — notes before you plan:\n${bullets(a)}`);
   }
 
   if (event === "PostToolUseFailure" || event === "PostToolUse") {
@@ -111,8 +111,8 @@ export async function react(p: Payload, file: string): Promise<HookOutput> {
         append(file, [{ ...d, sid }]);
         notes.push(
           d.p >= SHARP
-            ? `v-swarm jev: ${d.answer === "stop" ? "stop repeating this call and change approach" : "retrying this step is fine"} (confidence ${d.p.toFixed(2)}).`
-            : `v-swarm jev was unsure whether to retry or stop (confidence ${d.p.toFixed(2)}); use your own judgement.`,
+            ? `vswarm jev: ${d.answer === "stop" ? "stop repeating this call and change approach" : "retrying this step is fine"} (confidence ${d.p.toFixed(2)}).`
+            : `vswarm jev was unsure whether to retry or stop (confidence ${d.p.toFixed(2)}); use your own judgement.`,
         );
       } catch (err: any) {
         append(file, [{ t: Date.now(), sid, type: "error", text: `jev: ${err.message ?? err}` }]);
@@ -120,7 +120,7 @@ export async function react(p: Payload, file: string): Promise<HookOutput> {
     }
     if (n === 2 && at.has("error")) {
       const a = await advise(file, sid, "error", "same error x2", p, `Failing call: ${tool}\nError:\n${error.slice(0, 3000)}`);
-      if (a?.advice.length) notes.push(`v-swarm advisor (${a.model}) on this repeated error:\n${bullets(a)}`);
+      if (a?.advice.length) notes.push(`vswarm advisor (${a.model}) on this repeated error:\n${bullets(a)}`);
     }
     return notes.length ? context(event, notes.join("\n\n")) : undefined;
   }
@@ -135,7 +135,7 @@ export async function react(p: Payload, file: string): Promise<HookOutput> {
     if (!a || a.ok) return;
     return {
       decision: "block",
-      reason: `v-swarm advisor (${a.model}) reviewed the result before you finish. Fix these, then finish:\n${bullets(a)}`,
+      reason: `vswarm advisor (${a.model}) reviewed the result before you finish. Fix these, then finish:\n${bullets(a)}`,
     };
   }
 }

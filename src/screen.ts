@@ -42,6 +42,38 @@ export function clip(text: string, max: number): string {
   return out + "…";
 }
 
+const WORDS = new Intl.Segmenter("th", { granularity: "word" });
+
+/** Word-wrap to `max` columns. Thai has no spaces, so words come from the segmenter; over-long words are cut. */
+export function wrap(text: string, max: number): string[] {
+  const out: string[] = [];
+  for (const para of text.split("\n")) {
+    let line = "";
+    for (const { segment } of WORDS.segment(para)) {
+      let seg = segment;
+      while (width(line) + width(seg) > max) {
+        if (line.trim()) {
+          out.push(line.trimEnd());
+          line = "";
+          seg = seg.trimStart();
+          continue;
+        }
+        // A single word wider than the line: cut it.
+        let head = "";
+        for (const ch of seg) {
+          if (width(head + ch) > max) break;
+          head += ch;
+        }
+        out.push(head);
+        seg = seg.slice(head.length);
+      }
+      line += line ? seg : seg.trimStart();
+    }
+    out.push(line.trimEnd());
+  }
+  return out;
+}
+
 export class Screen {
   private chars: string[][];
   private styles: (Style | undefined)[][];

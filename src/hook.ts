@@ -112,6 +112,7 @@ export function map(p: Payload, now = Date.now()): Stamped[] {
       break;
     case "Stop":
       out.push({ t, type: "phase", phase: "done" });
+      if (p.last_assistant_message) out.push({ t, type: "say", who: "claude", text: String(p.last_assistant_message) });
       break;
     case "SessionEnd":
       out.push({ t, type: "log", who: "lead", text: `session ended (${p.reason ?? "?"})` });

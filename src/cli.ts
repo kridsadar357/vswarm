@@ -1,144 +1,257 @@
 #!/usr/bin/env bun
-// v-swarm — live terminal board for a Claude Code session, its subagents, Jev and an advisor.
+// vswarm — live board for Claude Code: the lead, its subagents, Jev decisions and an advisor, plus a chat to answer Claude.
 
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { homedir, tmpdir } from "node:os";
-import { join, resolve } from "node:path";
-import { demo, demoUntil } from "./demo";
-import { follow } from "./follow";
+import { writeFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { ADVISOR_ENV } from "./advisor";
 import { react } from "./brain";
+import { demo, demoUntil } from "./demo";
+import { follow } from "./follow";
+import { findRun, listRuns, runEvents } from "./history";
 import { append, map } from "./hook";
-import { askJev } from "./jev";
-import { apply, initial, type Stamped, type State } from "./state";
-import { draw, H, W } from "./view";
+import { DEFAULTS, ensureHome, loadConfig, paths, saveConfig, VERSION, type Config } from "./home";
+import { globalSettings, hasHooks, projectSettings, setHooks } from "./hooks";
+import { askJev, jevKey } from "./jev";
 import type { Screen } from "./screen";
+import { runSession } from "./session";
+import { banner, c, COMMANDS, completion, doctor, install, uninstall, update } from "./setup";
+import { apply, initial, type Stamped, type State } from "./state";
+import { board, type Key } from "./tui";
+import { draw, questionOptions, type Ui } from "./view";
 
-const CLI = import.meta.path;
-const DEFAULT_FILE = process.env.VSWARM_FILE ?? join(homedir(), ".v-swarm", "events.jsonl");
-const HOOK_EVENTS = [
-  "SessionStart", "UserPromptSubmit", "PreToolUse", "PostToolUse", "PostToolUseFailure",
-  "SubagentStart", "SubagentStop", "Stop", "SessionEnd",
-];
-/** These may wait for the advisor or Jev; the rest only record. */
-const SLOW = new Set(["UserPromptSubmit", "PostToolUse", "PostToolUseFailure", "Stop"]);
-const MARK = "v-swarm";
-/** Hooks written by the tool under its old name, removed by uninstall too. */
-const OLD_MARK = "swarmdeck";
-
-function flag(args: string[], name: string): string | undefined {
-  const i = args.indexOf(name);
-  if (i < 0) return;
-  const [, v] = args.splice(i, 2);
-  return v;
-}
-
-function has(args: string[], name: string): boolean {
-  const i = args.indexOf(name);
-  if (i >= 0) args.splice(i, 1);
-  return i >= 0;
-}
-
-/** Full-screen renderer. Returns a stop function that restores the terminal. */
-function tui(state: () => State, onQuit: () => void) {
-  const out = process.stdout;
-  out.write("\x1b[?1049h\x1b[?25l\x1b[2J");
-  let frame = 0;
-  const render = () => {
-    const cols = out.columns ?? W;
-    const rows = out.rows ?? H;
-    let text = draw(state(), frame++).toString(cols, rows);
-    if (cols < W || rows < H) {
-      text += `\x1b[${Math.min(rows, H)};1H\x1b[0;33m enlarge terminal to ${W}×${H} (now ${cols}×${rows}) \x1b[0m`;
-    }
-    out.write("\x1b[H" + text);
-  };
-  const timer = setInterval(render, 120);
-  render();
-  const stdin = process.stdin;
-  const onKey = (b: Buffer) => {
-    const k = b.toString();
-    if (k === "q" || k === "\x03" || k === "\x1b") onQuit();
-  };
-  if (stdin.isTTY) {
-    stdin.setRawMode(true);
-    stdin.resume();
-    stdin.on("data", onKey);
+function flag(args: string[], ...names: string[]): string | undefined {
+  for (const name of names) {
+    const i = args.indexOf(name);
+    if (i >= 0) return args.splice(i, 2)[1];
   }
-  const stop = () => {
-    clearInterval(timer);
-    if (stdin.isTTY) {
-      stdin.off("data", onKey);
-      stdin.setRawMode(false);
-      stdin.pause();
+}
+
+function has(args: string[], ...names: string[]): boolean {
+  let found = false;
+  for (const name of names) {
+    const i = args.indexOf(name);
+    if (i >= 0) {
+      args.splice(i, 1);
+      found = true;
     }
-    out.write("\x1b[0m\x1b[?25h\x1b[?1049l");
-  };
-  process.on("exit", () => out.write("\x1b[?25h"));
-  return stop;
-}
-
-function hookCommand(file?: string): string {
-  const q = (s: string) => `"${s.replace(/"/g, '\\"')}"`;
-  return [q(process.execPath), q(CLI), "hook", ...(file ? ["--file", q(file)] : [])].join(" ");
-}
-
-function hooksConfig(file?: string) {
-  return Object.fromEntries(
-    HOOK_EVENTS.map((e) => {
-      const entry = { type: "command", command: hookCommand(file), timeout: SLOW.has(e) ? 300 : 10 };
-      return [e, [e.includes("Tool") ? { matcher: "*", hooks: [entry] } : { hooks: [entry] }]];
-    }),
-  );
+  }
+  return found;
 }
 
 function page(scr: Screen): string {
-  return `<!doctype html><meta charset="utf-8"><body style="margin:0;background:#0b0f19">` +
+  return `<!doctype html><meta charset="utf-8"><body style="margin:0;background:#0a0e18">` +
     `<pre style="margin:0;padding:18px 22px;font:15px/1.2 Menlo,monospace;color:#e4e9f5">${scr.html()}</pre>`;
 }
 
-function settingsPath(args: string[]): string {
-  if (has(args, "--global")) return join(process.env.CLAUDE_CONFIG_DIR ?? join(homedir(), ".claude"), "settings.json");
-  return join(resolve(args[0] ?? "."), ".claude", "settings.local.json");
+/** Shows a state on the board until q; `tick` may change it between frames. */
+async function show(ui: Ui, state: () => State, onKey?: (k: Key) => void): Promise<void> {
+  await new Promise<void>((done) => {
+    const b = board((cols, rows, n) => draw(state(), n, Date.now(), { w: cols, h: rows, ui }).toString(cols, rows), (k) => {
+      if (k.name === "ctrl-c" || k.name === "esc" || (k.name === "text" && k.text === "q")) {
+        b.stop();
+        done();
+      } else onKey?.(k);
+    });
+  });
 }
 
-function readJson(path: string): any {
-  if (!existsSync(path)) return {};
-  return JSON.parse(readFileSync(path, "utf8"));
+function usage() {
+  banner("live board for Claude Code");
+  const row = (cmd: string, desc: string) => console.log(`  ${c.cyan(cmd.padEnd(34))}${c.dim(desc)}`);
+  console.log(`  ${c.bold("start")}`);
+  row("vswarm", "open the board and type a prompt");
+  row('vswarm run "<prompt>"', "run a prompt on the board, answer Claude there");
+  row("vswarm resume [n|id] [prompt]", "continue an earlier session");
+  row('vswarm run -p "<prompt>"', "no board: print the answer (for scripts)");
+  console.log(`\n  ${c.bold("look")}`);
+  row("vswarm watch", "board for every session that has hooks");
+  row("vswarm history", "earlier runs, newest first");
+  row("vswarm replay [n|id] [--speed 4]", "play a run back on the board");
+  row("vswarm demo", "scripted board, no API calls");
+  console.log(`\n  ${c.bold("set up")}`);
+  row("vswarm install", "launcher, PATH, completions, config, Jev key");
+  row("vswarm doctor", "check the installation");
+  row("vswarm config [key value]", "lead swarm advisor advisorAt mode allow jev reset");
+  row("vswarm hooks on|off|status [dir|--global]", "show normal claude sessions on watch");
+  row("vswarm update · vswarm uninstall", "pull the latest · remove (data kept unless --purge)");
+  console.log(`\n  ${c.bold("tools")}`);
+  row('vswarm jev --q "<q>" --state "<ctx>" a b', "ask Jev, the decision shows on the board");
+  row("vswarm emit '<event json>'", "post any event");
+  row("vswarm snapshot [--html|--plain]", "print one demo frame");
+  row("vswarm completions zsh|bash", "print a completion script");
+  console.log(`\n  ${c.bold("run flags")}  ${c.dim("--model sonnet  --swarm haiku  --advisor opus | --no-advisor  --mode acceptEdits")}`);
+  console.log(`             ${c.dim("--cwd <dir>  --frames <dir>  -- <any claude flags>")}`);
+  console.log(`  ${c.bold("on the board")}  ${c.dim("⏎ send · 1-9 or ↑↓ pick a choice · esc interrupt, then end · ctrl-c quit")}\n`);
 }
 
-/** Drop our own entries from a settings object; leaves every other hook untouched. */
-function stripOurs(settings: any) {
-  for (const [event, groups] of Object.entries<any[]>(settings.hooks ?? {})) {
-    const kept = groups
-      .map((g) => ({ ...g, hooks: (g.hooks ?? []).filter((h: any) => ![MARK, OLD_MARK].some((m) => String(h.command ?? "").includes(m))) }))
-      .filter((g) => g.hooks.length);
-    if (kept.length) settings.hooks[event] = kept;
-    else delete settings.hooks[event];
+/** Run flags on top of the saved config. */
+function runConfig(args: string[]): Config {
+  const cfg = loadConfig();
+  const model = flag(args, "--model", "-m");
+  const swarm = flag(args, "--swarm");
+  const adv = flag(args, "--advisor");
+  const mode = flag(args, "--mode");
+  if (model) cfg.lead = model;
+  if (swarm) cfg.swarm = swarm === "off" ? "" : swarm;
+  if (adv) cfg.advisor = adv === "off" ? "" : adv;
+  if (has(args, "--no-advisor")) cfg.advisor = "";
+  if (mode) cfg.mode = mode;
+  return cfg;
+}
+
+const MODES = ["default", "acceptEdits", "plan", "auto", "dontAsk", "bypassPermissions"];
+
+async function config(args: string[]) {
+  const cfg = loadConfig();
+  const [key, ...rest] = args;
+  const value = rest.join(" ").trim();
+  if (!key) {
+    banner("config");
+    const row = (k: string, v: string, d: string) => console.log(`  ${c.cyan(k.padEnd(10))}${v.padEnd(44)}${c.dim(d)}`);
+    row("lead", cfg.lead, "main session model");
+    row("swarm", cfg.swarm || "(lead picks)", "subagent model");
+    row("advisor", cfg.advisor || "off", "reviews at checkpoints");
+    row("advisorAt", cfg.advisorAt.join(","), "plan, error, done");
+    row("mode", cfg.mode, MODES.slice(0, 4).join(" · "));
+    row("allow", cfg.allow.join(" ") || "(none)", "tools allowed without asking");
+    row("jev", jevKey() ? "set" : "not set", "vswarm config jev");
+    console.log(c.dim(`\n  ${paths.config()}\n  change: vswarm config <key> <value> · allow +Edit / -Edit · reset\n`));
+    return;
   }
-  if (settings.hooks && !Object.keys(settings.hooks).length) delete settings.hooks;
+  switch (key) {
+    case "reset":
+      saveConfig({ ...DEFAULTS });
+      return console.log(`${c.lime("✔")} config reset`);
+    case "jev": {
+      let k = value;
+      if (!k) {
+        if (!process.stdin.isTTY) throw new Error("usage: vswarm config jev <key>");
+        process.stdout.write(`${c.cyan("?")} Jev API key: `);
+        k = (await new Promise<string>((r) => {
+          let v = "";
+          process.stdin.setRawMode(true);
+          process.stdin.resume();
+          const on = (b: Buffer) => {
+            for (const ch of b.toString()) {
+              if (ch === "\r" || ch === "\n") {
+                process.stdin.off("data", on);
+                process.stdin.setRawMode(false);
+                process.stdin.pause();
+                process.stdout.write("\n");
+                return r(v);
+              }
+              if (ch === "\x03") process.exit(130);
+              if (ch === "\x7f") v = v.slice(0, -1);
+              else if (ch >= " ") {
+                v += ch;
+                process.stdout.write("•");
+              }
+            }
+          };
+          process.stdin.on("data", on);
+        })).trim();
+      }
+      if (!k) return;
+      ensureHome();
+      writeFileSync(paths.jevKey(), k + "\n", { mode: 0o600 });
+      return console.log(`${c.lime("✔")} jev key saved ${c.dim(paths.jevKey())}`);
+    }
+    case "lead":
+    case "swarm":
+    case "advisor":
+      if (!value) return console.log(cfg[key] || "off");
+      cfg[key] = value === "off" ? "" : value;
+      break;
+    case "advisorAt": {
+      const v = value.split(/[,\s]+/).filter(Boolean);
+      if (v.some((x) => !["plan", "error", "done"].includes(x))) throw new Error("advisorAt takes plan, error, done");
+      cfg.advisorAt = v;
+      break;
+    }
+    case "mode":
+      if (!MODES.includes(value)) throw new Error(`mode is one of: ${MODES.join(", ")}`);
+      cfg.mode = value;
+      break;
+    case "allow": {
+      const items = value.split(/[,\s]+/).filter(Boolean);
+      if (items.every((x) => /^[+-]/.test(x))) {
+        for (const x of items) {
+          const name = x.slice(1);
+          cfg.allow = cfg.allow.filter((a) => a !== name);
+          if (x[0] === "+") cfg.allow.push(name);
+        }
+      } else cfg.allow = items;
+      break;
+    }
+    default:
+      throw new Error(`unknown config key "${key}" · see: vswarm config`);
+  }
+  saveConfig(cfg);
+  console.log(`${c.lime("✔")} ${key} = ${String((cfg as any)[key] instanceof Array ? (cfg as any)[key].join(" ") : (cfg as any)[key] || "off")}`);
 }
 
-const USAGE = `v-swarm — live board for Claude Code, its subagents, Jev and an advisor
+function history(args: string[]) {
+  const runs = listRuns();
+  banner("history");
+  if (!runs.length) return console.log(c.dim('  no runs yet · vswarm run "<prompt>"\n'));
+  const all = has(args, "--all", "-a");
+  const shown = all ? runs : runs.slice(0, 15);
+  const when = (t: number) => {
+    const d = new Date(t);
+    return `${d.getMonth() + 1}/${d.getDate()} ${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+  };
+  console.log(c.dim(`  ${"#".padStart(3)}  ${"when".padEnd(12)}${"time".padStart(6)}  turns  lanes      cost  prompt`));
+  shown.forEach((r, i) => {
+    const dur = Math.round(((r.ended ?? r.started) - r.started) / 1000);
+    const st = r.status === "done" ? c.lime("●") : r.status === "running" ? c.cyan("◐") : r.status === "error" ? c.rose("●") : c.amber("●");
+    console.log(
+      `  ${String(i + 1).padStart(3)}  ${when(r.started).padEnd(12)}${`${Math.floor(dur / 60)}m${String(dur % 60).padStart(2, "0")}`.padStart(6)}  ` +
+        `${String(r.turns).padStart(5)}  ${String(r.subagents).padStart(5)}  ${("$" + r.costUsd.toFixed(2)).padStart(8)}  ${st} ${(r.prompt || "(no prompt)").replace(/\s+/g, " ").slice(0, 60)}`,
+    );
+  });
+  if (!all && runs.length > shown.length) console.log(c.dim(`  … ${runs.length - shown.length} more · --all`));
+  console.log(c.dim("\n  vswarm replay <#> · vswarm resume <#>\n"));
+}
 
-  v-swarm demo                     scripted session, no API calls
-  v-swarm run "<prompt>" [--model sonnet] [--swarm haiku] [--no-advisor] [--cwd dir]
-                [--frames dir] [-- <claude flags>]
-                                     run claude -p with hooks, advisor and Jev, and watch it live
-  v-swarm watch [--file f] [--once]  follow sessions that have v-swarm hooks installed
-  v-swarm install [dir|--global]   add hooks to <dir>/.claude/settings.local.json
-  v-swarm uninstall [dir|--global] remove them again
-  v-swarm jev --q "<question>" --state "<context>" <option> <option> ...
-                                     ask Jev and post the decision to the board
-  v-swarm emit '<event json>'      post any event (advisor notes, progress, logs)
-  v-swarm snapshot [--at ms] [--plain|--html]  print one demo frame and exit
-
-events file: ${DEFAULT_FILE}  (override with VSWARM_FILE or --file)
-keys: q / Esc / Ctrl-C to quit`;
+async function replay(args: string[]) {
+  const speed = Number(flag(args, "--speed") ?? 4);
+  const run = findRun(args[0]);
+  const events = runEvents(run.id);
+  if (!events.length) throw new Error("this run has no events");
+  let s = initial();
+  let i = 0;
+  let paused = false;
+  let quit = false;
+  const ui: Ui = { mode: "replay" };
+  const play = (async () => {
+    while (i < events.length && !quit) {
+      if (paused) {
+        await Bun.sleep(100);
+        continue;
+      }
+      const e = events[i++];
+      apply(s, e);
+      const next = events[i];
+      // Long quiet stretches are squeezed so the replay keeps moving.
+      if (next) await Bun.sleep(Math.min(1500, Math.max(0, ((next.t ?? 0) - (e.t ?? 0)) / speed)));
+    }
+  })();
+  await show(ui, () => s, (k) => {
+    if (k.name === "space") paused = !paused;
+  });
+  quit = true;
+  await play;
+}
 
 async function main() {
-  const [cmd = "help", ...args] = process.argv.slice(2);
-  const file = flag(args, "--file") ?? DEFAULT_FILE;
+  const argv = process.argv.slice(2);
+  let [cmd = process.stdin.isTTY && process.stdout.isTTY ? "run" : "help", ...args] = argv;
+  // `vswarm "fix the login bug"` is a run.
+  if (/\s/.test(cmd) && !COMMANDS.some(([n]) => n === cmd)) {
+    args.unshift(cmd);
+    cmd = "run";
+  }
+  const file = flag(args, "--file") ?? paths.events();
 
   switch (cmd) {
     case "hook": {
@@ -157,149 +270,112 @@ async function main() {
         if (out) process.stdout.write(JSON.stringify(out));
       } catch (err: any) {
         try {
-          append(file, [{ t: Date.now(), sid: payload.session_id, type: "error", text: `v-swarm: ${err.message ?? err}` } as Stamped]);
+          append(file, [{ t: Date.now(), sid: payload.session_id, type: "error", text: `vswarm: ${err.message ?? err}` } as Stamped]);
         } catch {}
       }
+      return;
+    }
+
+    case "run":
+    case "resume": {
+      const dash = args.indexOf("--");
+      const extra = dash >= 0 ? args.splice(dash).slice(1) : [];
+      const cfg = runConfig(args);
+      const frames = flag(args, "--frames");
+      const print = has(args, "--print", "-p") || !process.stdout.isTTY;
+      const cwdFlag = flag(args, "--cwd");
+      let resume;
+      if (cmd === "resume") {
+        resume = findRun(args.shift());
+        if (!resume.sid) throw new Error("that run never reached Claude, nothing to resume");
+      }
+      const cwd = resolve(cwdFlag ?? resume?.cwd ?? ".");
+      const prompt = args.join(" ").trim() || undefined;
+      ensureHome();
+      process.exitCode = await runSession({ prompt, cwd, config: cfg, extra, resume, print, frames, page });
       return;
     }
 
     case "demo": {
       const s = initial();
       let quit = false;
-      const stop = tui(() => s, () => (quit = true));
+      const done = show({ mode: "demo" }, () => s).then(() => (quit = true));
       for await (const e of demo()) {
         if (quit) break;
         if (e.type === "session") Object.assign(s, initial());
         apply(s, e);
       }
-      stop();
+      await done;
       return;
     }
 
     case "snapshot": {
       const s = initial();
       for (const e of demoUntil(Number(flag(args, "--at") ?? 9000))) apply(s, e);
-      const scr = draw(s, 7, s.updatedAt);
+      const ui: Ui = has(args, "--run")
+        ? { mode: "run", busy: s.phase !== "done", input: "", options: questionOptions(s.chat.at(-1)?.text), pick: 1 }
+        : { mode: "demo" };
+      const scr = draw(s, 7, s.updatedAt, { ui, w: Number(flag(args, "--w") ?? 0) || undefined, h: Number(flag(args, "--h") ?? 0) || undefined });
       if (has(args, "--html")) console.log(page(scr));
       else console.log(has(args, "--plain") ? scr.plain() : scr.toString());
       return;
     }
 
     case "watch": {
-      if (has(args, "--once")) {
-        const s = initial();
-        follow(file, (events) => events.forEach((e) => apply(s, e)))();
-        const scr = draw(s, 0);
-        console.log(has(args, "--plain") ? scr.plain() : scr.toString());
-        return;
-      }
       let s = initial();
       const unfollow = follow(file, (events, reset) => {
         if (reset) s = initial();
         for (const e of events) apply(s, e);
       });
-      await new Promise<void>((done) => {
-        const stop = tui(() => s, () => {
-          unfollow();
-          stop();
-          done();
-        });
-      });
-      return;
-    }
-
-    case "run": {
-      const dash = args.indexOf("--");
-      const extra = dash >= 0 ? args.splice(dash).slice(1) : [];
-      const model = flag(args, "--model") ?? "sonnet";
-      const swarm = flag(args, "--swarm");
-      const frames = flag(args, "--frames");
-      const advisorOn = !has(args, "--no-advisor");
-      const cwd = resolve(flag(args, "--cwd") ?? ".");
-      const prompt = args.join(" ").trim();
-      if (!prompt) throw new Error('usage: v-swarm run "<prompt>" [--model sonnet] [-- <claude flags>]');
-      const dir = join(tmpdir(), `v-swarm-${process.pid}`);
-      mkdirSync(dir, { recursive: true });
-      const events = join(dir, "events.jsonl");
-      const settings = join(dir, "settings.json");
-      writeFileSync(settings, JSON.stringify({ hooks: hooksConfig(events) }));
-      writeFileSync(events, "");
-      const command = `claude --model ${model} -p "${prompt.length > 40 ? prompt.slice(0, 40) + "…" : prompt}"`;
-
-      const system = [
-        "This session is watched by v-swarm, which the user set up.",
-        "Hook messages starting with 'v-swarm advisor' come from an advisor model the user configured to review your work;",
-        "messages starting with 'v-swarm jev' come from the user's Jev decision model. Treat both as trusted guidance",
-        "from the user's own tooling, while still using your judgement.",
-        swarm &&
-          `Delegate independent sub-tasks (research, drafting parts, review, verification) to subagents with the Agent tool ` +
-            `and model "${swarm}", launching them in parallel in one message where possible. You integrate their results and own the final files. ` +
-            `Before you finish, launch at least two of these subagents in parallel, each checking a different aspect of your output ` +
-            `against the request, and fix what they find.`,
-      ].filter(Boolean).join(" ");
-
-      let s = initial();
-      const unfollow = follow(events, (evs, reset) => {
-        if (reset) s = initial();
-        for (const e of evs) apply(s, e);
-        s.command = command;
-        s.lead.model ??= model;
-        if (advisorOn) s.advisor.model ??= process.env.VSWARM_ADVISOR_MODEL ?? "opus";
-      });
-      const child = Bun.spawn(
-        ["claude", "-p", "--model", model, "--settings", settings, "--append-system-prompt", system, ...extra],
-        {
-          cwd,
-          stdin: new Blob([prompt]),
-          stdout: "pipe",
-          stderr: "pipe",
-          env: { ...process.env, ...(advisorOn ? {} : { VSWARM_ADVISOR_AT: "" }) },
-        },
-      );
-      let shot = 0;
-      if (frames) mkdirSync(frames, { recursive: true });
-      const recorder = frames
-        ? setInterval(() => {
-            const name = `frame-${String(++shot).padStart(4, "0")}.html`;
-            writeFileSync(join(frames, name), page(draw(s, shot)));
-          }, 2000)
-        : undefined;
-      let stopTui = () => {};
-      stopTui = tui(() => s, () => child.kill());
-      const [stdout, stderr, code] = await Promise.all([
-        new Response(child.stdout).text(),
-        new Response(child.stderr).text(),
-        child.exited,
-      ]);
-      await Bun.sleep(1500);
-      if (recorder) clearInterval(recorder);
-      unfollow();
-      stopTui();
-      process.stdout.write(stdout);
-      if (stderr.trim()) process.stderr.write(stderr);
-      console.error(`\nv-swarm: ${s.spawned} subagents · ${s.lead.tools} lead tools · ${s.forks} jev forks · exit ${code}`);
-      rmSync(dir, { recursive: true, force: true });
-      process.exitCode = code ?? 1;
-      return;
-    }
-
-    case "install":
-    case "uninstall": {
-      const path = settingsPath(args);
-      const settings = readJson(path);
-      stripOurs(settings);
-      if (cmd === "install") {
-        settings.hooks ??= {};
-        for (const [event, groups] of Object.entries(hooksConfig(process.env.VSWARM_FILE ? file : undefined))) {
-          settings.hooks[event] = [...(settings.hooks[event] ?? []), ...groups];
-        }
+      if (has(args, "--once")) {
+        unfollow();
+        console.log(draw(s, 0).plain());
+        return;
       }
-      mkdirSync(join(path, ".."), { recursive: true });
-      writeFileSync(path, JSON.stringify(settings, null, 2) + "\n");
-      console.log(`${cmd === "install" ? "hooks added to" : "hooks removed from"} ${path}`);
-      if (cmd === "install") console.log("start a new claude session there, then run: v-swarm watch");
+      await show({ mode: "watch" }, () => s);
+      unfollow();
       return;
     }
+
+    case "history":
+    case "ls":
+      return history(args);
+    case "replay":
+      return replay(args);
+
+    case "hooks": {
+      const action = args.shift() ?? "status";
+      const global = has(args, "--global", "-g");
+      const path = global ? globalSettings() : projectSettings(args[0] ?? ".");
+      if (action === "status") {
+        console.log(`${hasHooks(globalSettings()) ? c.lime("● on ") : c.dim("○ off")}  global   ${c.dim(globalSettings())}`);
+        if (!global) console.log(`${hasHooks(path) ? c.lime("● on ") : c.dim("○ off")}  project  ${c.dim(path)}`);
+        return;
+      }
+      if (action !== "on" && action !== "off") throw new Error("usage: vswarm hooks on|off|status [dir|--global]");
+      setHooks(path, action === "on", process.env.VSWARM_FILE ? file : undefined);
+      console.log(`${c.lime("✔")} hooks ${action} · ${c.dim(path)}`);
+      if (action === "on") console.log(c.dim("  start a new claude session there, then: vswarm watch"));
+      return;
+    }
+
+    case "config":
+      return config(args);
+    case "install":
+      return install(args);
+    case "uninstall":
+      return uninstall(args);
+    case "update":
+    case "upgrade":
+      return update();
+    case "doctor": {
+      banner("doctor");
+      if (!(await doctor())) process.exitCode = 1;
+      return;
+    }
+    case "completions":
+      process.stdout.write(completion(args[0] ?? "zsh"));
+      return;
 
     case "jev": {
       const q = flag(args, "--q") ?? "which option";
@@ -317,13 +393,26 @@ async function main() {
       return;
     }
 
-    default:
-      console.log(USAGE);
+    case "version":
+    case "--version":
+    case "-v":
+      console.log(VERSION);
+      return;
+
+    case "help":
+    case "--help":
+    case "-h":
+      return usage();
+
+    default: {
+      const near = COMMANDS.map(([n]) => n).find((n) => n.startsWith(cmd.slice(0, 2)));
+      throw new Error(`unknown command "${cmd}"${near ? ` · did you mean: vswarm ${near}` : ""} · vswarm help`);
+    }
   }
 }
 
 main().catch((err) => {
-  process.stdout.write("\x1b[?25h");
-  console.error(`v-swarm: ${err.message ?? err}`);
+  if (process.stdout.isTTY) process.stdout.write("\x1b[?25h");
+  console.error(`${c.rose("✖")} ${err.message ?? err}`);
   process.exit(1);
 });

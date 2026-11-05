@@ -1,80 +1,139 @@
-# v-swarm
+# V-SWARM
 
-จอ terminal แบบสดสำหรับดู Claude Code ทำงาน ว่าโมเดลหลักกำลังทำอะไร ส่งงานให้ subagent ตัวไหน แต่ละตัวคืบหน้าแค่ไหน
-พร้อมแสดงการตัดสินใจของ Jev และคำแนะนำจาก advisor
+จอสดใน terminal สำหรับทำงานกับ Claude Code แสดงเส้นการทำงานทั้งหมด:
+prompt → โมเดลหลัก (lead) → แตกงานให้ subagent หลายตัวพร้อมกัน → รวมผล → review
+พร้อมการตัดสินใจของ Jev, คำแนะนำจาก advisor และช่องแชทสำหรับตอบคำถามที่ Claude ถามกลับ
 
-![demo](docs/demo.png)
+![board](docs/demo.png)
+
+![question](docs/question.png)
+
+## ติดตั้ง
+
+**macOS / Linux**
 
 ```bash
-bun install
-bun src/cli.ts demo                      # ดูตัวอย่าง ไม่เรียก API
-bun src/cli.ts run "หาว่าโปรเจคนี้ใช้ auth ที่ไหนบ้าง" --model sonnet -- --allowedTools "Agent Read Grep Glob"
+curl -fsSL https://raw.githubusercontent.com/kridsadar357/vswarm/main/install.sh | sh
 ```
 
-ขนาด terminal ที่ต้องใช้คือ 120×36 กด `q` เพื่อออก
+**Windows (PowerShell)**
 
-## หน้าจอ
+```powershell
+irm https://raw.githubusercontent.com/kridsadar357/vswarm/main/install.ps1 | iex
+```
 
-- **แถบบน** ชื่อโมเดลที่ทำงานอยู่ เวลาที่ใช้ และราง phase `PLAN → SWARM → REVIEW → DONE` ไฮไลต์ขั้นที่กำลังทำ
-- **LEAD** โมเดลหลัก, effort, จำนวน tool, กราฟ activity ย้อนหลัง 1 นาที
-- **ADVISOR** จุดที่ advisor ถูกเรียก (plan / error ×2 / done) และคำแนะนำล่าสุด ถ้าไม่มี advisor จะเป็น SESSION แสดงสถิติแทน
-- **SWARM** subagent เป็นแถว (สูงสุด 5 แถว) พร้อมแถบความคืบหน้า, tool, เวลา และงานที่ทำอยู่ ด้านล่างเป็นเส้น flow lead → fan-out → lanes → merge → review
-- **JEV** การตัดสินใจล่าสุด 5 ข้อ แถบ confidence มีเส้นเกณฑ์ 0.80 และป้าย SHARP / SPLIT
-- **FEED** event ทั้งหมดพร้อมป้ายสีตามผู้ส่ง
-- **แถบล่าง** สถานะรวม: swarm, advisor, จำนวน fork, error
+หรือ clone repo มาเองแล้วสั่ง install:
 
-## ดู session จริง
+```bash
+git clone https://github.com/kridsadar357/vswarm.git && cd vswarm
+./vswarm install          # Windows: vswarm.cmd install
+```
 
-มี 2 วิธี
+`vswarm install` จัดการให้ครบ:
 
-1. **`v-swarm run "<prompt>"`** รัน `claude -p` พร้อมติด hook ชั่วคราวให้เอง แล้วแสดงจอสดจนจบ จากนั้นพิมพ์คำตอบ
-   ใส่ flag ของ claude ต่อท้าย `--` ได้ เช่น `--allowedTools`
-2. **ติด hook ถาวรในโปรเจค** แล้วเปิดจอไว้อีกหน้าต่าง
+- สร้าง `~/.vswarm` (config, ประวัติการรัน, Jev key)
+- วางคำสั่ง `vswarm` ใน `~/.vswarm/bin` และเพิ่มเข้า PATH (`.zshrc` / `.bashrc` / fish / PATH ของ Windows)
+- ติดตั้ง tab completion ของ zsh และ bash
+- ถาม Jev API key (ข้ามได้)
+- ถามว่าจะเปิด hook แบบ global ไหม เพื่อให้ `vswarm watch` เห็นทุก session ของ Claude Code
+- ปิดท้ายด้วย `vswarm doctor` ตรวจว่าทุกอย่างพร้อม
 
-   ```bash
-   bun src/cli.ts install ~/develop/WMS     # เขียนลง ~/develop/WMS/.claude/settings.local.json
-   bun src/cli.ts watch                     # เปิดอีก terminal หนึ่ง
-   bun src/cli.ts uninstall ~/develop/WMS   # ถอดออก (hook อื่นที่มีอยู่จะไม่ถูกแตะ)
-   ```
+ต้องมี [Bun](https://bun.sh) (ตัวติดตั้งลงให้ถ้ายังไม่มี), git และ [Claude Code](https://claude.com/claude-code) ที่ล็อกอินแล้ว
 
-   ถ้าใช้ `--global` จะติดกับทุก session
+## ใช้งาน
 
-## แต่ละช่องเอาข้อมูลจากไหน
+```bash
+vswarm                                  # เปิดจอ แล้วพิมพ์ prompt บนจอ
+vswarm run "เพิ่ม rate limit ให้ /api/login พร้อม test"
+vswarm "หาว่าใช้ auth ตรงไหนบ้าง"          # มีเว้นวรรค = run
+vswarm run -p "สรุป README นี้"            # ไม่เปิดจอ พิมพ์คำตอบออกมา (ใช้ในสคริปต์)
+```
 
-| ช่องบนจอ | แหล่งข้อมูล |
+### เมื่อ Claude ถามกลับ
+
+session ไม่จบหลังตอบรอบเดียว Claude ถามอะไร คำถามขึ้นในช่อง **CHAT** แล้วพิมพ์ตอบได้เลย
+
+- ถ้าคำถามมีตัวเลือกเป็นข้อ `1) ... 2) ...` จะขึ้นเป็นปุ่มด้านล่าง กดเลข `1`–`9` หรือ `↑` `↓` เพื่อเลือก แล้ว `⏎`
+- พิมพ์ภาษาไทยได้ ลบทีละตัวอักษรรวมสระและวรรณยุกต์
+- `esc` ระหว่างที่ Claude ทำงาน = หยุดรอบนั้น (session ยังอยู่ พิมพ์ต่อได้) · `esc` ตอนว่าง = จบ session · `ctrl-c` = ออกทันที
+- จบแล้วคุยต่อทีหลังได้ด้วย `vswarm resume`
+
+### ประวัติและการเล่นซ้ำ
+
+```bash
+vswarm history                 # รายการรันทั้งหมด ล่าสุดก่อน
+vswarm replay 1 --speed 8      # เล่นรันล่าสุดบนจออีกครั้ง (space = หยุด/เล่น)
+vswarm resume 1 "ต่อจากเมื่อกี้ เพิ่ม test อีก"
+```
+
+แต่ละรันเก็บไว้ที่ `~/.vswarm/runs/<id>/`: `events.jsonl` (ใช้ replay), `meta.json`, `answer.md`
+
+### ดู session ปกติของ Claude Code
+
+```bash
+vswarm hooks on --global       # ทุก session ในเครื่อง
+vswarm hooks on ~/develop/WMS  # เฉพาะโปรเจคนี้
+vswarm watch                   # เปิดจอดู
+vswarm hooks off --global
+```
+
+## ตั้งค่า
+
+```bash
+vswarm config                         # ดูค่าทั้งหมด
+vswarm config lead opus               # โมเดลหลัก
+vswarm config swarm haiku             # โมเดลของ subagent (off = ให้ lead เลือกเอง)
+vswarm config advisor off             # ปิด advisor
+vswarm config advisorAt plan,done     # จุดที่เรียก advisor: plan, error, done
+vswarm config mode acceptEdits        # ให้แก้ไฟล์ได้โดยไม่ต้องถาม
+vswarm config allow +Bash             # เพิ่ม tool ที่อนุญาต (-Bash เอาออก)
+vswarm config jev                     # ใส่ Jev key (ไม่โชว์บนจอ)
+```
+
+ค่าเริ่มต้นแก้ไฟล์ไม่ได้ (mode `default`) ถ้า Claude ถูกบล็อกจะมีข้อความใน CHAT บอกว่าต้องเปิดอะไร
+flag ต่อรัน: `--model` `--swarm` `--advisor` / `--no-advisor` `--mode` `--cwd` และ `-- <flag ของ claude>`
+
+## คำสั่งอื่น
+
+| คำสั่ง | ทำอะไร |
 |---|---|
-| โมเดลหลัก, effort, จำนวน tool | hook `PreToolUse` และโมเดลที่อ่านจากท้าย transcript |
-| แถว subagent ใน SWARM | `PreToolUse(Agent)` จับคู่กับ `SubagentStart`/`SubagentStop` ใช้ `agent_id` แยก tool call ของแต่ละตัว |
-| แถบความคืบหน้า subagent | ใน session จริงคือจำนวน tool ที่เรียกไปแล้ว เพราะ Claude Code ไม่ได้บอกเป็นเปอร์เซ็นต์ ถ้าส่ง `agent.progress` มาเองจึงจะแสดงเป็น % |
-| JEV | คำสั่ง `v-swarm jev …` (ต้องตั้ง `JEV_API_KEY`) หรือ event `decision` ค่า p ตั้งแต่ 0.8 ขึ้นไปนับเป็น sharp |
-| ADVISOR | event `advisor` ถ้าไม่มี advisor ช่องนี้จะแสดงสถิติของ session แทน |
-| FEED | ทุก event ข้างบนรวมกัน |
+| `vswarm doctor` | ตรวจ bun, claude, git, PATH, config, Jev, hooks |
+| `vswarm update` | `git pull` เวอร์ชันล่าสุด แล้วอัปเดต launcher, completion, hooks |
+| `vswarm uninstall [--purge]` | เอา launcher, PATH, global hooks ออก (`--purge` ลบข้อมูลด้วย) |
+| `vswarm demo` | จอตัวอย่าง ไม่เรียก API |
+| `vswarm jev --q "<q>" --state "<ctx>" a b` | ถาม Jev ผลขึ้นบนจอ |
+| `vswarm emit '<json>'` | ส่ง event อะไรก็ได้ขึ้นจอ |
+| `vswarm completions zsh\|bash` | พิมพ์ completion script |
+| `vswarm run --frames dir` + `bun scripts/frames.ts dir out.mp4` | อัดจอเป็นวิดีโอ |
 
-ในเวอร์ชัน 2.1.318 Claude Code ยังไม่มีโหมด advisor ในตัว ช่องนี้จึงรอรับ event จากตัวที่เราต่อเอง เช่น:
+## บนจอมีอะไร
 
-```bash
-bun src/cli.ts emit '{"type":"advisor","model":"claude-opus-5-5","status":"on call","mark":"before a plan","note":"plan skips auth","tokens":412000}'
-bun src/cli.ts jev --q "which file" --state "กำลังแก้ rate limit ของ /api/login" test/api.spec.ts src/api/login.ts
-```
-
-## Event
-
-ไฟล์ event เป็น JSONL อยู่ที่ `~/.v-swarm/events.jsonl` เปลี่ยนที่ได้ด้วย `VSWARM_FILE` หรือ `--file`
-ชนิดของ event ทั้งหมดอยู่ใน `src/state.ts` (`SwarmEvent`)
+- **แถบบน**: โมเดลที่ใช้, เวลา, ราง phase `PLAN → SWARM → REVIEW → DONE`
+- **FLOW**: เส้นการทำงานจริง มีจุดวิ่งตามช่วงที่กำลังทำ
+  - `PROMPT ─▸ LEAD ─┬▸ subagent แต่ละตัว ─┬─▸ REVIEW` เส้นของ subagent สว่างเมื่อส่งผลกลับแล้ว
+  - ราง **JEV** ด้านบน ต่อเข้า LEAD: การตัดสินใจ retry/stop ตอน tool พัง ค่า ≥ 0.80 = SHARP ทำตามอัตโนมัติ
+  - ราง **ADVISOR** ด้านล่าง มีจุดเสียบเข้า LEAD (ก่อนวางแผน), subagent (error ซ้ำ 2 ครั้ง), REVIEW (ก่อนจบ)
+- **CHAT**: บทสนทนา คุณ ⇄ Claude และช่องตอบ
+- **FEED**: ทุก event พร้อมป้ายสีตามที่มา
+- จอปรับตามขนาด terminal ตั้งแต่ 120×36 ขึ้นไป
 
 ## โครงสร้าง
 
 ```
-src/cli.ts     คำสั่งทั้งหมดและตัววาดจอ
-src/brain.ts   advisor และ Jev ตอบกลับเข้า session ผ่าน hook
-src/advisor.ts เรียก advisor (claude -p --model opus)
-src/view.ts    layout ของจอ
-src/state.ts   ชนิด event และการรวมเป็นสถานะ
-src/hook.ts    แปลง payload ของ Claude Code hook เป็น event
-src/follow.ts  อ่านไฟล์ event ต่อเนื่อง
-src/jev.ts     เรียก Jev (typesafe.ai systemone)
-src/demo.ts    สคริปต์ตัวอย่าง
-src/screen.ts  ตาราง character → ANSI / HTML (รองรับสระและวรรณยุกต์ไทย)
+src/cli.ts      คำสั่งทั้งหมด
+src/session.ts  vswarm run: session ต่อเนื่องผ่าน stream-json, แชท, ตอบคำถาม
+src/setup.ts    install / doctor / update / uninstall / completion
+src/view.ts     layout ของจอ
+src/tui.ts      จอเต็ม, อ่านปุ่ม, แก้ข้อความภาษาไทย
+src/state.ts    ชนิด event และการรวมเป็นสถานะ
+src/hook.ts     แปลง payload ของ Claude Code hook เป็น event
+src/hooks.ts    ใส่/ถอด hook ใน settings ของ Claude Code
+src/brain.ts    advisor และ Jev ตอบกลับเข้า session ผ่าน hook
+src/advisor.ts  เรียก advisor (claude -p)
+src/jev.ts      เรียก Jev (typesafe.ai systemone)
+src/history.ts  ประวัติการรัน
+src/home.ts     ~/.vswarm และ config
+src/screen.ts   ตาราง character → ANSI / HTML (รองรับภาษาไทย)
 ```
 
-ทดสอบ: `bun test` · ตรวจชนิด: `bunx tsc --noEmit`
+ทดสอบ `bun test` · ตรวจชนิด `bunx tsc --noEmit`

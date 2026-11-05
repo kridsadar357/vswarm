@@ -138,3 +138,60 @@ describe("advisor and jev glue", () => {
     expect(d).toContain("[result ERROR] denied");
   });
 });
+
+import { parseKeys, dropLast } from "../src/tui";
+import { questionOptions } from "../src/view";
+import { wrap } from "../src/screen";
+import { hasHooks, setHooks } from "../src/hooks";
+import { readFileSync } from "node:fs";
+
+describe("chat and input", () => {
+  test("numbered choices at the end of a question become options", () => {
+    const t = "Done.\n\nWhere should counters live?\n1) In memory — simple\n2. **Redis**\n3) Postgres";
+    expect(questionOptions(t)).toEqual(["In memory", "Redis", "Postgres"]);
+    expect(questionOptions("Pick?\n1) Redis (shared)\n2) Memory")).toEqual(["Redis", "Memory"]);
+    expect(questionOptions("No list here?")).toEqual([]);
+  });
+
+  test("keys: enter, arrows, paste and Thai text", () => {
+    expect(parseKeys("\r")).toEqual([{ name: "enter" }]);
+    expect(parseKeys("\x1b[A")).toEqual([{ name: "up" }]);
+    expect(parseKeys("line one\nline two")).toEqual([{ name: "text", text: "line one line two" }]);
+    expect(parseKeys("ที่ไหน")).toEqual([{ name: "text", text: "ที่ไหน" }]);
+  });
+
+  test("backspace removes a whole Thai character cluster", () => {
+    expect(dropLast("ที่")).toBe("");
+    expect(dropLast("abc")).toBe("ab");
+  });
+
+  test("wrap keeps Thai words whole and respects width", () => {
+    const lines = wrap("ระบบจะส่งงานให้ subagent ทั้งสามตัวพร้อมกันแล้วรวมผลกลับมา", 20);
+    for (const l of lines) expect(width(l)).toBeLessThanOrEqual(20);
+    expect(lines.join("").replace(/\s/g, "")).toBe("ระบบจะส่งงานให้subagentทั้งสามตัวพร้อมกันแล้วรวมผลกลับมา");
+  });
+
+  test("the board fits any terminal size from the minimum up", () => {
+    const s = fold(demoUntil(20000));
+    for (const [w, h] of [[120, 36], [150, 44], [200, 70]]) {
+      const rows = draw(s, 3, s.updatedAt, { w, h, ui: { mode: "run", input: "ใช่ ไป Redis", options: ["a", "b"] } }).plain().split("\n");
+      expect(rows.length).toBe(Math.min(Math.max(h, 36), 60));
+      for (const r of rows) expect(width(r)).toBeLessThanOrEqual(Math.min(Math.max(w, 120), 180));
+    }
+  });
+});
+
+describe("hooks file", () => {
+  test("on and off leave other hooks alone", () => {
+    const dir = mkdtempSync(join(tmpdir(), "vs-"));
+    const f = join(dir, "settings.json");
+    writeFileSync(f, JSON.stringify({ model: "x", hooks: { Stop: [{ hooks: [{ type: "command", command: "say done" }] }] } }));
+    setHooks(f, true);
+    expect(hasHooks(f)).toBe(true);
+    setHooks(f, true);
+    const once = JSON.parse(readFileSync(f, "utf8"));
+    expect(once.hooks.Stop).toHaveLength(2);
+    setHooks(f, false);
+    expect(JSON.parse(readFileSync(f, "utf8"))).toEqual({ model: "x", hooks: { Stop: [{ hooks: [{ type: "command", command: "say done" }] }] } });
+  });
+});
