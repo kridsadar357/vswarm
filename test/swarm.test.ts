@@ -329,3 +329,12 @@ describe("localhost is not traffic out", () => {
     expect(n("ssh localhost")?.group).toBe("network");
   });
 });
+
+import { plain } from "../src/view";
+
+describe("chat markdown", () => {
+  test("code fences become indented lines, inline code loses its backticks", () => {
+    const t = "Run this:\n```bash\n!curl -s http://localhost:5281/\n```\nไม่ได้รัน `open` ตามที่ขอ";
+    expect(plain(t)).toBe("Run this:\n    !curl -s http://localhost:5281/\nไม่ได้รัน open ตามที่ขอ");
+  });
+});

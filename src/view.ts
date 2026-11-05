@@ -90,8 +90,14 @@ export function questionOptions(text?: string): string[] {
 }
 
 /** Markdown down to what reads well in a terminal. */
-function plain(t: string): string {
-  return t.replace(/\*\*(.+?)\*\*/g, "$1").replace(/^#{1,6}\s+/gm, "").replace(/`([^`]+)`/g, "$1");
+export function plain(t: string): string {
+  return t
+    // Code fences: drop the ``` lines and indent what is inside, so commands stand out.
+    .replace(/^```[^\n]*\n([\s\S]*?)^```[ \t]*$/gm, (_, body: string) => body.replace(/\n$/, "").split("\n").map((l) => "    " + l).join("\n"))
+    .replace(/^```[^\n]*$/gm, "")
+    .replace(/\*\*(.+?)\*\*/g, "$1")
+    .replace(/^#{1,6}\s+/gm, "")
+    .replace(/`([^`\n]+)`/g, "$1");
 }
 
 function swarmModel(s: State): string {
@@ -376,7 +382,7 @@ export function draw(s: State, frame: number, now = Date.now(), opt: { w?: numbe
       ox = scr.put(ox, iy - 1, "choose ", S.muted);
       // Plain coloured text, no background: a background behind Thai text is what terminals misdraw.
       opts.forEach((o, i) => {
-        const label = `${i === ui.pick ? "▸" : " "}${i + 1} ${clip(o, 24)}`;
+        const label = `${i === ui.pick ? "▸" : " "}${i + 1} ${clip(o, o.startsWith("/open") ? 40 : 24)}`;
         if (ox + width(label) > CX0 + CW - 2) return;
         ox = scr.put(ox, iy - 1, label, i === ui.pick ? S.amberB : o.startsWith("/open") ? S.cyan : S.text) + 2;
       });
