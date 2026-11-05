@@ -284,7 +284,8 @@ export function sshGate(patterns: string[], launcher: string[]): string {
   return [
     GATE_START,
     `# Hosts below connect only after \`vswarm preflight\` passes. Remove with: vswarm gate remove`,
-    `Match host ${patterns.join(",")} !exec "${q} preflight --quiet --host %h"`,
+    // originalhost is the name you typed (ssh vrfix-prod), before any HostName substitution.
+    `Match originalhost ${patterns.join(",")} !exec "${q} preflight --quiet --host %h"`,
     `    ProxyCommand /bin/sh -c 'echo "vswarm: this machine did not pass preflight; run: vswarm preflight" >&2; exit 1'`,
     GATE_END,
   ].join("\n");

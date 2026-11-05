@@ -77,7 +77,7 @@ describe("secrets never leak values", () => {
 describe("gate", () => {
   test("the ssh block blocks matching hosts unless preflight exits 0", () => {
     const g = sshGate(["prod-*", "*.internal"], ["/Users/a/.vswarm/bin/vswarm"]);
-    expect(g).toContain('Match host prod-*,*.internal !exec "/Users/a/.vswarm/bin/vswarm preflight --quiet --host %h"');
+    expect(g).toContain('Match originalhost prod-*,*.internal !exec "/Users/a/.vswarm/bin/vswarm preflight --quiet --host %h"');
     expect(g).toContain("ProxyCommand");
   });
 
