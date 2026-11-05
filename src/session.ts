@@ -7,6 +7,8 @@ import { newRun, runDir, saveMeta, type RunMeta } from "./history";
 import { append } from "./hook";
 import { hooksConfig } from "./hooks";
 import type { Config } from "./home";
+import { AUTH_ERROR, authStatus, loginHint, nameOf, profileDir, profiles } from "./claude";
+import { homedir } from "node:os";
 import { follow } from "./follow";
 import { apply, initial, type Stamped, type State } from "./state";
 import { board, dropLast, type Key } from "./tui";
@@ -87,6 +89,7 @@ export async function runSession(o: RunOptions): Promise<number> {
       stderr: "pipe",
       env: {
         ...process.env,
+        ...(account ? { CLAUDE_CONFIG_DIR: account } : {}),
         VSWARM_ADVISOR_AT: c.advisor ? c.advisorAt.join(",") : "",
         VSWARM_ADVISOR_MODEL: c.advisor || "opus",
       },
@@ -151,7 +154,11 @@ export async function runSession(o: RunOptions): Promise<number> {
       meta.costUsd = Math.max(meta.costUsd, Number(m.total_cost_usd ?? 0));
       meta.subagents = s.spawned;
       if (m.subtype === "error_during_execution" && !m.result) post({ type: "say", who: "vswarm", text: "stopped" });
-      else if (m.is_error) post({ type: "say", who: "vswarm", text: `error: ${String(m.result ?? m.subtype).slice(0, 300)}` });
+      else if (m.is_error) {
+        const why = String(m.result ?? m.subtype);
+        post({ type: "say", who: "vswarm", text: `error: ${why.slice(0, 300)}` });
+        if (AUTH_ERROR.test(why)) void explainLogin();
+      }
       const denied: any[] = m.permission_denials ?? [];
       if (denied.length) {
         const what = [...new Set(denied.map((d) => d.tool_name))].join(", ");
@@ -169,6 +176,26 @@ export async function runSession(o: RunOptions): Promise<number> {
       resolveTurn?.();
     }
   };
+
+  // Which Claude Code login this run uses, and what to do when it is not logged in.
+  const account = profileDir(c.profile);
+  const accountDir = account ?? join(homedir(), ".claude");
+  const explainLogin = async () => {
+    const all = await profiles();
+    const others = all.filter((p) => p.loggedIn && p.dir !== accountDir).map((p) => p.name);
+    post({
+      type: "say",
+      who: "vswarm",
+      text:
+        `Claude account "${nameOf(accountDir)}" (${accountDir.replace(homedir(), "~")}) is not logged in.\n` +
+        `Log in: ${loginHint(accountDir)}` +
+        (others.length ? `\nOr use an account that is logged in: vswarm config profile ${others[0]}${others.length > 1 ? `  (logged in: ${others.join(", ")})` : ""}` : ""),
+    });
+  };
+  const checked = authStatus(accountDir).then((p) => {
+    if (!p.loggedIn) void explainLogin();
+    return p.loggedIn;
+  });
 
   const send = (text: string) => {
     if (!child) start();
@@ -219,6 +246,10 @@ export async function runSession(o: RunOptions): Promise<number> {
   // ── Without a board: one turn, the answer on stdout.
   if (o.print) {
     if (!o.prompt) throw new Error('usage: vswarm run --print "<prompt>"');
+    if (!(await checked)) {
+      unfollow();
+      throw new Error(`Claude account "${nameOf(accountDir)}" is not logged in · ${loginHint(accountDir)} · or: vswarm config profile <name>`);
+    }
     const t = turn();
     send(o.prompt);
     await t;

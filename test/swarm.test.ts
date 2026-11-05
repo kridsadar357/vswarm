@@ -195,3 +195,16 @@ describe("hooks file", () => {
     expect(JSON.parse(readFileSync(f, "utf8"))).toEqual({ model: "x", hooks: { Stop: [{ hooks: [{ type: "command", command: "say done" }] }] } });
   });
 });
+
+import { nameOf, profileDir } from "../src/claude";
+import { homedir } from "node:os";
+
+describe("claude accounts", () => {
+  test("profile names map to Claude Code config folders", () => {
+    expect(profileDir("work")).toBe(join(homedir(), ".claude-work"));
+    expect(profileDir("default")).toBe(join(homedir(), ".claude"));
+    expect(profileDir("~/x/claude")).toBe(join(homedir(), "x/claude"));
+    expect(nameOf(join(homedir(), ".claude-personal"))).toBe("personal");
+    expect(nameOf(join(homedir(), ".claude"))).toBe("default");
+  });
+});

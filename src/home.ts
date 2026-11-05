@@ -35,6 +35,8 @@ export const paths = {
 };
 
 export interface Config {
+  /** Claude Code account: "" follows CLAUDE_CONFIG_DIR / ~/.claude, "work" means ~/.claude-work, or a folder path. */
+  profile: string;
   /** Model for the main session. */
   lead: string;
   /** Model subagents are asked to use; empty lets the lead choose. */
@@ -50,6 +52,7 @@ export interface Config {
 }
 
 export const DEFAULTS: Config = {
+  profile: "",
   lead: "sonnet",
   swarm: "haiku",
   advisor: "opus",

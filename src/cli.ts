@@ -12,6 +12,7 @@ import { append, map } from "./hook";
 import { DEFAULTS, ensureHome, loadConfig, paths, saveConfig, VERSION, type Config } from "./home";
 import { globalSettings, hasHooks, projectSettings, setHooks } from "./hooks";
 import { askJev, jevKey } from "./jev";
+import { activeDir, authStatus, loginHint, profiles } from "./claude";
 import type { Screen } from "./screen";
 import { runSession } from "./session";
 import { ask, banner, c, canAsk, COMMANDS, completion, doctor, install, uninstall, update } from "./setup";
@@ -79,7 +80,7 @@ function usage() {
   row("vswarm emit '<event json>'", "post any event");
   row("vswarm snapshot [--html|--plain]", "print one demo frame");
   row("vswarm completions zsh|bash", "print a completion script");
-  console.log(`\n  ${c.bold("run flags")}  ${c.dim("--model sonnet  --swarm haiku  --advisor opus | --no-advisor  --mode acceptEdits")}`);
+  console.log(`\n  ${c.bold("run flags")}  ${c.dim("--model sonnet  --swarm haiku  --advisor opus | --no-advisor  --mode acceptEdits  --profile work")}`);
   console.log(`             ${c.dim("--cwd <dir>  --frames <dir>  -- <any claude flags>")}`);
   console.log(`  ${c.bold("on the board")}  ${c.dim("⏎ send · 1-9 or ↑↓ pick a choice · esc interrupt, then end · ctrl-c quit")}\n`);
 }
@@ -91,6 +92,8 @@ function runConfig(args: string[]): Config {
   const swarm = flag(args, "--swarm");
   const adv = flag(args, "--advisor");
   const mode = flag(args, "--mode");
+  const profile = flag(args, "--profile");
+  if (profile) cfg.profile = profile === "default" || profile === "auto" ? (profile === "auto" ? "" : "default") : profile;
   if (model) cfg.lead = model;
   if (swarm) cfg.swarm = swarm === "off" ? "" : swarm;
   if (adv) cfg.advisor = adv === "off" ? "" : adv;
@@ -108,6 +111,7 @@ async function config(args: string[]) {
   if (!key) {
     banner("config");
     const row = (k: string, v: string, d: string) => console.log(`  ${c.cyan(k.padEnd(10))}${v.padEnd(44)}${c.dim(d)}`);
+    row("profile", cfg.profile || "(CLAUDE_CONFIG_DIR or ~/.claude)", "Claude Code account · vswarm config profile");
     row("lead", cfg.lead, "main session model");
     row("swarm", cfg.swarm || "(lead picks)", "subagent model");
     row("advisor", cfg.advisor || "off", "reviews at checkpoints");
@@ -132,6 +136,25 @@ async function config(args: string[]) {
       ensureHome();
       writeFileSync(paths.jevKey(), k + "\n", { mode: 0o600 });
       return console.log(`${c.lime("✔")} jev key saved ${c.dim(paths.jevKey())}`);
+    }
+    case "profile": {
+      if (!value) {
+        banner("claude accounts");
+        const active = activeDir();
+        for (const p of await profiles()) {
+          const mark = p.dir === active ? c.cyan("▶") : " ";
+          const st = p.loggedIn ? c.lime("● logged in") : c.rose("○ logged out");
+          console.log(`  ${mark} ${p.name.padEnd(12)}${st.padEnd(24)}${c.dim(p.dir + (p.expires ? ` · until ${p.expires.slice(0, 10)}` : ""))}`);
+        }
+        console.log(c.dim(`\n  use one: vswarm config profile <name> · back to the default: vswarm config profile auto\n`));
+        return;
+      }
+      cfg.profile = value === "auto" ? "" : value;
+      saveConfig(cfg);
+      const p = await authStatus(activeDir());
+      console.log(`${c.lime("✔")} profile = ${value} ${c.dim(activeDir())}`);
+      if (!p.loggedIn) console.log(`${c.amber("!")} that account is not logged in · ${loginHint(activeDir())}`);
+      return;
     }
     case "lead":
     case "swarm":

@@ -1,8 +1,8 @@
 // Claude Code hook entries that feed vswarm, and adding/removing them in a settings file.
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
+import { activeDir } from "./claude";
 
 export const CLI = resolve(import.meta.dir, "cli.ts");
 
@@ -30,8 +30,9 @@ export function hooksConfig(file?: string) {
   );
 }
 
+/** settings.json of the Claude Code account vswarm is set to. */
 export function globalSettings(): string {
-  return join(process.env.CLAUDE_CONFIG_DIR ?? join(homedir(), ".claude"), "settings.json");
+  return join(activeDir(), "settings.json");
 }
 
 export function projectSettings(dir: string): string {

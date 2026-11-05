@@ -8,6 +8,7 @@ import { dirname, join, resolve } from "node:path";
 import { DEFAULTS, ensureHome, HOME, loadConfig, paths, saveConfig, VERSION } from "./home";
 import { CLI, globalSettings, hasHooks, setHooks } from "./hooks";
 import { jevKey } from "./jev";
+import { activeDir, authStatus, loginHint, nameOf, profiles } from "./claude";
 
 export const ROOT = resolve(dirname(CLI), "..");
 const WIN = process.platform === "win32";
@@ -242,6 +243,24 @@ export async function doctor(): Promise<boolean> {
     bad("claude not found", "install Claude Code: https://claude.com/claude-code");
     good = false;
   }
+  step("claude account");
+  const active = activeDir();
+  const all = await profiles();
+  if (!all.some((p) => p.dir === active)) all.push(await authStatus(active));
+  for (const p of all) {
+    const line = `${p.name}${p.dir === active ? "  ← vswarm uses this" : ""}`;
+    const d = p.dir + (p.expires ? ` · until ${p.expires.slice(0, 10)}` : "");
+    if (p.loggedIn) (p.dir === active ? ok : (t: string, x: string) => console.log(`  ${c.dim("·")} ${t}  ${c.dim(x)}`))(line, d);
+    else if (p.dir === active) {
+      bad(`${line} · not logged in`, loginHint(p.dir));
+      good = false;
+    } else console.log(`  ${c.dim("·")} ${c.dim(p.name)}  ${c.rose(p.problem ?? "unusable")}`);
+  }
+  if (!all.find((p) => p.dir === active)?.loggedIn) {
+    const other = all.find((p) => p.loggedIn);
+    if (other) console.log(`    ${c.dim(`or switch: vswarm config profile ${other.name}`)}`);
+  }
+
   const git = await version(["git", "--version"]);
   if (git) ok(git);
   else warn("git not found", "needed for vswarm update");
@@ -302,7 +321,46 @@ export async function install(args: string[]) {
     ok("global hooks refreshed");
   }
 
-  step("3  options");
+  step("3  claude account");
+  // Every Claude Code login on this machine; the user picks one, the ones that cannot work are shown with why.
+  const cfgNow = loadConfig();
+  const current = activeDir();
+  const all = await profiles();
+  if (!all.some((p) => p.dir === current)) all.push(await authStatus(current));
+  const ready = all.filter((p) => p.loggedIn);
+  all.forEach((p) => {
+    const n = ready.indexOf(p);
+    const tag = n >= 0 ? c.cyan(String(n + 1).padStart(2)) : "  ";
+    const here = p.dir === current ? c.dim("  (current)") : "";
+    const d = c.dim(p.dir.replace(homedir(), "~") + (p.expires && p.loggedIn ? ` · until ${p.expires.slice(0, 10)}` : ""));
+    if (p.loggedIn) console.log(`  ${tag}  ${c.lime("●")} ${p.name.padEnd(12)} ${d}${here}`);
+    else console.log(`  ${tag}  ${c.rose("✖")} ${c.dim(p.name.padEnd(12))} ${d}  ${c.rose(p.problem ?? "unusable")}${here}`);
+  });
+  if (!ready.length) {
+    warn("no Claude account is logged in", `log in first: ${loginHint(current)} · then: vswarm config profile`);
+  } else {
+    const def = Math.max(0, ready.findIndex((p) => p.dir === current));
+    let pick = ready[def];
+    if (!auto) {
+      for (;;) {
+        const a = await ask(`Which Claude account should vswarm use? ${c.dim(`[${def + 1}]`)}`);
+        if (!a) break;
+        const i = Number(a);
+        if (i >= 1 && i <= ready.length) {
+          pick = ready[i - 1];
+          break;
+        }
+        const named = all.find((p) => p.name === a);
+        if (named && !named.loggedIn) console.log(`    ${c.rose("✖")} ${named.name}: ${named.problem} · ${loginHint(named.dir)}`);
+        else console.log(`    ${c.dim(`type 1-${ready.length}`)}`);
+      }
+    }
+    cfgNow.profile = pick.dir === join(homedir(), ".claude") ? "default" : pick.name;
+    saveConfig(cfgNow);
+    ok(`vswarm uses ${pick.name}`, `${pick.dir} · change later: vswarm config profile`);
+  }
+
+  step("4  options");
   if (!jevKey() && !auto) {
     const key = await ask(`Jev API key ${c.dim("(enter to skip)")}`, { secret: true });
     if (key) {
