@@ -3,6 +3,8 @@
 // It reads the whole command (pipes, `&&`, `bash -c '…'`, `$(…)`), but a determined program can still open a
 // socket in ways no pattern sees; the Claude Code sandbox (network allowlist) is the hard boundary.
 
+import { homedir } from "node:os";
+
 export type Group = "push" | "deploy" | "network" | "sudo";
 
 export const GROUPS: Record<Group, string> = {
@@ -124,7 +126,9 @@ export function swarmSettings(blocked: Group[], domains: string[], dirs: string[
             autoAllowBashIfSandboxed: true,
             allowUnsandboxedCommands: false,
             // Chrome cannot start inside the sandbox; `vswarm shot` only opens local pages, so it runs outside.
-            excludedCommands: shotCommand ? [`${shotCommand} shot *`, "vswarm shot *"] : [],
+            excludedCommands: shotCommand
+              ? [...new Set([shotCommand, shotCommand.replace(homedir(), "~"), "vswarm"])].map((c) => `${c} shot *`)
+              : [],
             failIfUnavailable: true,
             // Package managers keep caches in the home folder; without these an install fails with EPERM.
             filesystem: { allowWrite: [...dirs, ...CACHES] },

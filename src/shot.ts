@@ -54,7 +54,12 @@ export async function shot(target: string, out: string, opt: { size?: string; wa
     const timer = setTimeout(() => p.kill(), 60_000);
     const [, err, code] = await Promise.all([new Response(p.stdout).text(), new Response(p.stderr).text(), p.exited]);
     clearTimeout(timer);
-    if (code !== 0 || !existsSync(file)) throw new Error(`Chrome could not take the screenshot (exit ${code}): ${err.trim().split("\n").slice(-2).join(" ")}`);
+    if (code !== 0 || !existsSync(file)) {
+      const sandboxed = /ProcessSingleton|socket directory|Operation not permitted/.test(err);
+      throw new Error(sandboxed
+        ? "Chrome was stopped by the sandbox. Run `vswarm shot …` as a Bash call of its own, with the full path vswarm gave you and nothing before or after it (no cd, &&, pipes or VAR=)."
+        : `Chrome could not take the screenshot (exit ${code}): ${err.trim().split("\n").slice(-2).join(" ")}`);
+    }
   } finally {
     rmSync(profile, { recursive: true, force: true });
   }

@@ -59,7 +59,8 @@ function systemPrompt(c: Config, cwd: string, dirs: string[]): string {
         "Local ports and localhost work: start dev servers with run_in_background (they never exit), read the real URL from their output, " +
         "and put that URL in your reply so the board shows an open button. " +
         `To see what you built, take a screenshot and look at it: \`${SHOT} shot <localhost URL or file> --out shot.png\` (WebGL works; add --size 1280x800, --wait 6000), ` +
-        "then Read the png. Check visual work this way before you call it done; fix what looks wrong.",
+        "then Read the png. Run it as a Bash call of its own, exactly in that form: no `cd`, `&&`, pipes or VAR= prefix, because only that form may leave the sandbox to start Chrome. " +
+        "Check visual work this way before you call it done; fix what looks wrong.",
     "This session runs inside vswarm, a live board the user set up for Claude Code.",
     "Hook messages starting with 'vswarm advisor' come from an advisor model the user configured to review your work;",
     "messages starting with 'vswarm jev' come from the user's Jev decision model. Treat both as trusted guidance from the user's own tooling, while still using your judgement.",

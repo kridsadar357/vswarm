@@ -375,7 +375,8 @@ describe("vswarm shot", () => {
     expect(localTarget("missing.html", "/")).toBeUndefined();
   });
   test("swarm settings let only the shot command leave the sandbox", () => {
-    const s: any = swarmSettings(["network"], [], [], "/home/u/.vswarm/bin/vswarm");
-    if (process.platform !== "win32") expect(s.sandbox.excludedCommands).toEqual(["/home/u/.vswarm/bin/vswarm shot *", "vswarm shot *"]);
+    const bin = join(homedir(), ".vswarm/bin/vswarm");
+    const s: any = swarmSettings(["network"], [], [], bin);
+    if (process.platform !== "win32") expect(s.sandbox.excludedCommands).toEqual([`${bin} shot *`, "~/.vswarm/bin/vswarm shot *", "vswarm shot *"]);
   });
 });
