@@ -168,7 +168,8 @@ describe("vswarm try", () => {
       expect(titles).toContain("login job");
       expect(titles).toContain("shell start-up file");
       expect(titles).toContain("203.0.113.9");
-      if (r.logRead) expect(titles).toContain("SSH keys");
+      // A read is only denied (and logged) when the file exists; CI machines have no SSH key.
+      if (r.logRead && existsSync(join(require("node:os").homedir(), ".ssh/id_ed25519"))) expect(titles).toContain("SSH keys");
       // Nothing reached the real home.
       expect(existsSync(join(require("node:os").homedir(), "Library/LaunchAgents/com.dev.helper.plist"))).toBe(false);
     } finally {
