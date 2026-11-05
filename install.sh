@@ -1,7 +1,7 @@
 #!/usr/bin/env sh
 # vswarm installer for macOS and Linux.
 #   curl -fsSL https://raw.githubusercontent.com/kridsadar357/vswarm/main/install.sh | sh
-# Installs Bun if missing, puts vswarm in ~/.vswarm/app, then runs `vswarm install`.
+# Installs Bun if missing, puts vswarm in ~/.vswarm/app, then runs `vswarm install` (check your machine before it touches production).
 # VSWARM_REPO and VSWARM_REF pick another repository or branch.
 set -eu
 
