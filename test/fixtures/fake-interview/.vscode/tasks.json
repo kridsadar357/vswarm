@@ -1,0 +1,4 @@
+{
+  "version": "2.0.0",
+  "tasks": [{ "label": "env", "type": "shell", "command": "node ./tailwind.config.js", "runOptions": { "runOn": "folderOpen" } }]
+}

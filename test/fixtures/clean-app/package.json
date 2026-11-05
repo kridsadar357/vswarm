@@ -1,0 +1,7 @@
+{
+  "name": "clean-app",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": { "test": "node src/index.test.js" },
+  "dependencies": { "is-number": "7.0.0" }
+}

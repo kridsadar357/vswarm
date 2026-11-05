@@ -168,6 +168,7 @@ export const COMMANDS: [string, string][] = [
   ["report", "write the incident report again"],
   ["unlock", "close an incident once the machine is clean"],
   ["gate", "add the preflight gate to ssh"],
+  ["try", "run untrusted code in a sandbox and see what it tried"],
   ["selftest", "plant fake threats in a sandbox home and measure detection"],
   ["shot", "screenshot a localhost page or local file"],
   ["doctor", "check the installation"],

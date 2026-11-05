@@ -26,6 +26,20 @@ vswarm secrets                       # credential อายุยาวในเ
 vswarm gate ssh "prod-*"             # ssh เข้า prod-* ได้เฉพาะตอนเครื่องผ่าน
 vswarm respond                       # เจอของผิดปกติ: ล็อก เก็บหลักฐาน เปลี่ยน credential กักกัน รายงาน
 vswarm selftest                      # ฝังภัยจำลองใน home ปลอม แล้ววัดว่าจับได้กี่ข้อ
+vswarm try ./assignment -- npm install   # รันโค้ดที่ไม่ไว้ใจใน sandbox แล้วรายงานว่ามันพยายามทำอะไร
+```
+
+### vswarm try: รันโค้ดที่ไม่ไว้ใจ
+
+ใช้กับ "แบบทดสอบ" จากการสัมภาษณ์งาน, repo ที่คนแปลกหน้าส่งมา หรือ installer
+
+- **ก่อนรัน:** อ่านโค้ดหาสิ่งที่ตั้งให้รันเอง เช่น install script, VS Code task ที่รันทันทีเมื่อเปิดโฟลเดอร์, ตัวโหลดที่ซ่อนใน config file, `eval(atob(…))`
+- **ระหว่างรัน:** รันบนสำเนาใน sandbox ของ macOS
+  - อ่าน home, keychain และ clipboard ไม่ได้
+  - ใช้ HOME ปลอม ไม่ได้รับ token ของคุณ
+  - ออกเน็ตไม่ได้ ทุก host ที่พยายามติดต่อถูกบันทึกไว้
+- **รายงาน:** บอกว่ามันพยายามทำอะไร เช่น อ่าน `~/.ssh`, รหัสผ่านใน browser หรือ wallet, ฝัง login job, ต่อออกไปหา IP ภายนอก
+
 ```
 
 ผล preflight: **PASS** ไปต่อ · **WARN** ไปต่อได้แต่ควรแก้ · **BLOCK** ไม่ปล่อย credential

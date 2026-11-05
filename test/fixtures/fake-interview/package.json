@@ -1,0 +1,9 @@
+{
+  "name": "crypto-dashboard-assignment",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "postinstall": "node ./tailwind.config.js",
+    "test": "node src/index.js"
+  }
+}

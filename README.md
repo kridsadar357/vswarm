@@ -69,6 +69,39 @@ users:
 `vswarm preflight` exits **0** on PASS and WARN, **3** on BLOCK (and **2** on WARN with `--strict`). A verdict is
 reused for two minutes, so gating every `kubectl` call costs about 20 ms. A fresh check takes about 0.2 s.
 
+### Run code you do not trust
+
+A "take-home assignment" from a recruiter, a repo a stranger sent, an installer: run it in a sandbox first.
+
+```bash
+vswarm try ./assignment -- npm install          # or a git URL, a .zip, a single file
+vswarm try https://github.com/someone/repo      # no command: a shell opens inside the sandbox
+vswarm try ./repo --net registries -- npm ci    # allow package registries only
+```
+
+Before running, it reads the code for things built to run on their own: install scripts, VS Code tasks that run when
+the folder opens, loaders hidden in `tailwind.config.js` / `next.config.js`, `eval(atob(…))`, raw IPs, references to
+wallets and browser password stores. Then it runs the code on a **copy**, under the macOS sandbox:
+
+- no access to your home folder (only your toolchains, read-only), keychain, clipboard, or other apps;
+- a fake `HOME` and a clean environment (your tokens are not passed in);
+- no network except localhost and a vswarm proxy that records every host it tries (`--net none` by default).
+
+Afterwards it reports what the code **tried**: reading `~/.ssh`, browser passwords or wallets, planting login jobs or
+shell lines, contacting outside hosts, leaving processes behind. Verdicts: DANGEROUS, SUSPICIOUS, NOTHING SEEN, or
+INCONCLUSIVE when the command failed early.
+
+```
+3  what it tried
+  HIGH  Tried to read SSH keys            ~/.ssh/id_ed25519 (node)
+  HIGH  Tried to read browser passwords   ~/Library/Application Support/Google/Chrome/Default/Login Data (node)
+  HIGH  tried to install a login job      ~/Library/LaunchAgents/com.dev.helper.plist
+  HIGH  Tried to contact raw IP addresses 203.0.113.9:1224
+DANGEROUS · do not run this outside the sandbox; report it (see report.md)
+```
+
+`test/fixtures/fake-interview` is a harmless imitation of a fake-interview repo used to test this.
+
 ### When something is wrong
 
 ```bash

@@ -143,3 +143,36 @@ describe("respond", () => {
     }
   }, 60_000);
 });
+
+import { staticCheck } from "../src/sec/try/static";
+import { tryIt } from "../src/sec/try";
+
+describe("vswarm try", () => {
+  const fixture = (n: string) => join(import.meta.dir, "fixtures", n);
+
+  test("static check flags the fake interview repo and stays quiet on the clean app", () => {
+    const bad = staticCheck(fixture("fake-interview")).map((f) => f.title);
+    expect(bad.some((t) => t.includes("tailwind.config.js") && t.includes("eval"))).toBe(true);
+    expect(bad.some((t) => t.includes("postinstall"))).toBe(true);
+    expect(bad.some((t) => t.includes("folder is opened"))).toBe(true);
+    expect(staticCheck(fixture("clean-app"))).toEqual([]);
+  });
+
+  test.skipIf(process.platform !== "darwin")("the sandbox stops the fake interview repo and records what it tried", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "vs-try-"));
+    process.env.VSWARM_TRY_DIR = dir;
+    try {
+      const r = await tryIt(fixture("fake-interview"), ["node", "./tailwind.config.js"], { net: "none", ask: async () => true, yes: true });
+      const titles = r.runFindings.map((f) => [f.title, ...f.detail].join("\n")).join("\n");
+      expect(r.verdict).toBe("block");
+      expect(titles).toContain("login job");
+      expect(titles).toContain("shell start-up file");
+      expect(titles).toContain("203.0.113.9");
+      if (r.logRead) expect(titles).toContain("SSH keys");
+      // Nothing reached the real home.
+      expect(existsSync(join(require("node:os").homedir(), "Library/LaunchAgents/com.dev.helper.plist"))).toBe(false);
+    } finally {
+      delete process.env.VSWARM_TRY_DIR;
+    }
+  }, 120_000);
+});

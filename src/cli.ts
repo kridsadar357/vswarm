@@ -16,6 +16,7 @@ import { clearLock, files, loadAccepted, loadBaseline, loadLast, loadLock, saveA
 import { RANK, type Finding, type Verdict } from "./sec/types";
 import { ask, banner, canAsk, COMMANDS, completion, doctor, gate, install, uninstall, update } from "./setup";
 import { shot } from "./shot";
+import { cleanTries, listTries, tryIt, type Net } from "./sec/try";
 
 function flag(args: string[], ...names: string[]): string | undefined {
   for (const name of names) {
@@ -55,6 +56,10 @@ function usage() {
   row("vswarm preflight --then <command…>", "run the command only if this machine passes");
   row('vswarm gate ssh "prod-*" "*.internal"', "ssh to these hosts only after preflight passes");
   row("vswarm accept <id…> | --all | --list", "mark reviewed findings as expected");
+  console.log(`\n  ${c.bold("run code you do not trust")}`);
+  row("vswarm try <folder|git URL|zip> [-- cmd]", "in a sandbox: no secrets, no network; reports what it tried");
+  row("vswarm try … --net registries", "allow package registries only (npm install, pip install)");
+  row("vswarm try --list · --clean", "earlier tries");
   console.log(`\n  ${c.bold("when something is wrong")}`);
   row("vswarm respond", "lock, evidence, credential checklist, quarantine, report");
   row("vswarm report [incident]", "write the incident report again");
@@ -216,6 +221,30 @@ async function main() {
 
     case "gate":
       return gate(args);
+
+    case "try": {
+      if (has(args, "--list")) {
+        const all = listTries();
+        if (!all.length) return line("no tries yet");
+        for (const t of all) line(`  ${t.verdict === "block" ? c.red("●") : t.verdict === "warn" ? c.amber("●") : c.green("●")} ${t.id}  ${c.dim(t.source ?? "")}`);
+        return;
+      }
+      const cleanAt = args.indexOf("--clean");
+      if (cleanAt >= 0) {
+        const id = args[cleanAt + 1];
+        return line(`${c.green("✔")} removed ${cleanTries(id)} tr${id ? "y" : "ies"}`);
+      }
+      const net = (flag(args, "--net") ?? "none") as Net;
+      if (!["none", "registries", "all"].includes(net)) throw new Error("--net is none, registries or all");
+      const auto = has(args, "--yes", "-y");
+      const dash = args.indexOf("--");
+      const command = dash >= 0 ? args.slice(dash + 1) : [];
+      const source = (dash >= 0 ? args.slice(0, dash) : args)[0];
+      if (!source) throw new Error('usage: vswarm try <folder | git URL | archive | file> [--net none|registries|all] [-- command …]');
+      const r = await tryIt(source, command, { net, ask: (q) => yes(q, true), yes: auto });
+      process.exitCode = r.verdict === "block" ? 3 : 0;
+      return;
+    }
 
     case "selftest": {
       banner("selftest");

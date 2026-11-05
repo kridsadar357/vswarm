@@ -30,7 +30,7 @@ export function finding(f: Finding, verbose = true) {
   if (!verbose) return;
   for (const d of f.detail) if (d) line(`        ${c.dim(d)}`);
   if (f.fix) line(`        ${c.cyan("→")} ${f.fix}`);
-  line(`        ${c.dim(`id ${f.id}`)}`);
+  if (f.id) line(`        ${c.dim(`id ${f.id}`)}`);
 }
 
 export function summary(r: Check, opt: { all?: boolean; title?: string } = {}) {
