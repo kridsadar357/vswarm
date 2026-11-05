@@ -11,6 +11,7 @@ import { askAdvisor, type Advice, type Moment } from "./advisor";
 import { append } from "./hook";
 import { askJev, jevKey } from "./jev";
 import { SHARP, type Stamped } from "./state";
+import { check, GROUPS, isGroup } from "./policy";
 
 type Payload = Record<string, any>;
 export type HookOutput = Record<string, unknown> | undefined;
@@ -71,6 +72,25 @@ export async function react(p: Payload, file: string): Promise<HookOutput> {
   if (!sid) return;
   const at = moments();
   const event = p.hook_event_name;
+
+  // Swarm mode: refuse what ships code or sends traffic out, for the lead and every subagent alike.
+  if (event === "PreToolUse" && process.env.VSWARM_BLOCK) {
+    const blocked = process.env.VSWARM_BLOCK.split(",").filter(isGroup);
+    const v = check(String(p.tool_name ?? ""), p.tool_input, blocked);
+    if (v) {
+      append(file, [{ t: Date.now(), sid, type: "log", who: "guard", text: `${p.agent_type ? p.agent_type + " · " : ""}blocked ${v.why}` }]);
+      return {
+        hookSpecificOutput: {
+          hookEventName: "PreToolUse",
+          permissionDecision: "deny",
+          permissionDecisionReason:
+            `vswarm policy blocks ${GROUPS[v.group]} (${v.why}). Do not try another way to do this. ` +
+            "If the task needs it, finish everything else and tell the user the exact command, so they can run it themselves with `!<command>` on the board.",
+        },
+      };
+    }
+    return;
+  }
 
   if (event === "UserPromptSubmit") {
     const prompt = String(p.prompt ?? "");

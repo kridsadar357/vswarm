@@ -12,6 +12,8 @@ import { append, map } from "./hook";
 import { DEFAULTS, ensureHome, loadConfig, paths, saveConfig, VERSION, type Config } from "./home";
 import { globalSettings, hasHooks, projectSettings, setHooks } from "./hooks";
 import { askJev, jevKey } from "./jev";
+import { GROUPS, isGroup } from "./policy";
+import { homedir } from "node:os";
 import { activeDir, authStatus, loginHint, profiles } from "./claude";
 import type { Screen } from "./screen";
 import { runSession } from "./session";
@@ -82,7 +84,9 @@ function usage() {
   row("vswarm completions zsh|bash", "print a completion script");
   console.log(`\n  ${c.bold("run flags")}  ${c.dim("--model sonnet  --swarm haiku  --advisor opus | --no-advisor  --mode acceptEdits  --profile work")}`);
   console.log(`             ${c.dim("--cwd <dir>  --frames <dir>  -- <any claude flags>")}`);
-  console.log(`  ${c.bold("on the board")}  ${c.dim("⏎ send · 1-9 or ↑↓ pick a choice · esc interrupt, then end · ctrl-c quit")}\n`);
+  console.log(`             ${c.dim("--add-dir <dir> (repeatable)")}`);
+  console.log(`  ${c.bold("on the board")}  ${c.dim("⏎ send · 1-9 or ↑↓ pick a choice · esc interrupt, then end · ctrl-c quit")}`);
+  console.log(`                ${c.dim("!<cmd> run it yourself · /add-dir <path> · /mode swarm · /unblock network · /policy · /help")}\n`);
 }
 
 /** Run flags on top of the saved config. */
@@ -102,7 +106,19 @@ function runConfig(args: string[]): Config {
   return cfg;
 }
 
-const MODES = ["default", "acceptEdits", "plan", "auto", "dontAsk", "bypassPermissions"];
+const MODES = ["swarm", "default", "acceptEdits", "plan", "auto", "dontAsk", "bypassPermissions"];
+
+/** "+a -b" edits a list, anything else replaces it. */
+function editList(list: string[], value: string): string[] {
+  const items = value.split(/[,\s]+/).filter(Boolean);
+  if (!items.every((x) => /^[+-]/.test(x))) return items;
+  let out = [...list];
+  for (const x of items) {
+    out = out.filter((a) => a !== x.slice(1));
+    if (x[0] === "+") out.push(x.slice(1));
+  }
+  return out;
+}
 
 async function config(args: string[]) {
   const cfg = loadConfig();
@@ -116,8 +132,11 @@ async function config(args: string[]) {
     row("swarm", cfg.swarm || "(lead picks)", "subagent model");
     row("advisor", cfg.advisor || "off", "reviews at checkpoints");
     row("advisorAt", cfg.advisorAt.join(","), "plan, error, done");
-    row("mode", cfg.mode, MODES.slice(0, 4).join(" · "));
-    row("allow", cfg.allow.join(" ") || "(none)", "tools allowed without asking");
+    row("mode", cfg.mode, "swarm · default · acceptEdits · plan · auto");
+    row("block", cfg.block.join(" ") || "(nothing)", "swarm refuses: push deploy network sudo");
+    row("domains", `${cfg.domains.length} hosts`, "sandbox may reach (package registries)");
+    row("dirs", cfg.dirs.join(" ") || "(cwd only)", "extra folders runs may edit");
+    row("allow", cfg.allow.join(" ") || "(none)", "tools allowed in the Claude Code modes");
     row("jev", jevKey() ? "set" : "not set", "vswarm config jev");
     console.log(c.dim(`\n  ${paths.config()}\n  change: vswarm config <key> <value> · allow +Edit / -Edit · reset\n`));
     return;
@@ -171,6 +190,20 @@ async function config(args: string[]) {
     case "mode":
       if (!MODES.includes(value)) throw new Error(`mode is one of: ${MODES.join(", ")}`);
       cfg.mode = value;
+      break;
+    case "block": {
+      const v = editList(cfg.block, value);
+      const bad = v.filter((g) => !isGroup(g));
+      if (bad.length) throw new Error(`unknown group ${bad.join(", ")} · groups: ${Object.keys(GROUPS).join(", ")}`);
+      cfg.block = v;
+      break;
+    }
+    case "domains":
+      if (!value) return console.log(cfg.domains.join("\n"));
+      cfg.domains = editList(cfg.domains, value);
+      break;
+    case "dirs":
+      cfg.dirs = editList(cfg.dirs, value).map((d) => resolve(d.replace(/^~(?=$|\/)/, homedir())));
       break;
     case "allow": {
       const items = value.split(/[,\s]+/).filter(Boolean);
@@ -284,6 +317,8 @@ async function main() {
       const frames = flag(args, "--frames");
       const print = has(args, "--print", "-p") || !process.stdout.isTTY;
       const cwdFlag = flag(args, "--cwd");
+      const addDirs: string[] = [];
+      for (let d = flag(args, "--add-dir"); d; d = flag(args, "--add-dir")) addDirs.push(d);
       let resume;
       if (cmd === "resume") {
         resume = findRun(args.shift());
@@ -292,7 +327,7 @@ async function main() {
       const cwd = resolve(cwdFlag ?? resume?.cwd ?? ".");
       const prompt = args.join(" ").trim() || undefined;
       ensureHome();
-      process.exitCode = await runSession({ prompt, cwd, config: cfg, extra, resume, print, frames, page });
+      process.exitCode = await runSession({ prompt, cwd, config: cfg, extra, resume, print, frames, page, dirs: addDirs });
       return;
     }
 

@@ -45,10 +45,19 @@ export interface Config {
   advisor: string;
   /** When the advisor is called: plan, error, done. */
   advisorAt: string[];
-  /** Claude Code permission mode for `vswarm run`: default, acceptEdits, plan, auto. */
+  /**
+   * Permission mode for `vswarm run`. "swarm" (vswarm's own) allows everything on this machine except the
+   * `block` groups, inside the Claude Code sandbox; the rest are Claude Code's: default, acceptEdits, plan, auto, dontAsk.
+   */
   mode: string;
-  /** Tools `vswarm run` may use without asking (claude --allowedTools). */
+  /** Tools allowed without asking in the Claude Code modes (claude --allowedTools). */
   allow: string[];
+  /** What swarm mode refuses: push, deploy, network, sudo. */
+  block: string[];
+  /** Hosts the sandbox lets commands reach in swarm mode (package registries). */
+  domains: string[];
+  /** Folders besides the working directory that runs may edit (claude --add-dir). */
+  dirs: string[];
 }
 
 export const DEFAULTS: Config = {
@@ -57,8 +66,14 @@ export const DEFAULTS: Config = {
   swarm: "haiku",
   advisor: "opus",
   advisorAt: ["plan", "error", "done"],
-  mode: "default",
+  mode: "swarm",
   allow: ["Agent", "Read", "Grep", "Glob", "WebSearch", "WebFetch"],
+  block: ["push", "deploy", "network", "sudo"],
+  domains: [
+    "registry.npmjs.org", "*.npmjs.org", "registry.yarnpkg.com", "pypi.org", "files.pythonhosted.org",
+    "crates.io", "*.crates.io", "proxy.golang.org", "sum.golang.org", "jsr.io", "deno.land",
+  ],
+  dirs: [],
 };
 
 export function loadConfig(): Config {

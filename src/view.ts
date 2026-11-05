@@ -145,6 +145,7 @@ function badge(who: string, s: State): [string, Style] {
   if (w === "prompt") return ["YOU", chip(C.text)];
   if (w === "lead") return ["LEAD", chip(C.amber)];
   if (w === "vswarm") return ["VSWARM", chip(C.violet)];
+  if (w === "guard") return ["GUARD", chip(C.rose)];
   if (w === "claude") return ["CLAUDE", { fg: C.amber, bg: C.track, bold: true }];
   if (w.includes("opus") || w === "advisor" || w === (s.advisor.model ?? "").toLowerCase()) return ["ADVISE", chip(C.violet)];
   return [(w.startsWith("claude-") ? modelName(who) : who).toUpperCase(), chip(C.cyan)];

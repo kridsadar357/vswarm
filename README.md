@@ -85,13 +85,47 @@ vswarm config lead opus               # โมเดลหลัก
 vswarm config swarm haiku             # โมเดลของ subagent (off = ให้ lead เลือกเอง)
 vswarm config advisor off             # ปิด advisor
 vswarm config advisorAt plan,done     # จุดที่เรียก advisor: plan, error, done
-vswarm config mode acceptEdits        # ให้แก้ไฟล์ได้โดยไม่ต้องถาม
-vswarm config allow +Bash             # เพิ่ม tool ที่อนุญาต (-Bash เอาออก)
+vswarm config mode swarm              # ทำได้หมด ยกเว้น deploy และ traffic ออกนอก (ค่าเริ่มต้น)
+vswarm config block -network          # เลิกบล็อกกลุ่ม network (+network บล็อกกลับ)
+vswarm config domains +github.com     # ให้ sandbox ไปถึง host นี้ได้
+vswarm config dirs +~/develop/shared  # โฟลเดอร์ที่ทุก run แก้ได้
+vswarm config mode acceptEdits        # ใช้โหมดของ Claude Code แทน
+vswarm config allow +Bash             # tool ที่อนุญาตในโหมดของ Claude Code
 vswarm config jev                     # ใส่ Jev key (ไม่โชว์บนจอ)
 ```
 
-ค่าเริ่มต้นแก้ไฟล์ไม่ได้ (mode `default`) ถ้า Claude ถูกบล็อกจะมีข้อความใน CHAT บอกว่าต้องเปิดอะไร
-flag ต่อรัน: `--model` `--swarm` `--advisor` / `--no-advisor` `--mode` `--cwd` และ `-- <flag ของ claude>`
+### สิทธิ์: โหมด swarm (ค่าเริ่มต้น)
+
+ทำได้ทุกอย่างบนเครื่องโดยไม่ต้องถาม (แก้ไฟล์, รันคำสั่ง, ติดตั้ง package, subagent) ยกเว้น 4 กลุ่มนี้:
+
+| กลุ่ม | ตัวอย่างที่ถูกบล็อก |
+|---|---|
+| `push` | `git push`, เปลี่ยน remote, `gh` |
+| `deploy` | `npm publish`, `docker push`, `vercel`, `kubectl`, `aws`, `firebase deploy` … |
+| `network` | `curl`, `wget`, `ssh`, `scp`, `rsync`, สคริปต์ที่เปิด connection, URL ภายนอก, WebFetch, MCP tools |
+| `sudo` | `sudo`, `su` |
+
+กันไว้ 3 ชั้น:
+
+1. **Claude Code sandbox** (macOS/Linux) จำกัด network ให้ไปได้แค่ package registry (`vswarm config domains`) และเขียนไฟล์ได้แค่โฟลเดอร์งาน, `/add-dir` และ cache ของ package manager เป็นชั้นที่กันจริง แม้คำสั่งจะเลี่ยงผ่าน `python -c` หรือ `bash -c`
+2. **deny rules** ของ Claude Code
+3. **hook ของ vswarm** อ่านคำสั่งทั้งบรรทัด บล็อกพร้อมบอกเหตุผลใน FEED (ป้าย GUARD) ใช้กับ subagent ด้วย
+
+ถ้างานต้องใช้ขั้นที่ถูกบล็อก Claude จะบอกคำสั่งให้ แล้วคุณรันเองบนจอด้วย `!<คำสั่ง>`
+บน Windows ไม่มี sandbox จึงเหลือแค่ชั้น 2 และ 3 (ใช้ WSL2 ถ้าต้องการ sandbox)
+
+**คำสั่งในช่องตอบ**
+
+| พิมพ์ | ทำอะไร |
+|---|---|
+| `!<command>` | รันคำสั่งเอง (นอก sandbox) ผลส่งให้ Claude ในข้อความถัดไป |
+| `/add-dir <path>` | ให้ Claude แก้โฟลเดอร์อื่นได้ (สร้างให้ถ้ายังไม่มี) |
+| `/mode swarm\|acceptEdits\|default\|plan` | เปลี่ยนโหมดสิทธิ์ |
+| `/unblock network` · `/block network` | ปลด/บล็อกกลุ่มเฉพาะ session นี้ |
+| `/policy` · `/help` | ดูสิทธิ์ตอนนี้ · รายการคำสั่ง |
+
+ถ้า Claude ถูกบล็อกเพราะไฟล์อยู่นอกโฟลเดอร์งาน จะมีปุ่ม `/add-dir <โฟลเดอร์>` ให้กดได้เลย
+flag ต่อรัน: `--model` `--swarm` `--advisor` / `--no-advisor` `--mode` `--profile` `--cwd` `--add-dir` และ `-- <flag ของ claude>`
 
 ## คำสั่งอื่น
 

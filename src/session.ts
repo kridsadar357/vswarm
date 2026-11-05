@@ -1,7 +1,9 @@
 // `vswarm run`: one Claude Code session kept open over stream-json, so Claude can ask and the user can answer
 // on the board, turn after turn. Hooks feed the board; the stream adds Claude's text as it is written.
 
-import { mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { dirname, resolve } from "node:path";
+import { GROUPS, isGroup, swarmSettings } from "./policy";
 import { join } from "node:path";
 import { newRun, runDir, saveMeta, type RunMeta } from "./history";
 import { append } from "./hook";
@@ -25,13 +27,22 @@ export interface RunOptions {
   resume?: RunMeta;
   /** No board: one turn, print the answer (also used when stdout is not a terminal). */
   print?: boolean;
+  /** Extra folders Claude may edit (--add-dir). */
+  dirs?: string[];
   /** Write a board frame here every 2 s, for videos. */
   frames?: string;
   page: (scr: Screen) => string;
 }
 
-function systemPrompt(c: Config): string {
+function systemPrompt(c: Config, cwd: string, dirs: string[]): string {
+  const blocked = c.block.filter(isGroup);
   return [
+    c.mode === "swarm" &&
+      `Permissions: you may edit files and run any local command in ${[cwd, ...dirs].join(", ")} without asking. ` +
+        (blocked.length ? `By the user's policy these are blocked: ${blocked.map((g) => GROUPS[g]).join("; ")}. ` : "") +
+        (blocked.includes("network") ? `Commands run in a sandbox that only reaches: ${c.domains.join(", ")}. ` : "") +
+        "Do not try to work around a block. When a task needs a blocked step, finish the rest and give the user the exact command; " +
+        "they can run it themselves by typing `!<command>` on the board. To write outside these folders, ask the user to type `/add-dir <path>`.",
     "This session runs inside vswarm, a live board the user set up for Claude Code.",
     "Hook messages starting with 'vswarm advisor' come from an advisor model the user configured to review your work;",
     "messages starting with 'vswarm jev' come from the user's Jev decision model. Treat both as trusted guidance from the user's own tooling, while still using your judgement.",
@@ -51,7 +62,14 @@ export async function runSession(o: RunOptions): Promise<number> {
   const dir = runDir(meta.id);
   const events = join(dir, "events.jsonl");
   const settings = join(dir, "settings.json");
-  writeFileSync(settings, JSON.stringify({ hooks: hooksConfig(events) }));
+  /** Folders besides cwd this run may edit: from config, flags, and /add-dir typed on the board. */
+  const dirs = [...new Set([...c.dirs, ...(o.dirs ?? [])].map((d) => resolve(o.cwd, d.replace(/^~(?=$|\/)/, homedir()))))];
+  const writeSettings = () =>
+    writeFileSync(settings, JSON.stringify({
+      hooks: hooksConfig(events),
+      ...(c.mode === "swarm" ? swarmSettings(c.block.filter(isGroup), c.domains, dirs) : {}),
+    }, null, 2));
+  writeSettings();
   const post = (e: Stamped) => append(events, [{ t: Date.now(), sid: meta.sid, ...e } as Stamped]);
 
   let s: State = initial();
@@ -67,18 +85,24 @@ export async function runSession(o: RunOptions): Promise<number> {
   });
   overlay();
 
-  const ui: Ui = { mode: "run", busy: false, input: "", options: [], pick: -1, hint: `in ${o.cwd} · mode ${c.mode}` };
+  const ui: Ui = { mode: "run", busy: false, input: "", options: [], pick: -1, hint: `in ${o.cwd} · mode ${c.mode} · /help` };
   let child: ReturnType<typeof Bun.spawn> | null = null;
   let lastText = "";
   let resolveTurn: (() => void) | null = null;
   let ended = false;
+  let restarting = false;
+  /** Output of `!commands` the user ran, handed to Claude with their next message. */
+  let ranNote = "";
 
   const start = () => {
+    writeSettings();
+    const swarmMode = c.mode === "swarm";
     const args = [
       "claude", "-p", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose", "--include-partial-messages",
-      "--model", c.lead, "--settings", settings, "--append-system-prompt", systemPrompt(c),
-      ...(c.mode && c.mode !== "default" ? ["--permission-mode", c.mode] : []),
-      ...(c.allow.length ? ["--allowedTools", c.allow.join(" ")] : []),
+      "--model", c.lead, "--settings", settings, "--append-system-prompt", systemPrompt(c, o.cwd, dirs),
+      ...(!swarmMode && c.mode && c.mode !== "default" ? ["--permission-mode", c.mode] : []),
+      ...(!swarmMode && c.allow.length ? ["--allowedTools", c.allow.join(" ")] : []),
+      ...dirs.filter((d) => existsSync(d)).flatMap((d) => ["--add-dir", d]),
       ...(meta.sid ? ["--resume", meta.sid] : []),
       ...o.extra,
     ];
@@ -92,6 +116,7 @@ export async function runSession(o: RunOptions): Promise<number> {
         ...(account ? { CLAUDE_CONFIG_DIR: account } : {}),
         VSWARM_ADVISOR_AT: c.advisor ? c.advisorAt.join(",") : "",
         VSWARM_ADVISOR_MODEL: c.advisor || "opus",
+        VSWARM_BLOCK: swarmMode ? c.block.join(",") : "",
       },
     });
     child = p;
@@ -100,7 +125,7 @@ export async function runSession(o: RunOptions): Promise<number> {
       const err = await new Response(p.stderr as ReadableStream).text();
       const code = await p.exited;
       if (child === p) child = null;
-      if (!ended && code !== 0) post({ type: "say", who: "vswarm", text: `claude exited with code ${code}${err.trim() ? `: ${err.trim().split("\n").slice(-2).join(" ")}` : ""}` });
+      if (!ended && !restarting && code !== 0) post({ type: "say", who: "vswarm", text: `claude exited with code ${code}${err.trim() ? `: ${err.trim().split("\n").slice(-2).join(" ")}` : ""}` });
       ui.busy = false;
       resolveTurn?.();
     })();
@@ -160,16 +185,25 @@ export async function runSession(o: RunOptions): Promise<number> {
         if (AUTH_ERROR.test(why)) void explainLogin();
       }
       const denied: any[] = m.permission_denials ?? [];
+      // A file outside the allowed folders: offer the folder as a one-key /add-dir.
+      const outside = [...new Set(denied
+        .map((d) => String(d.tool_input?.file_path ?? d.tool_input?.notebook_path ?? ""))
+        .filter((f) => f.startsWith("/") && ![o.cwd, ...dirs].some((d) => f.startsWith(d + "/")))
+        .map((f) => dirname(f)))];
       if (denied.length) {
         const what = [...new Set(denied.map((d) => d.tool_name))].join(", ");
         post({
           type: "say",
           who: "vswarm",
-          text: `blocked by permissions: ${what}. Allow edits with \`vswarm config mode acceptEdits\`, or add tools with \`vswarm config allow "${what}"\`.`,
+          text: outside.length
+            ? `blocked: ${what} outside the allowed folders. Type /add-dir ${outside[0]} (or pick it below) and ask again.`
+            : c.mode === "swarm"
+              ? `blocked: ${what}. That is outside swarm policy (${c.block.join(", ")}); run it yourself with !<command>, or /unblock <group>.`
+              : `blocked by permissions: ${what}. Type /mode swarm to allow everything except deploys and traffic out.`,
         });
       }
       if (typeof m.result === "string" && m.result.trim()) lastText = m.result.trim();
-      ui.options = questionOptions(lastText);
+      ui.options = outside.length ? outside.map((d) => `/add-dir ${d}`) : questionOptions(lastText);
       ui.pick = -1;
       ui.hint = ui.options.length ? "" : `turn ${meta.turns} done · $${meta.costUsd.toFixed(3)} · reply to continue, esc to end`;
       saveMeta(meta);
@@ -197,9 +231,98 @@ export async function runSession(o: RunOptions): Promise<number> {
     return p.loggedIn;
   });
 
-  const send = (text: string) => {
+  /** Stops the claude process; the next message starts it again on the same session with new settings. */
+  const restart = async () => {
+    const p = child;
+    if (!p) return;
+    restarting = true;
+    try {
+      (p.stdin as any).end();
+    } catch {}
+    const timer = setTimeout(() => p.kill(), 5000);
+    await p.exited;
+    clearTimeout(timer);
+    child = null;
+    restarting = false;
+  };
+
+  const note = (text: string) => post({ type: "say", who: "vswarm", text });
+
+  /** `!command`: the user's own shell command, outside Claude's sandbox, with its output kept for Claude. */
+  const runLocal = async (cmd: string) => {
+    note(`$ ${cmd}`);
+    const p = Bun.spawn(process.platform === "win32" ? ["cmd", "/c", cmd] : ["sh", "-c", cmd], { cwd: o.cwd, stdout: "pipe", stderr: "pipe", stdin: "ignore" });
+    const timer = setTimeout(() => p.kill(), 120_000);
+    const [out, err, code] = await Promise.all([new Response(p.stdout).text(), new Response(p.stderr).text(), p.exited]);
+    clearTimeout(timer);
+    const text = (out + err).trim().split("\n").slice(-30).join("\n");
+    note(`${text || "(no output)"}\nexit ${code}`);
+    ranNote += `I ran this myself in ${o.cwd}:\n$ ${cmd}\n${text.slice(-3000)}\n(exit ${code})\n\n`;
+    ui.hint = "the output goes to Claude with your next message";
+  };
+
+  const HELP =
+    "!<command>  run a shell command yourself (not sandboxed); Claude sees the output with your next message\n" +
+    "/add-dir <path>  let Claude edit another folder (created if missing)\n" +
+    "/mode <swarm|acceptEdits|default|plan>  change permissions\n" +
+    "/block <group> · /unblock <group>  groups: push, deploy, network, sudo\n" +
+    "/policy  show what is allowed · /help  this list";
+
+  /** Board commands typed into the reply box. Returns true when the text was one. */
+  const command = async (text: string): Promise<boolean> => {
+    if (text.startsWith("!")) {
+      await runLocal(text.slice(1).trim());
+      return true;
+    }
+    if (!text.startsWith("/")) return false;
+    const [cmd, ...rest] = text.slice(1).split(/\s+/);
+    const arg = rest.join(" ").trim();
+    switch (cmd) {
+      case "help":
+        note(HELP);
+        return true;
+      case "add-dir": {
+        if (!arg) return note("usage: /add-dir <path>"), true;
+        const d = resolve(o.cwd, arg.replace(/^~(?=$|\/)/, homedir()));
+        mkdirSync(d, { recursive: true });
+        if (!dirs.includes(d)) dirs.push(d);
+        await restart();
+        note(`Claude may now edit ${d}`);
+        ranNote += `The user added ${d} as a folder you may edit.\n\n`;
+        return true;
+      }
+      case "mode":
+        if (!["swarm", "acceptEdits", "default", "plan", "auto", "dontAsk"].includes(arg)) return note("usage: /mode swarm|acceptEdits|default|plan"), true;
+        c.mode = arg;
+        await restart();
+        note(`mode ${arg} for this session · keep it: vswarm config mode ${arg}`);
+        return true;
+      case "block":
+      case "unblock": {
+        if (!isGroup(arg)) return note("groups: push, deploy, network, sudo"), true;
+        c.block = cmd === "block" ? [...new Set([...c.block, arg])] : c.block.filter((g) => g !== arg);
+        await restart();
+        note(`${cmd === "block" ? "blocking" : "allowing"} ${arg} for this session · now blocked: ${c.block.join(", ") || "nothing"}`);
+        return true;
+      }
+      case "policy":
+        note(
+          `mode ${c.mode} · folders ${[o.cwd, ...dirs].join(", ")}\n` +
+            (c.mode === "swarm"
+              ? `blocked: ${c.block.map((g) => `${g} (${GROUPS[g as keyof typeof GROUPS] ?? g})`).join("; ") || "nothing"}\nreachable hosts: ${c.block.includes("network") ? c.domains.join(", ") : "any"}`
+              : `allowed tools: ${c.allow.join(" ")}`),
+        );
+        return true;
+    }
+    note(`unknown command /${cmd} · /help`);
+    return true;
+  };
+
+  const send = (shown: string) => {
     if (!child) start();
     const p = child!;
+    const text = ranNote ? `${ranNote}${shown}` : shown;
+    ranNote = "";
     (p.stdin as any).write(JSON.stringify({ type: "user", message: { role: "user", content: text } }) + "\n");
     (p.stdin as any).flush?.();
     if (!meta.prompt) {
@@ -207,7 +330,7 @@ export async function runSession(o: RunOptions): Promise<number> {
       saveMeta(meta);
     }
     // Shown right away; the UserPromptSubmit hook reports the same text and is folded into this line.
-    post({ type: "say", who: "you", text });
+    post({ type: "say", who: "you", text: shown });
     ui.busy = true;
     ui.input = "";
     ui.options = [];
@@ -285,7 +408,14 @@ export async function runSession(o: RunOptions): Promise<number> {
         return;
       case "enter": {
         const text = (ui.input ?? "").trim();
-        if (ui.busy || !text) return;
+        if (!text) return;
+        if (text.startsWith("!") || text.startsWith("/")) {
+          ui.input = "";
+          ui.options = [];
+          void command(text);
+          return;
+        }
+        if (ui.busy) return;
         return send(text);
       }
       case "backspace":

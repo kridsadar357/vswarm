@@ -277,7 +277,10 @@ export async function doctor(): Promise<boolean> {
   }
   const cfg = loadConfig();
   ok(`models  lead ${cfg.lead} · swarm ${cfg.swarm || "(lead picks)"} · advisor ${cfg.advisor || "off"}`);
-  ok(`permissions  mode ${cfg.mode} · allow ${cfg.allow.join(" ") || "(none)"}`);
+  if (cfg.mode === "swarm") {
+    ok(`permissions  swarm · blocks ${cfg.block.join(", ") || "nothing"}`, `${cfg.domains.length} reachable hosts · vswarm config block / domains`);
+    if (WIN && cfg.block.includes("network")) warn("no Claude Code sandbox on Windows", "network is blocked by command rules only; use WSL2 for the sandbox");
+  } else ok(`permissions  mode ${cfg.mode} · allow ${cfg.allow.join(" ") || "(none)"}`, "everything except deploys and traffic out: vswarm config mode swarm");
   if (jevKey()) ok("jev key set");
   else warn("no jev key", "optional · vswarm config jev");
   if (hasHooks(globalSettings())) ok("global hooks on", "every Claude Code session shows on vswarm watch");
