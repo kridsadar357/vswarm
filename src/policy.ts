@@ -30,6 +30,23 @@ const BASH: [Group, RegExp, string][] = [
 /** Commands that do need the network but only to fetch dependencies or source, which the swarm may do. */
 const FETCH_OK = /^\s*(git\s+(clone|fetch|pull|ls-remote|submodule)|npm\s+(i|install|ci|add)|pnpm\s+(i|install|add)|yarn(\s+(install|add))?|bun\s+(i|install|add)|pip3?\s+install|uv\s+(pip\s+install|add|sync)|poetry\s+(install|add)|cargo\s+(build|fetch|add)|go\s+(get|mod\s+download)|brew\s+install|npx\s+(-y\s+)?create-)\b/;
 
+const URL_RE = /\b(?:https?|wss?):\/\/[^\s'"`)]+/g;
+const LOCAL_URL = /^(?:https?|wss?):\/\/(localhost|127\.0\.0\.1|0\.0\.0\.0|\[::1\])([:/]|$)/;
+const SANDBOXED = process.platform !== "win32";
+
+/**
+ * A connection that stays on this machine: every URL in the command is localhost, or (where the sandbox stops
+ * anything else) a script that names no URL at all. ssh/scp/rsync/nc are never treated as local.
+ */
+function localOnly(part: string): boolean {
+  if (/(^|[\s;&|(`])(ssh|scp|sftp|ftp|rsync|telnet|nc|ncat|socat|mosh)(\s|$)/.test(part)) return false;
+  const urls = part.match(URL_RE) ?? [];
+  if (urls.length) return urls.every((u) => LOCAL_URL.test(u));
+  const tool = /(^|[\s;&|(`])(curl|wget|xh|httpie)(\s|$)/.test(part);
+  if (tool) return /\b(localhost|127\.0\.0\.1|\[::1\])\b/.test(part) && !/\b[\w-]+\.(com|net|org|io|dev|app|co|ai|th)\b/.test(part);
+  return SANDBOXED;
+}
+
 export interface Verdict {
   group: Group;
   why: string;
@@ -46,6 +63,7 @@ export function check(tool: string, input: any, blocked: Group[]): Verdict | und
       if (!on.has(group)) continue;
       for (const part of parts) {
         if (group === "network" && FETCH_OK.test(part) && !/\b(curl|wget|ssh|scp|rsync|nc)\b/.test(part)) continue;
+        if (group === "network" && localOnly(part)) continue;
         if (re.test(part)) return { group, why: `${why}: ${part.trim().slice(0, 120)}` };
       }
     }
@@ -74,9 +92,12 @@ const DENY: Record<Group, string[]> = {
     "Bash(kubectl *)", "Bash(helm *)", "Bash(terraform apply *)", "Bash(vercel *)", "Bash(netlify *)", "Bash(flyctl *)",
     "Bash(heroku *)", "Bash(wrangler *)", "Bash(firebase deploy *)", "Bash(aws *)", "Bash(gcloud *)", "Bash(az *)",
   ],
-  network: ["WebFetch", "mcp__*", "Bash(curl *)", "Bash(wget *)", "Bash(ssh *)", "Bash(scp *)", "Bash(rsync *)", "Bash(nc *)"],
+  // curl and wget stay usable against localhost; the hook and the sandbox refuse them for outside hosts.
+  network: ["WebFetch", "mcp__*", "Bash(ssh *)", "Bash(scp *)", "Bash(rsync *)", "Bash(nc *)"],
   sudo: ["Bash(sudo *)", "Bash(su *)"],
 };
+
+const LOCAL_HOSTS = ["localhost", "127.0.0.1", "::1", "[::1]"];
 
 const CACHES = [
   "~/.npm", "~/.bun/install/cache", "~/.cache", "~/Library/Caches", "~/.yarn", "~/.pnpm-store", "~/Library/pnpm",
@@ -105,7 +126,8 @@ export function swarmSettings(blocked: Group[], domains: string[], dirs: string[
             failIfUnavailable: true,
             // Package managers keep caches in the home folder; without these an install fails with EPERM.
             filesystem: { allowWrite: [...dirs, ...CACHES] },
-            network: { allowedDomains: domains },
+            // Dev servers bind local ports, and checking them goes to localhost; neither leaves the machine.
+            network: { allowedDomains: [...domains, ...LOCAL_HOSTS], allowLocalBinding: true },
           },
         }
       : {}),

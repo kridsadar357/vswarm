@@ -290,6 +290,9 @@ async function main() {
     case "hook": {
       // The advisor is itself a claude session; its hooks must not watch or advise it.
       if (process.env[ADVISOR_ENV]) return;
+      // Inside `vswarm run` the run's own hooks do the work; global hooks would double every event and advisor call.
+      const runEvents = process.env.VSWARM_RUN_EVENTS;
+      if (runEvents && resolve(file) !== resolve(runEvents)) return;
       let payload: any;
       try {
         payload = JSON.parse((await Bun.stdin.text()) || "{}");

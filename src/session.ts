@@ -34,6 +34,14 @@ export interface RunOptions {
   page: (scr: Screen) => string;
 }
 
+/** Local things Claude's reply points at that the user may want to look at: localhost URLs and HTML files. */
+export function openables(text: string, cwd: string): string[] {
+  const urls = [...text.matchAll(/https?:\/\/(?:localhost|127\.0\.0\.1|\[::1\]|0\.0\.0\.0)(?::\d+)?[^\s`'")\]>]*/g)].map((m) => m[0].replace(/[.,;:]+$/, ""));
+  const files = [...text.matchAll(/(?:^|[\s`'"(])((?:~|\.{0,2})?\/?[\w./-]+\.html?)\b/g)].map((m) => m[1]);
+  const out = [...new Set([...urls, ...files])].map((t) => `/open ${t.replace(/^0\.0\.0\.0/, "localhost")}`);
+  return out.slice(0, 3);
+}
+
 function systemPrompt(c: Config, cwd: string, dirs: string[]): string {
   const blocked = c.block.filter(isGroup);
   return [
@@ -42,7 +50,9 @@ function systemPrompt(c: Config, cwd: string, dirs: string[]): string {
         (blocked.length ? `By the user's policy these are blocked: ${blocked.map((g) => GROUPS[g]).join("; ")}. ` : "") +
         (blocked.includes("network") ? `Commands run in a sandbox that only reaches: ${c.domains.join(", ")}. ` : "") +
         "Do not try to work around a block. When a task needs a blocked step, finish the rest and give the user the exact command; " +
-        "they can run it themselves by typing `!<command>` on the board. To write outside these folders, ask the user to type `/add-dir <path>`.",
+        "they can run it themselves by typing `!<command>` on the board. To write outside these folders, ask the user to type `/add-dir <path>`. " +
+        "Local ports and localhost work: start dev servers with run_in_background (they never exit), read the real URL from their output, " +
+        "and when the user asks to see the result, open it with `open <localhost URL or local file>`; also put that URL in your reply so the board shows an open button.",
     "This session runs inside vswarm, a live board the user set up for Claude Code.",
     "Hook messages starting with 'vswarm advisor' come from an advisor model the user configured to review your work;",
     "messages starting with 'vswarm jev' come from the user's Jev decision model. Treat both as trusted guidance from the user's own tooling, while still using your judgement.",
@@ -117,6 +127,7 @@ export async function runSession(o: RunOptions): Promise<number> {
         VSWARM_ADVISOR_AT: c.advisor ? c.advisorAt.join(",") : "",
         VSWARM_ADVISOR_MODEL: c.advisor || "opus",
         VSWARM_BLOCK: swarmMode ? c.block.join(",") : "",
+        VSWARM_RUN_EVENTS: events,
       },
     });
     child = p;
@@ -203,7 +214,7 @@ export async function runSession(o: RunOptions): Promise<number> {
         });
       }
       if (typeof m.result === "string" && m.result.trim()) lastText = m.result.trim();
-      ui.options = outside.length ? outside.map((d) => `/add-dir ${d}`) : questionOptions(lastText);
+      ui.options = outside.length ? outside.map((d) => `/add-dir ${d}`) : [...openables(lastText, o.cwd), ...questionOptions(lastText)].slice(0, 9);
       ui.pick = -1;
       ui.hint = ui.options.length ? "" : `turn ${meta.turns} done · $${meta.costUsd.toFixed(3)} · reply to continue, esc to end`;
       saveMeta(meta);
@@ -266,6 +277,7 @@ export async function runSession(o: RunOptions): Promise<number> {
     "/add-dir <path>  let Claude edit another folder (created if missing)\n" +
     "/mode <swarm|acceptEdits|default|plan>  change permissions\n" +
     "/block <group> · /unblock <group>  groups: push, deploy, network, sudo\n" +
+    "/open <url|file>  open in the browser or default app\n" +
     "/policy  show what is allowed · /help  this list";
 
   /** Board commands typed into the reply box. Returns true when the text was one. */
@@ -303,6 +315,14 @@ export async function runSession(o: RunOptions): Promise<number> {
         c.block = cmd === "block" ? [...new Set([...c.block, arg])] : c.block.filter((g) => g !== arg);
         await restart();
         note(`${cmd === "block" ? "blocking" : "allowing"} ${arg} for this session · now blocked: ${c.block.join(", ") || "nothing"}`);
+        return true;
+      }
+      case "open": {
+        if (!arg) return note("usage: /open <url or file>"), true;
+        const target = /^[a-z]+:\/\//i.test(arg) ? arg : resolve(o.cwd, arg.replace(/^~(?=$|\/)/, homedir()));
+        const opener = process.platform === "darwin" ? ["open", target] : process.platform === "win32" ? ["cmd", "/c", "start", "", target] : ["xdg-open", target];
+        const code = await Bun.spawn(opener, { stdout: "ignore", stderr: "ignore" }).exited;
+        note(code === 0 ? `opened ${target}` : `could not open ${target} (exit ${code})`);
         return true;
       }
       case "policy":

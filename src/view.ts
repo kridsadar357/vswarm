@@ -356,9 +356,12 @@ export function draw(s: State, frame: number, now = Date.now(), opt: { w?: numbe
 
   // ── CHAT and FEED
   const BY = FY + FH, BH = Ht - 1 - BY;
-  const CW = Math.floor(Wd * 0.58);
-  const FX = CW + 1, FW = Wd - FX;
-  scr.panel(0, BY, CW, BH, S.line, [[" CHAT ", chip(C.amber)], [ui.mode === "run" ? " you ⇄ claude " : ` ${ui.mode} `, S.muted]]);
+  // FEED sits left of CHAT: some terminals misplace backgrounds to the right of Thai text in a row,
+  // and FEED's coloured badges would be the ones to suffer.
+  const FW = Wd - Math.floor(Wd * 0.58) - 1;
+  const FX = 0;
+  const CX0 = FW + 1, CW = Wd - CX0;
+  scr.panel(CX0, BY, CW, BH, S.line, [[" CHAT ", chip(C.amber)], [ui.mode === "run" ? " you ⇄ claude " : ` ${ui.mode} `, S.muted]]);
   scr.panel(FX, BY, FW, BH, S.line, [[" FEED ", chip(C.cyan)], [` ${s.log.length} events `, S.muted]]);
 
   // Reply box at the bottom of CHAT.
@@ -368,32 +371,33 @@ export function draw(s: State, frame: number, now = Date.now(), opt: { w?: numbe
   if (ui.mode === "run") {
     const iy = BY + BH - 2;
     const opts = ui.options ?? [];
-    let ox = 2;
+    let ox = CX0 + 2;
     if (opts.length && !ui.busy) {
       ox = scr.put(ox, iy - 1, "choose ", S.muted);
+      // Plain coloured text, no background: a background behind Thai text is what terminals misdraw.
       opts.forEach((o, i) => {
-        const label = ` ${i + 1} ${clip(o, 22)} `;
-        if (ox + width(label) > CW - 2) return;
-        ox = scr.put(ox, iy - 1, label, i === ui.pick ? chip(C.amber) : { fg: C.text, bg: C.track }) + 1;
+        const label = `${i === ui.pick ? "▸" : " "}${i + 1} ${clip(o, 24)}`;
+        if (ox + width(label) > CX0 + CW - 2) return;
+        ox = scr.put(ox, iy - 1, label, i === ui.pick ? S.amberB : o.startsWith("/open") ? S.cyan : S.text) + 2;
       });
     } else {
-      scr.put(2, iy - 1, clip(ui.hint ?? "", inner), S.dim);
+      scr.put(CX0 + 2, iy - 1, clip(ui.hint ?? "", inner), S.dim);
     }
-    scr.hline(1, CW - 2, iy - 2, "┄", S.line);
+    scr.hline(CX0 + 1, CX0 + CW - 2, iy - 2, "┄", S.line);
     if (ui.busy) {
-      scr.put(2, iy, `${spin} claude is working`, S.cyanB);
-      scr.put(CW - 2 - width("esc interrupt"), iy, "esc interrupt", S.dim);
+      scr.put(CX0 + 2, iy, `${spin} claude is working`, S.cyanB);
+      scr.put(CX0 + CW - 2 - width("esc interrupt"), iy, "esc interrupt", S.dim);
     } else {
       const text = ui.input ?? "";
       const cursor = Math.floor(frame) % 6 < 3 ? "▌" : " ";
       const tail = width(text) > inner - 4 ? "…" + [...text].slice(-(inner - 6)).join("") : text;
-      const ex = scr.put(2, iy, "❯ ", S.amberB);
+      const ex = scr.put(CX0 + 2, iy, "❯ ", S.amberB);
       const cx = scr.put(ex, iy, tail || "", S.textB);
       if (!text) scr.put(cx + 1, iy, "reply, or pick a number · ⏎ send · esc end", S.dim);
       scr.put(cx, iy, cursor, S.amberB);
     }
   } else {
-    scr.put(2, BY + BH - 2, ui.mode === "watch" ? "watching hooked sessions · q quit" : ui.mode === "replay" ? "replay · space pause · q quit" : "demo · q quit", S.dim);
+    scr.put(CX0 + 2, BY + BH - 2, ui.mode === "watch" ? "watching hooked sessions · q quit" : ui.mode === "replay" ? "replay · space pause · q quit" : "demo · q quit", S.dim);
   }
 
   // Conversation, newest at the bottom.
@@ -408,14 +412,14 @@ export function draw(s: State, frame: number, now = Date.now(), opt: { w?: numbe
   }
   const chatRows = chatBottom - BY;
   const visible = rows.slice(-chatRows);
-  if (!visible.length) scr.put(2, BY + 2, ui.mode === "run" ? "the conversation shows here" : "no conversation yet", S.dim);
+  if (!visible.length) scr.put(CX0 + 2, BY + 2, ui.mode === "run" ? "the conversation shows here" : "no conversation yet", S.dim);
   visible.forEach(([t, st], i) => {
     const y = BY + 1 + i;
     if (t.startsWith("\u0000")) {
       const tag = t.slice(1);
-      const tx = scr.put(2, y, tag === "you" ? "▍" : tag === "claude" ? "▍" : "▍", st);
+      const tx = scr.put(CX0 + 2, y, "▍", st);
       scr.put(tx + 1, y, tag, st);
-    } else scr.put(2, y, clip(t, inner), st);
+    } else scr.put(CX0 + 2, y, clip(t, inner), st);
   });
 
   // Feed
@@ -425,7 +429,7 @@ export function draw(s: State, frame: number, now = Date.now(), opt: { w?: numbe
     scr.put(FX + 2, y, hhmmss(l.t).slice(0, 8), S.dim);
     const [label, st] = badge(l.who, s);
     scr.put(FX + 11, y, " " + clip(label, 7).padEnd(7) + " ", st);
-    scr.put(FX + 21, y, clip(l.text.replace(/\s+/g, " "), FW - 23), l.who === "error" ? S.rose : S.text);
+    scr.put(FX + 21, y, clip(l.text.replace(/\s+/g, " "), FW - 23), l.who === "error" || l.who === "guard" ? S.rose : S.text);
   });
 
   // ── Status rail
