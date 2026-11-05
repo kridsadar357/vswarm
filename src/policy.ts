@@ -108,7 +108,7 @@ const CACHES = [
  * Claude Code settings for one swarm run: allow rules, deny rules for the blocked groups, extra folders, and the
  * sandbox, which is what actually stops traffic out (only `domains` are reachable) and writes outside the folders.
  */
-export function swarmSettings(blocked: Group[], domains: string[], dirs: string[]) {
+export function swarmSettings(blocked: Group[], domains: string[], dirs: string[], shotCommand?: string) {
   const sandboxed = process.platform !== "win32";
   return {
     permissions: {
@@ -123,6 +123,8 @@ export function swarmSettings(blocked: Group[], domains: string[], dirs: string[
             enabled: true,
             autoAllowBashIfSandboxed: true,
             allowUnsandboxedCommands: false,
+            // Chrome cannot start inside the sandbox; `vswarm shot` only opens local pages, so it runs outside.
+            excludedCommands: shotCommand ? [`${shotCommand} shot *`, "vswarm shot *"] : [],
             failIfUnavailable: true,
             // Package managers keep caches in the home folder; without these an install fails with EPERM.
             filesystem: { allowWrite: [...dirs, ...CACHES] },

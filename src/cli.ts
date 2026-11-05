@@ -17,6 +17,7 @@ import { homedir } from "node:os";
 import { activeDir, authStatus, loginHint, profiles } from "./claude";
 import type { Screen } from "./screen";
 import { runSession } from "./session";
+import { shot } from "./shot";
 import { ask, banner, c, canAsk, COMMANDS, completion, doctor, install, uninstall, update } from "./setup";
 import { apply, initial, type Stamped, type State } from "./state";
 import { board, type Key } from "./tui";
@@ -82,6 +83,7 @@ function usage() {
   row("vswarm emit '<event json>'", "post any event");
   row("vswarm snapshot [--html|--plain]", "print one demo frame");
   row("vswarm completions zsh|bash", "print a completion script");
+  row("vswarm shot <url|file> [--out f.png]", "screenshot a local page (WebGL works)");
   console.log(`\n  ${c.bold("run flags")}  ${c.dim("--model sonnet  --swarm haiku  --advisor opus | --no-advisor  --mode acceptEdits  --profile work")}`);
   console.log(`             ${c.dim("--cwd <dir>  --frames <dir>  -- <any claude flags>")}`);
   console.log(`             ${c.dim("--add-dir <dir> (repeatable)")}`);
@@ -414,6 +416,17 @@ async function main() {
     case "completions":
       process.stdout.write(completion(args[0] ?? "zsh"));
       return;
+
+    case "shot": {
+      const target = args.shift();
+      if (!target) throw new Error("usage: vswarm shot <localhost URL or file> [--out shot.png] [--size 1280x800] [--wait ms]");
+      const file = await shot(target, flag(args, "--out", "-o") ?? "shot.png", {
+        size: flag(args, "--size"),
+        wait: Number(flag(args, "--wait") ?? 5000),
+      });
+      console.log(file);
+      return;
+    }
 
     case "jev": {
       const q = flag(args, "--q") ?? "which option";

@@ -173,6 +173,7 @@ export const COMMANDS: [string, string][] = [
   ["uninstall", "remove launcher, PATH and hooks"],
   ["emit", "post an event to the board"],
   ["snapshot", "print one demo frame"],
+  ["shot", "screenshot a localhost page or local file"],
   ["help", "show help"],
 ];
 

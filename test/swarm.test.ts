@@ -362,3 +362,20 @@ describe("background swarm", () => {
     expect(draw(s, 0, 3).plain()).toContain("parts.js");
   });
 });
+
+import { localTarget } from "../src/shot";
+
+describe("vswarm shot", () => {
+  test("only local pages can be opened", () => {
+    expect(localTarget("http://localhost:5290/?t=0.5", "/")).toBe("http://localhost:5290/?t=0.5");
+    expect(localTarget("http://0.0.0.0:3000", "/")).toBe("http://localhost:3000");
+    expect(localTarget("https://example.com", "/")).toBeUndefined();
+    expect(localTarget("javascript:alert(1)", "/")).toBeUndefined();
+    expect(localTarget("package.json", join(import.meta.dir, ".."))).toStartWith("file://");
+    expect(localTarget("missing.html", "/")).toBeUndefined();
+  });
+  test("swarm settings let only the shot command leave the sandbox", () => {
+    const s: any = swarmSettings(["network"], [], [], "/home/u/.vswarm/bin/vswarm");
+    if (process.platform !== "win32") expect(s.sandbox.excludedCommands).toEqual(["/home/u/.vswarm/bin/vswarm shot *", "vswarm shot *"]);
+  });
+});

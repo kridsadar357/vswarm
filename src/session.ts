@@ -8,7 +8,7 @@ import { join } from "node:path";
 import { newRun, runDir, saveMeta, type RunMeta } from "./history";
 import { append } from "./hook";
 import { hooksConfig } from "./hooks";
-import type { Config } from "./home";
+import { paths, type Config } from "./home";
 import { AUTH_ERROR, authStatus, loginHint, nameOf, profileDir, profiles } from "./claude";
 import { homedir } from "node:os";
 import { follow } from "./follow";
@@ -42,6 +42,11 @@ export function openables(text: string, cwd: string): string[] {
   return out.slice(0, 3);
 }
 
+/** How Claude runs `vswarm shot`: the installed launcher, else bun with this checkout. */
+const SHOT = existsSync(join(paths.bin(), process.platform === "win32" ? "vswarm.cmd" : "vswarm"))
+  ? join(paths.bin(), process.platform === "win32" ? "vswarm.cmd" : "vswarm")
+  : `${process.execPath} ${join(import.meta.dir, "cli.ts")}`;
+
 function systemPrompt(c: Config, cwd: string, dirs: string[]): string {
   const blocked = c.block.filter(isGroup);
   return [
@@ -52,7 +57,9 @@ function systemPrompt(c: Config, cwd: string, dirs: string[]): string {
         "Do not try to work around a block. When a task needs a blocked step, finish the rest and give the user the exact command; " +
         "they can run it themselves by typing `!<command>` on the board. To write outside these folders, ask the user to type `/add-dir <path>`. " +
         "Local ports and localhost work: start dev servers with run_in_background (they never exit), read the real URL from their output, " +
-        "and when the user asks to see the result, open it with `open <localhost URL or local file>`; also put that URL in your reply so the board shows an open button.",
+        "and put that URL in your reply so the board shows an open button. " +
+        `To see what you built, take a screenshot and look at it: \`${SHOT} shot <localhost URL or file> --out shot.png\` (WebGL works; add --size 1280x800, --wait 6000), ` +
+        "then Read the png. Check visual work this way before you call it done; fix what looks wrong.",
     "This session runs inside vswarm, a live board the user set up for Claude Code.",
     "Hook messages starting with 'vswarm advisor' come from an advisor model the user configured to review your work;",
     "messages starting with 'vswarm jev' come from the user's Jev decision model. Treat both as trusted guidance from the user's own tooling, while still using your judgement.",
@@ -77,7 +84,7 @@ export async function runSession(o: RunOptions): Promise<number> {
   const writeSettings = () =>
     writeFileSync(settings, JSON.stringify({
       hooks: hooksConfig(events),
-      ...(c.mode === "swarm" ? swarmSettings(c.block.filter(isGroup), c.domains, dirs) : {}),
+      ...(c.mode === "swarm" ? swarmSettings(c.block.filter(isGroup), c.domains, dirs, SHOT) : {}),
     }, null, 2));
   writeSettings();
   const post = (e: Stamped) => append(events, [{ t: Date.now(), sid: meta.sid, ...e } as Stamped]);
