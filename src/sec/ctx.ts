@@ -31,6 +31,18 @@ export function blocked(dir: string): boolean {
   }
 }
 
+/** The login name. Bun reads it from $USER and says "unknown" without it (cron, containers); ask the system then. */
+export function whoami(): string {
+  const u = userInfo().username;
+  if (u && u !== "unknown") return u;
+  if (process.env.LOGNAME) return process.env.LOGNAME;
+  try {
+    const out = Bun.spawnSync(["id", "-un"], { stdout: "pipe", stderr: "ignore" }).stdout.toString().trim();
+    if (out) return out;
+  } catch {}
+  return u;
+}
+
 export async function run(cmd: string[], timeoutMs = 15_000): Promise<string | undefined> {
   try {
     if (!Bun.which(cmd[0]) && !existsSync(cmd[0])) return;
@@ -62,7 +74,7 @@ export function realCtx(): Ctx {
     run,
     system: true,
     host: hostname(),
-    user: userInfo().username,
+    user: whoami(),
   };
 }
 

@@ -107,6 +107,20 @@ function containment(f: Finding, ctx: Ctx, inc: Incident): { what: string; act?:
   if (!i) return [];
   switch (i.kind) {
     case "launch": {
+      const systemd = /\.(service|timer)$/.test(i.name);
+      if (systemd || i.name.endsWith(".desktop")) {
+        // Linux: systemd unit or XDG autostart entry.
+        if (i.source !== "user") return [{ what: `stop and quarantine system unit ${i.name}`, manual: `sudo systemctl disable --now ${i.name} && sudo mv "${i.path}" "${quarantine}/" && sudo systemctl daemon-reload` }];
+        return [{
+          what: `stop ${systemd ? "user unit" : "autostart entry"} ${i.name} and move it to quarantine`,
+          act: async () => {
+            if (systemd) await run(["systemctl", "--user", "disable", "--now", i.name], 10_000);
+            const r = await moveAway(i.path!);
+            if (systemd) await run(["systemctl", "--user", "daemon-reload"], 10_000);
+            return r;
+          },
+        }];
+      }
       if (i.source !== "user") return [{ what: `unload system job ${i.name}`, manual: `sudo launchctl bootout system "${i.path}" && sudo mv "${i.path}" "${quarantine}/"` }];
       const uid = process.getuid?.() ?? 501;
       return [{
@@ -151,6 +165,23 @@ function containment(f: Finding, ctx: Ctx, inc: Incident): { what: string; act?:
       return [{ what: `uninstall global npm package ${i.name}`, manual: i.source === "bun-global" ? `bun remove -g ${i.name}` : `npm uninstall -g ${i.name}` }];
     case "pip":
       return [{ what: `uninstall Python package ${i.name}`, manual: `python3 -m pip uninstall ${i.name}` }];
+    case "mcp": {
+      // Take the server out of the agent's config; the whole file before the change goes to the evidence.
+      const name = i.name.includes(" › ") ? undefined : i.name;
+      if (!name || !i.path || !i.path.endsWith(".json")) return [{ what: `remove MCP server ${i.name} from ${i.source}`, manual: `edit ${i.path} and delete the "${i.name}" entry` }];
+      return [{
+        what: `remove MCP server ${name} from ${i.path} (a copy is kept in the evidence)`,
+        act: async () => {
+          copyFileSync(i.path!, join(inc.dir, "evidence", `${basename(i.path!)}.before-cleanup`));
+          const j = JSON.parse(readFileSync(i.path!, "utf8"));
+          for (const key of ["mcpServers", "servers"]) if (j[key]?.[name]) delete j[key][name];
+          writeFileSync(i.path!, JSON.stringify(j, null, 2) + "\n");
+          return `removed ${name} from ${i.path}`;
+        },
+      }];
+    }
+    case "agent-hook":
+      return [{ what: `remove the hook ${i.name}`, manual: `edit ${i.path} and delete: ${String(i.meta?.command ?? "").slice(0, 80)}` }];
     case "browser-ext":
     case "editor-ext":
       return [{ what: `remove ${i.name} from ${i.source}`, manual: `remove it in ${i.source}'s extension settings` }];
@@ -190,7 +221,12 @@ export async function respond(ctx: Ctx, check: Check, ask: Ask, opt: { yes?: boo
     line(`  ${c.red("!")} a critical finding means the machine should be erased and reinstalled; the steps below only buy time`);
   }
   let any = false;
+  // One item can raise several findings (a new login job that also runs from ~/.cache); contain it once.
+  const done = new Set<string>();
   for (const f of serious) {
+    const k = f.item ? `${f.item.kind}|${f.item.id}` : f.id;
+    if (done.has(k)) continue;
+    done.add(k);
     for (const step of containment(f, ctx, inc)) {
       any = true;
       if (step.manual) {

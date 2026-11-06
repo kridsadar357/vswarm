@@ -6,7 +6,7 @@ import { ReadStream } from "node:tty";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { ensureHome, HOME, paths, VERSION } from "./home";
-import { files, loadBaseline, loadLock } from "./sec/store";
+import { files, loadBaseline, loadLock, recordManaged } from "./sec/store";
 import { GUARD_END, GUARD_START, guardBlock } from "./sec/pkg";
 import { fingerprints, PIN, secureUpdate } from "./sec/update";
 
@@ -16,7 +16,7 @@ export const ROOT = resolve(dirname(CLI), "..");
 const WIN = process.platform === "win32";
 
 // ── Printing
-const tty = process.stdout.isTTY;
+const tty = (process.stdout.isTTY || !!process.env.FORCE_COLOR) && !process.env.NO_COLOR;
 const paint = (code: string) => (t: string) => (tty ? `\x1b[${code}m${t}\x1b[0m` : t);
 export const c = {
   bold: paint("1"), dim: paint("2"), violet: paint("38;2;180;140;255"), cyan: paint("38;2;79;216;232"),
@@ -148,6 +148,7 @@ function setBlock(file: string, body: string | null, start = BLOCK_START, end = 
   if (next === old) return false;
   mkdirSync(dirname(file), { recursive: true });
   writeFileSync(file, next);
+  if (body !== null) recordManaged(block);
   return true;
 }
 
@@ -334,6 +335,7 @@ export async function gate(args: string[]) {
   const next = action === "ssh" ? `${sshGate(args, existsSync(launcherPath()) ? [launcherPath()] : [process.execPath, CLI], { cert })}\n\n${rest}\n` : `${rest}\n`;
   mkdirSync(dirname(cfgPath), { recursive: true, mode: 0o700 });
   writeFileSync(cfgPath, next, { mode: 0o600 });
+  recordManaged(next);
   ok(action === "ssh" ? `ssh gate added for ${args.join(", ")}` : "ssh gate removed", cfgPath);
   if (old) console.log(`  ${c.dim(`backup ${backup}`)}`);
   if (action === "ssh") console.log(`  ${c.dim("test it: ssh -G <a matching host> | grep -i proxycommand  (empty while preflight passes)")}`);
@@ -369,6 +371,25 @@ export async function guard(args: string[]) {
   } else console.log(`  ${c.dim("open a new terminal, or: unset -f npm npx pnpm yarn bun bunx pip pip3 uv uvx pipx brew")}`);
 }
 
+/**
+ * Blocks vswarm wrote before it kept their hashes (versions before 2.4) are recognised here when they are exactly
+ * what vswarm writes today, so scans stop reporting them. Anything that differs is left alone, and stays visible.
+ */
+export function adoptManagedBlocks() {
+  const known: string[] = [];
+  for (const { body } of rcFiles()) known.push(`${BLOCK_START}\n${body}\n${BLOCK_END}\n`);
+  if (existsSync(launcherPath())) known.push(guardBlock(launcherPath()) + "\n");
+  const sshCfg = join(homedir(), ".ssh", "config");
+  const cfg = existsSync(sshCfg) ? readFileSync(sshCfg, "utf8") : "";
+  const m = /Match originalhost (\S+) !exec "(.+) (preflight|cert) --quiet --host %h"/.exec(cfg);
+  if (m && existsSync(launcherPath())) {
+    const cert = m[3] === "cert" ? { key: join(HOME, "ca", "session"), cert: join(HOME, "ca", "session-cert.pub") } : undefined;
+    known.push(sshGate(m[1].split(","), [launcherPath()], { cert }));
+  }
+  const texts = [...rcFiles().map((r) => r.file), sshCfg].filter((f) => existsSync(f)).map((f) => readFileSync(f, "utf8"));
+  for (const block of known) if (texts.some((t) => t.includes(block.trimEnd()))) recordManaged(block);
+}
+
 // ── Commands
 export async function install(args: string[]) {
   const auto = args.includes("--yes") || args.includes("-y") || !canAsk();
@@ -395,6 +416,8 @@ export async function install(args: string[]) {
   if (!existsSync(PIN()) && (await fingerprints(join(ROOT, "trust", "allowed_signers"))).length) {
     await trust(["pin"]);
   }
+
+  adoptManagedBlocks();
 
   step("3  baseline");
   if (loadBaseline()) ok("baseline exists", files.baseline());
@@ -465,6 +488,7 @@ export async function update(args: string[] = []) {
   await run([process.execPath, "install", "--production"]);
   writeLauncher();
   writeCompletions();
+  adoptManagedBlocks();
   ok("launcher and completions refreshed\n");
 }
 

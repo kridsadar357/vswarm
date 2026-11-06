@@ -50,7 +50,7 @@ const yes = async (q: string, def = false) => {
 
 function usage() {
   banner("check your machine before it touches production");
-  const row = (cmd: string, desc: string) => console.log(`  ${c.cyan(cmd.padEnd(40))}${c.dim(desc)}`);
+  const row = (cmd: string, desc: string) => console.log(`  ${c.cyan(cmd.padEnd(46))}${c.dim(desc)}`);
   console.log(`  ${c.bold("check")}`);
   row("vswarm scan [--all] [--json]", "everything that can run code, persist or hold access");
   row("vswarm baseline", "record this machine as clean (after a scan you trust)");
@@ -107,11 +107,13 @@ async function main() {
       const auto = has(args, "--yes", "-y");
       const r = await check(realCtx(), { offline });
       summary(r, { title: "baseline check" });
-      if (r.lock) throw new Error(`incident ${r.lock.incident} is open; clean the machine, then record a baseline and vswarm unlock`);
+      // During an incident this is the step that records the cleaned machine; vswarm unlock needs it.
+      if (r.lock) line(c.amber(`\n  Incident ${r.lock.incident} is open. Record a baseline only once the machine is clean (best: reinstalled) and credentials are rotated.`));
       const serious = r.findings.filter((f) => RANK[f.severity] >= RANK.high);
       if (serious.length) line(c.red(`\n  ${serious.length} serious finding${serious.length > 1 ? "s" : ""} above. A baseline taken now treats them as normal.`));
       const count = r.scan.items.filter((i) => i.kind !== "proc" && i.kind !== "conn").length;
-      const ok = auto || (await yes(`\n  Record this machine (${count} items) as the clean baseline?`, !serious.length));
+      if (!auto) line("");
+      const ok = auto || (await yes(`Record this machine (${count} items) as the clean baseline?`, !serious.length));
       if (!ok) return line(c.dim("  not recorded"));
       saveBaseline(forBaseline(r.scan));
       line(`  ${c.green("✔")} baseline recorded ${c.dim(files.baseline())}`);

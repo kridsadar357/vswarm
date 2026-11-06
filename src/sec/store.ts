@@ -6,6 +6,7 @@
 //   incidents/<id>/ evidence, quarantine and reports of one incident
 //   osv-cache.json  answers from the known-malicious database
 
+import { createHash } from "node:crypto";
 import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { HOME } from "../home";
@@ -20,6 +21,7 @@ export const files = {
   lock: () => join(SEC(), "lock"),
   incidents: () => join(SEC(), "incidents"),
   osv: () => join(SEC(), "osv-cache.json"),
+  managed: () => join(SEC(), "managed.json"),
 };
 
 export function ensureSec(): string {
@@ -72,3 +74,20 @@ export interface Lock {
 export const loadLock = () => read<Lock>(files.lock());
 export const setLock = (l: Lock) => writePrivate(files.lock(), l);
 export const clearLock = () => rmSync(files.lock(), { force: true });
+
+// Blocks vswarm writes into your files (PATH in ~/.zshrc, the ssh gate, the install guard, canaries). Their hashes
+// are kept so a scan does not report vswarm's own lines as a change. A block that differs by one character from what
+// vswarm wrote is not recognised, and is checked like any other line.
+const BLOCK = /# >>> vswarm[^\n]*>>>\n[\s\S]*?# <<< vswarm[^\n]*<<<\n?/g;
+const blockHash = (b: string) => createHash("sha256").update(b.trim()).digest("hex");
+
+export function recordManaged(text: string) {
+  const m = read<Record<string, number>>(files.managed()) ?? {};
+  for (const b of text.match(BLOCK) ?? []) m[blockHash(b)] = Date.now();
+  writePrivate(files.managed(), m);
+}
+
+export function stripManaged(text: string): string {
+  const m = read<Record<string, number>>(files.managed()) ?? {};
+  return text.replace(BLOCK, (b) => (m[blockHash(b)] ? "" : b));
+}

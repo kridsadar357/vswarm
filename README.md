@@ -16,6 +16,8 @@ access (ssh, AWS, Kubernetes) from a machine that does not pass.
 
 <sub>Output from the test runs: `test/fixtures/fake-interview` (harmless imitation) and the selftest's planted Homebrew tap.</sub>
 
+**Full guide with screenshots:** [docs/guide.md](docs/guide.md) · [คู่มือภาษาไทย](docs/guide.th.md)
+
 ## Install
 
 macOS and Linux. Needs [Bun](https://bun.sh) and git; on Linux, `vswarm try` also needs bubblewrap and strace

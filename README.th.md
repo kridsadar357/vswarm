@@ -8,6 +8,9 @@ npm package ชื่อเลียนแบบ โค้ดอันตรา�
 vswarm อยู่ตรงก่อนขั้นสุดท้ายนั้น มันจำว่าเครื่องตอนสะอาดหน้าตาเป็นยังไง บอกว่าอะไรเปลี่ยนไป
 หา credential อายุยาวที่น่าขโมย และไม่ยอมปล่อยสิทธิ์เข้า production (ssh, AWS, Kubernetes) จากเครื่องที่ตรวจไม่ผ่าน
 
+
+**คู่มือฉบับเต็มพร้อมภาพ:** [docs/guide.th.md](docs/guide.th.md) · [English](docs/guide.md)
+
 ## ติดตั้ง
 
 ใช้ได้ทั้ง macOS และ Linux ต้องมี [Bun](https://bun.sh) และ git บน Linux ถ้าจะใช้ `vswarm try` ต้องลง bubblewrap และ strace ด้วย (`sudo apt install bubblewrap strace`)

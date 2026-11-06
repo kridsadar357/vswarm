@@ -6,9 +6,9 @@
 // passphrase you type, or lives on a hardware key (ed25519-sk) that needs a touch.
 
 import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { userInfo } from "node:os";
 import { join } from "node:path";
 import { HOME } from "../home";
+import { whoami } from "./ctx";
 
 export const CA_DIR = () => process.env.VSWARM_CA_DIR ?? join(HOME, "ca");
 
@@ -29,9 +29,9 @@ export interface CaConfig {
 
 export function loadCaConfig(): CaConfig {
   try {
-    return { principals: [userInfo().username], ttl: "15m", ...JSON.parse(readFileSync(caFiles.config(), "utf8")) };
+    return { principals: [whoami()], ttl: "15m", ...JSON.parse(readFileSync(caFiles.config(), "utf8")) };
   } catch {
-    return { principals: [userInfo().username], ttl: "15m" };
+    return { principals: [whoami()], ttl: "15m" };
   }
 }
 
@@ -49,14 +49,14 @@ async function sh(cmd: string[], opt: { tty?: boolean } = {}): Promise<{ code: n
 export async function caInit(opt: { sk?: boolean; noPassphrase?: boolean; principals?: string[]; ttl?: string }) {
   if (existsSync(caFiles.key())) throw new Error(`a CA already exists: ${caFiles.key()}`);
   mkdirSync(CA_DIR(), { recursive: true, mode: 0o700 });
-  const cmd = ["ssh-keygen", "-t", opt.sk ? "ed25519-sk" : "ed25519", "-f", caFiles.key(), "-C", `vswarm CA ${userInfo().username} ${new Date().toISOString().slice(0, 10)}`];
+  const cmd = ["ssh-keygen", "-t", opt.sk ? "ed25519-sk" : "ed25519", "-f", caFiles.key(), "-C", `vswarm CA ${whoami()} ${new Date().toISOString().slice(0, 10)}`];
   // Without a passphrase anyone who can read the file can sign; only for tests and throwaway setups.
   if (opt.noPassphrase) cmd.push("-N", "");
   if (opt.sk) cmd.push("-O", "application=ssh:vswarm-ca");
   const r = await sh(cmd, { tty: true });
   if (r.code !== 0) throw new Error("ssh-keygen could not create the CA key");
   chmodSync(caFiles.key(), 0o600);
-  const cfg: CaConfig = { principals: opt.principals?.length ? opt.principals : [userInfo().username], ttl: opt.ttl ?? "15m" };
+  const cfg: CaConfig = { principals: opt.principals?.length ? opt.principals : [whoami()], ttl: opt.ttl ?? "15m" };
   writeFileSync(caFiles.config(), JSON.stringify(cfg, null, 2) + "\n", { mode: 0o600 });
   return cfg;
 }
@@ -97,7 +97,7 @@ export async function issue(opt: { host?: string; minLeft?: number; quiet?: bool
   rmSync(caFiles.cert(), { force: true });
   const gen = await sh(["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-C", `vswarm session ${new Date().toISOString()}`, "-f", caFiles.session()]);
   if (gen.code !== 0) throw new Error(`could not make a session key: ${gen.err.trim()}`);
-  const id = `vswarm:${userInfo().username}@${opt.host ?? "any"}:${new Date().toISOString()}`;
+  const id = `vswarm:${whoami()}@${opt.host ?? "any"}:${new Date().toISOString()}`;
   const sign = await sh([
     "ssh-keygen", "-q", "-s", caFiles.key(), "-I", id, "-n", cfg.principals.join(","), "-V", `-1m:+${cfg.ttl}`,
     "-O", "no-x11-forwarding", "-O", "no-agent-forwarding",

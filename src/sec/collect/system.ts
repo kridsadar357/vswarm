@@ -5,6 +5,7 @@
 import { lstatSync, readlinkSync } from "node:fs";
 import { join } from "node:path";
 import { fileHash, ls, mtime, readText, sha256, type Ctx } from "../ctx";
+import { stripManaged } from "../store";
 import type { Item } from "../types";
 
 export async function launchd(ctx: Ctx): Promise<Item[]> {
@@ -91,8 +92,10 @@ export async function startupFiles(ctx: Ctx): Promise<{ items: Item[]; texts: Re
   const texts: Record<string, string> = {};
   for (const rel of RC_FILES) {
     const path = join(ctx.home, rel);
-    const t = readText(path, 1_000_000);
-    if (t === undefined) continue;
+    const raw = readText(path, 1_000_000);
+    if (raw === undefined) continue;
+    // vswarm's own blocks (PATH, gate, guard, canaries) are left out, exactly as vswarm wrote them.
+    const t = stripManaged(raw);
     // Credentials in .npmrc are never stored; only the fact that the file changed.
     const keep = rel !== ".npmrc";
     items.push({ kind: rel.startsWith(".ssh/") ? "ssh" : "rc", id: rel, name: rel, path, hash: sha256(t), meta: { lines: t.split("\n").length } });

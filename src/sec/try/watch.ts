@@ -149,8 +149,10 @@ export function behaviour(d: Denial[] | undefined, planted: ReturnType<typeof pl
   const keychain = (d ?? []).filter((x) => (x.op === "mach-lookup" && /SecurityServer|securityd|pasteboard|appleevents|tccd/.test(x.target)) ||
     (x.op === "unix-connect" && /bus|keyring|docker\.sock|ssh|gnupg|gpg-agent|containerd|podman/.test(x.target)));
   if (keychain.length) add("services", "high", "Tried to reach the keychain, clipboard, agents or other apps", keychain.slice(0, 6).map((k) => `${k.target} (${k.proc})`));
-  const direct = (d ?? []).filter((x) => x.op.startsWith("network-outbound") && !/mDNSResponder/.test(x.target));
-  const dns = (d ?? []).some((x) => x.op.startsWith("network-outbound") && /mDNSResponder/.test(x.target));
+  // DNS: macOS asks mDNSResponder; Linux connects to the resolver on port 53.
+  const isDns = (x: Denial) => /mDNSResponder/.test(x.target) || /:53$/.test(x.target);
+  const direct = (d ?? []).filter((x) => x.op.startsWith("network-outbound") && !isDns(x));
+  const dns = (d ?? []).some((x) => x.op.startsWith("network-outbound") && isDns(x));
   const detached = (d ?? []).filter((x) => x.op === "setsid");
   if (detached.length) add("detached", "medium", "Started a background process that detaches from the terminal (ended with the sandbox)", detached.slice(0, 5).map((x) => `${x.proc} (pid ${x.pid} inside)`));
   for (const p of planted) add(`planted:${p.path}`, p.severity, `${p.why}: ~/${p.path}`, []);
@@ -161,7 +163,7 @@ export function behaviour(d: Denial[] | undefined, planted: ReturnType<typeof pl
   if (rawIp.length) add("net-ip", "high", `Tried to contact raw IP addresses`, rawIp.map((n) => `${n.host}${n.port ? ":" + n.port : ""} via ${n.via}`));
   const named = blocked.filter((n) => !rawIp.includes(n));
   if (named.length) add("net-host", "medium", `Tried to contact ${named.length} host${named.length > 1 ? "s" : ""} (blocked)`, named.slice(0, 10).map((n) => `${n.host}${n.port ? ":" + n.port : ""} via ${n.via}`));
-  if (direct.length || (dns && !blocked.length)) add("net-direct", "medium", "Tried to open network connections directly, around the proxy", direct.slice(0, 6).map((x) => `${x.target} (${x.proc})`).concat(dns ? ["DNS lookups (blocked)"] : []));
+  if (direct.length || (dns && !blocked.length)) add("net-direct", "medium", "Tried to open network connections directly, around the proxy", direct.slice(0, 6).map((x) => `${x.target}${x.proc === "?" ? "" : ` (${x.proc})`}`).concat(dns ? ["DNS lookups (blocked)"] : []));
   const allowed = net.filter((n) => n.allowed);
   if (allowed.length) add("net-allowed", "info", `Reached ${allowed.length} allowed host${allowed.length > 1 ? "s" : ""}`, allowed.map((n) => n.host));
   return out;

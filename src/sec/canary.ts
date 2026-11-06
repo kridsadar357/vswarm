@@ -9,7 +9,7 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
-import { files, writePrivate } from "./store";
+import { files, recordManaged, writePrivate } from "./store";
 
 export interface Canary {
   id: string;
@@ -47,6 +47,7 @@ function append(path: string, id: string, body: string, opt: { top?: boolean } =
   const block = `${START(id)}\n${body.trimEnd()}\n${END(id)}\n`;
   const next = opt.top ? `${block}\n${old}` : `${old.trimEnd()}${old.trim() ? "\n\n" : ""}${block}`;
   writeFileSync(path, next, { mode: 0o600 });
+  recordManaged(block);
 }
 
 function strip(path: string, id: string) {

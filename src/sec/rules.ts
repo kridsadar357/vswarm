@@ -186,7 +186,8 @@ export async function evaluate(input: RuleInput): Promise<Finding[]> {
           const lines = addedLines(baseline.texts[i.id], scan.texts[i.id]);
           const risky = lines.filter((l) => RISKY_LINE.test(l));
           const authKeys = i.id === ".ssh/authorized_keys";
-          const sev: Severity = authKeys || risky.length || i.kind === "cron" ? "high" : "medium";
+          // Only lines removed: less risky than anything added, but still a change you should recognise.
+          const sev: Severity = authKeys || risky.length || i.kind === "cron" ? "high" : lines.length ? "medium" : "low";
           add({ id: `file:${i.id}:${i.hash?.slice(0, 12)}`, rule: "startup-file", severity: sev,
             title: authKeys ? "~/.ssh/authorized_keys changed: someone may have added a way to log in" : `${i.id === "crontab" ? "crontab" : i.name.startsWith("/") ? i.name : "~/" + i.name} changed`,
             detail: (risky.length ? risky : lines).slice(0, 6).map((l) => `+ ${l.slice(0, 160)}`).concat(lines.length > 6 ? [`… ${lines.length - 6} more added lines`] : []),
