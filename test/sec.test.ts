@@ -216,11 +216,13 @@ describe("linux sandbox", () => {
       `7 connect(5, {sa_family=AF_INET, sin_port=htons(1224), sin_addr=inet_addr("203.0.113.9")}, 16) = -1 ENETUNREACH (Network is unreachable)`,
       `7 connect(6, {sa_family=AF_INET, sin_port=htons(3128), sin_addr=inet_addr("127.0.0.1")}, 16) = 0`,
       `7 connect(8, {sa_family=AF_UNIX, sun_path="/run/user/1000/bus"}, 110) = -1 ENOENT (No such file or directory)`,
+      `7 openat(AT_FDCWD, "/home/u/.vswarm/try/x/home/.aws/credentials", O_RDONLY) = -1 ENOENT (No such file or directory)`,
+      `7 openat(AT_FDCWD, "/home/u/.vswarm/try/x/home/.npmrc", O_RDONLY) = -1 ENOENT (No such file or directory)`,
       `9 setsid()                         = 9`,
       `9 execve("/usr/bin/sleep", ["sleep", "20"], 0x7ffd /* 20 vars */) = 0`,
     ].join("\n"));
     expect(traceDenials(log, "/home/u", box).map((x: any) => `${x.op} ${x.target}`)).toEqual([
-      "file-read /home/u/.ssh/id_ed25519", "file-write /etc/cron.d/x", "file-write /home/u/.config/autostart/x.desktop", "network-outbound 203.0.113.9:1224", "unix-connect /run/user/1000/bus", "setsid sleep",
+      "file-read /home/u/.ssh/id_ed25519", "file-write /etc/cron.d/x", "file-write /home/u/.config/autostart/x.desktop", "network-outbound 203.0.113.9:1224", "unix-connect /run/user/1000/bus", "file-read /home/u/.aws/credentials", "setsid sleep",
     ]);
   });
 

@@ -75,6 +75,9 @@ export function inner(box: Box, bun: string, command: string[], strace?: string)
   return ["/bin/sh", "-c", script, bun, ...command];
 }
 
+/** In the fake home, only what nothing but a thief reads. */
+const FAKE_HOME_LOOT = /^\/\.ssh\/id_|^\/\.ssh\/.*\.pem$|^\/\.aws\/credentials$|^\/\.config\/(google-chrome|chromium|BraveSoftware|microsoft-edge)\/|^\/\.mozilla\/|^\/\.config\/(Exodus|Electrum|atomic)\/|^\/\.electrum\/|^\/\.local\/share\/keyrings\/|^\/\.gnupg\/private|^\/\.(bash|zsh)_history$|^\/Library\/(Keychains|Application Support\/(Google|BraveSoftware|Exodus))/;
+
 /** What the run tried, from strace's log, in the same shape as the macOS sandbox log. */
 export function traceDenials(log: string, realHome: string, box: Box): Denial[] {
   let text = "";
@@ -115,7 +118,16 @@ export function traceDenials(log: string, realHome: string, box: Box): Denial[] 
     }
     // The first quoted argument is the path for every %file call strace prints.
     const path = /"([^"]*)"/.exec(args)?.[1];
-    if (!path || !path.startsWith("/") || path.startsWith(box.dir)) continue;
+    if (!path || !path.startsWith("/")) continue;
+    if (path.startsWith(box.home + "/")) {
+      // The code cannot tell the home is fake: going for keys, cloud credentials, browser or wallet data there is the
+      // same intent. Config files every tool reads (.npmrc, .netrc, .ssh/config, .gitconfig) are left out.
+      const rel = path.slice(box.home.length);
+      if (/^\/(open|openat|openat2|access|faccessat2?|stat|lstat|newfstatat|statx)$/.test("/" + call) && FAKE_HOME_LOOT.test(rel))
+        add({ proc: `${proc}, via $HOME`, pid, op: "file-read", target: realHome + rel });
+      continue;
+    }
+    if (path.startsWith(box.dir)) continue;
     const writes = /^(mkdir|mkdirat|unlink|unlinkat|rename|renameat2?|creat|symlink|symlinkat|link|linkat|chmod|fchmodat|chown|truncate|utimensat)$/.test(call) ||
       (/^open/.test(call) && /O_(WRONLY|RDWR|CREAT|TRUNC|APPEND)/.test(args));
     if (writes) {
