@@ -432,6 +432,17 @@ export async function checkInstall(p: Plan, opt: { get?: Fetcher; offline?: bool
  * something to say (one dim line on a terminal otherwise) and returns the exit code: 3 stops the install.
  */
 export async function pkgCommand(tool: string, args: string[], opt: { offline: boolean; ask: (q: string, def?: boolean) => Promise<boolean> }): Promise<number> {
+  try {
+    return await pkgCheck(tool, args, opt);
+  } catch (e: any) {
+    // Fail closed: the shell wrapper installs only on exit 0. Say so, or the user sees an error and wonders what happened.
+    line(`${c.red("✖")} ${e?.message ?? e}`);
+    line(c.dim(`  vswarm could not check this install; nothing was installed · skip vswarm once with: command ${tool} …`));
+    return 4;
+  }
+}
+
+async function pkgCheck(tool: string, args: string[], opt: { offline: boolean; ask: (q: string, def?: boolean) => Promise<boolean> }): Promise<number> {
   const p = plan(tool, args);
   if (p.skip) return 0;
   const r = await checkInstall(p, { offline: opt.offline });

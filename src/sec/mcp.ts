@@ -11,7 +11,7 @@ import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { VERSION } from "../home";
-import { readJson } from "./ctx";
+import { readJson, redact, reEscape, sha256 } from "./ctx";
 import { c, finding as printFinding, line } from "./print";
 import { canSandbox, sandboxSpawn } from "./try/spawn";
 import { SEC, writePrivate } from "./store";
@@ -72,8 +72,9 @@ export function judgeTools(i: Item, tools: Tool[], others: Set<string>): Finding
   for (const t of tools) {
     const text = toolText(t);
     const hits = CHECKS.filter(([re]) => re.test(text));
-    // A tool that names another server's tools is trying to steer calls it does not own.
-    const shadow = [...others].filter((o) => o.length > 3 && o !== t.name && new RegExp(`\\b${o.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`).test(t.description ?? ""));
+    // A tool that names another server's tools is trying to steer calls it does not own. Tool names may start or end
+    // with "." or "-", where \b would not match; the boundary is spelled out instead.
+    const shadow = [...others].filter((o) => o.length > 3 && o !== t.name && new RegExp(`(?<![\\w.-])${reEscape(o)}(?![\\w-])`).test(t.description ?? ""));
     if (!hits.length && !shadow.length && text.length < 4000) continue;
     const sev: Severity = hits.some(([, s]) => s === "high") || shadow.length ? "high" : hits.some(([, s]) => s === "medium") || text.length >= 4000 ? "medium" : "low";
     const reasons = [...hits.map(([, , why]) => why), ...(shadow.length ? [`mentions tools of other servers: ${shadow.slice(0, 4).join(", ")} (tool shadowing)`] : []), ...(text.length >= 4000 ? [`is unusually long (${text.length} characters)`] : [])];
@@ -162,7 +163,7 @@ async function inspectHttp(url: string, headers: Record<string, string>): Promis
 }
 
 /** stdio: newline-delimited JSON-RPC over the process's stdin/stdout. */
-async function inspectStdio(cmd: string[], env: Record<string, string>, sandbox: boolean): Promise<{ tools: Tool[]; hosts: string[] }> {
+async function inspectStdio(cmd: string[], env: Record<string, string>, sandbox: boolean, timeoutMs: number): Promise<{ tools: Tool[]; hosts: string[] }> {
   const sb = sandbox ? await sandboxSpawn(cmd, { net: "registries", env }) : undefined;
   const proc = sb?.proc ?? Bun.spawn(cmd, { env: { ...process.env, ...env } as Record<string, string>, stdin: "pipe", stdout: "pipe", stderr: "pipe" });
   const waiting = new Map<number, (m: any) => void>();
@@ -198,7 +199,7 @@ async function inspectStdio(cmd: string[], env: Record<string, string>, sandbox:
       return new Promise((done, fail) => {
         if (ended) return fail(new Error("the server exited"));
         // npx/uvx may download the server first.
-        const timer = setTimeout(() => fail(new Error("no answer within 90 s")), 90_000);
+        const timer = setTimeout(() => fail(new Error(`no answer within ${Math.round(timeoutMs / 1000)} s`)), timeoutMs);
         waiting.set(msg.id, (m) => {
           clearTimeout(timer);
           if (m === undefined) fail(new Error(`the server exited${stderr.trim() ? `: ${stderr.trim().split("\n").at(-1)!.slice(0, 160)}` : ""}`));
@@ -235,7 +236,23 @@ function expand(o: Record<string, string> | undefined): Record<string, string> {
   return out;
 }
 
-export async function inspect(i: Item, opt: { sandbox: boolean }): Promise<Inspection> {
+/** Two agent entries are one server only when command, args, env and headers all match (hashed: env holds secrets). */
+function defKey(i: Item): string {
+  try {
+    const d = definition(i);
+    return d ? sha256(JSON.stringify({ c: d.command ?? "", a: d.args ?? [], u: d.url ?? "", e: d.env ?? {}, h: d.headers ?? {} })) : i.id;
+  } catch {
+    return i.id;
+  }
+}
+
+export interface InspectOpt {
+  sandbox: boolean;
+  /** How long to wait for a stdio server's answer (npx/uvx may download it first). */
+  timeoutMs?: number;
+}
+
+export async function inspect(i: Item, opt: InspectOpt): Promise<Inspection> {
   try {
     const def = definition(i);
     if (!def) return { item: i, error: "no command or URL in its config" };
@@ -246,7 +263,7 @@ export async function inspect(i: Item, opt: { sandbox: boolean }): Promise<Inspe
     if (!def.command) return { item: i, error: "no command" };
     const sandboxed = opt.sandbox && canSandbox();
     if (opt.sandbox && !sandboxed) return { item: i, error: "no sandbox on this system (macOS sandbox-exec or Linux bubblewrap); --no-sandbox runs it directly" };
-    const r = await inspectStdio([def.command, ...(def.args ?? [])], expand(def.env), sandboxed);
+    const r = await inspectStdio([def.command, ...(def.args ?? [])], expand(def.env), sandboxed, opt.timeoutMs ?? 90_000);
     return { item: i, tools: r.tools, hosts: r.hosts, sandboxed };
   } catch (e: any) {
     return { item: i, error: String(e?.message ?? e) };
@@ -254,14 +271,14 @@ export async function inspect(i: Item, opt: { sandbox: boolean }): Promise<Inspe
 }
 
 /** `vswarm agents --inspect`: every MCP server the scan found, inspected, judged and pinned. Returns the exit code. */
-export async function inspectAll(servers: Item[], opt: { sandbox: boolean; show: boolean }): Promise<number> {
-  const { sandbox, show } = opt;
+export async function inspectAll(servers: Item[], opt: InspectOpt & { show: boolean }): Promise<number> {
+  const { sandbox, show, timeoutMs } = opt;
   line(`${c.violet("▼ vswarm agents --inspect")} ${c.dim(`· ${servers.length} MCP servers · ${sandbox ? "stdio servers run in the sandbox (no home, registries only)" : "stdio servers run directly (--no-sandbox)"}`)}`);
-  // The same server is often configured in several agents; start it once.
+  // The same server is often configured in several agents; start it once (same env too: it may change what it does).
   const byDef = new Map<string, Promise<Inspection>>();
   const results = await Promise.all(servers.map((i) => {
-    const k = String(i.meta?.url ?? i.meta?.command ?? i.id);
-    if (!byDef.has(k)) byDef.set(k, inspect(i, { sandbox }));
+    const k = defKey(i);
+    if (!byDef.has(k)) byDef.set(k, inspect(i, { sandbox, timeoutMs }));
     return byDef.get(k)!.then((r) => ({ ...r, item: i }));
   }));
   const allTools = new Map<string, string>();
@@ -271,7 +288,8 @@ export async function inspectAll(servers: Item[], opt: { sandbox: boolean; show:
   for (const r of results) {
     const label = `${r.item.name} ${c.dim(`(${r.item.source})`)}`;
     if (!r.tools) {
-      line(`  ${c.dim("·")} ${label}  ${c.dim(`not inspected: ${r.error}`)}`);
+      // The error may quote the server's URL or its last stderr line, either of which can carry a token.
+      line(`  ${c.dim("·")} ${label}  ${c.dim(`not inspected: ${redact(r.error ?? "")}`)}`);
       continue;
     }
     const others = new Set([...allTools].filter(([, id]) => id !== r.item.id).map(([n]) => n));

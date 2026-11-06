@@ -11,7 +11,7 @@ import { c, finding as printFinding, line } from "../print";
 import { RANK, verdictOf, type Finding, type Verdict } from "../types";
 import { allowedBy, startProxy } from "./proxy";
 import { bwrapArgs, FORWARDER, freshProc, inner, INNER_PORT, traceDenials } from "./linux";
-import { cleanEnv, profile, toolchains, type Box } from "./sandbox";
+import { cleanEnv, listeningPorts, profile, toolchains, type Box } from "./sandbox";
 import { staticCheck } from "./static";
 import { behaviour, denials, network, plantedFiles } from "./watch";
 
@@ -92,7 +92,7 @@ async function leftovers(rootPid: number, box: Box, seen: Set<number>): Promise<
   return rows.filter((r) => r.pid !== process.pid && r.pid !== rootPid && (kids.has(r.pid) || seen.has(r.pid) || r.command.includes(box.dir)));
 }
 
-export async function tryIt(source: string, command: string[], opt: { net: Net; ask: (q: string) => Promise<boolean>; yes?: boolean; quiet?: boolean }): Promise<TryResult> {
+export async function tryIt(source: string, command: string[], opt: { net: Net; ask: (q: string) => Promise<boolean>; yes?: boolean; quiet?: boolean; localhost?: boolean }): Promise<TryResult> {
   const linux = process.platform === "linux";
   const bwrap = linux ? Bun.which("bwrap") : undefined;
   const strace = linux ? Bun.which("strace") ?? undefined : undefined;
@@ -124,7 +124,7 @@ export async function tryIt(source: string, command: string[], opt: { net: Net; 
   const sh = [process.env.SHELL, "/bin/zsh", "/bin/bash", "/bin/sh"].find((x) => x && existsSync(x))!;
   const cmd = shell ? [sh, "-i"] : command;
   const serious = staticFindings.some((f) => RANK[f.severity] >= RANK.high);
-  line(`\n${c.bold("2  run in the sandbox")} ${c.dim(`· network: ${opt.net === "none" ? "blocked (attempts recorded)" : opt.net === "registries" ? "package registries only" : "open, every host recorded"} · no access to your home, keychain or clipboard`)}`);
+  line(`\n${c.bold("2  run in the sandbox")} ${c.dim(`· network: ${opt.net === "none" ? "blocked (attempts recorded)" : opt.net === "registries" ? "package registries only" : "open, every host recorded"}${opt.localhost ? (linux ? " · --localhost changes nothing on Linux (the sandbox has its own network)" : " · your localhost services reachable (--localhost)") : ""} · no access to your home, keychain or clipboard`)}`);
   if (serious && !opt.yes && !(await opt.ask(`  ${c.red("This code has red flags above.")} Run it in the sandbox to see what it does?`))) {
     line(c.dim("  not run · the copy stays in " + box.work));
     return { box, source: what, command: cmd, exit: null, staticFindings, runFindings: [], verdict: verdictOf(staticFindings), leftovers: [], logRead: false };
@@ -139,8 +139,11 @@ export async function tryIt(source: string, command: string[], opt: { net: Net; 
     argv = [bwrap!, ...bwrapArgs(homedir(), box, { tools: toolchains(homedir()), bun: process.execPath, interactive: shell, hostProc }), "--", ...inner(box, process.execPath, cmd, strace)];
     writeFileSync(join(dir, "sandbox.json"), JSON.stringify(argv, null, 1) + "\n");
   } else {
+    // Services already listening on this machine (databases, the Docker API, dev servers) are denied one by one;
+    // --localhost keeps them reachable. Linux needs nothing here: bubblewrap gives the sandbox its own network namespace.
+    const hidden = opt.localhost ? [] : await listeningPorts();
     const profilePath = join(dir, "sandbox.sb");
-    writeFileSync(profilePath, profile(homedir(), box, proxy.port));
+    writeFileSync(profilePath, profile(homedir(), box, proxy.port, [], hidden));
     argv = ["/usr/bin/sandbox-exec", "-f", profilePath, ...cmd];
   }
   const t0 = Date.now();

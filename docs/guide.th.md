@@ -329,6 +329,8 @@ vswarm try setup.zip                              # zip, tar.gz หรือไ�
 | home | home ปลอม ไม่มี token ใน environment | เหมือนกัน |
 | network | ออกได้ผ่าน proxy ของ vswarm เท่านั้น ทุก host ถูกบันทึก | เหมือนกัน |
 
+บริการที่เครื่องคุณเปิดรออยู่แล้ว (ฐานข้อมูล, Docker API, dev server ของคุณ) ก็เข้าไม่ถึงเช่นกัน: บน macOS ทุก port ที่เปิดรอจะถูกปฏิเสธทีละ port ส่วน Linux sandbox มี network ของตัวเอง; ใช้ `vswarm try … --localhost` เมื่อต้องการทดสอบโค้ดกับ server ที่คุณรันเองบน macOS
+
 ผลลัพธ์: **DANGEROUS** (อย่ารันนอก sandbox) · **SUSPICIOUS** (อ่านก่อนรันจริง) · **NOTHING SEEN** (ไม่เจออะไรในรอบนี้ ไม่ใช่การรับประกัน) · **INCONCLUSIVE** (คำสั่งล้มก่อนจบ)
 
 รายงานอยู่ที่ `~/.vswarm/try/<id>/report.md` ดูรายการด้วย `vswarm try --list` ลบด้วย `vswarm try --clean`
@@ -423,7 +425,7 @@ vswarm trust           # กุญแจที่เครื่องนี้�
 | `vswarm diff` | สิ่งที่เปลี่ยนจาก baseline |
 | `vswarm secrets` | credential อายุยาว (ไม่แสดงค่า) |
 | `vswarm agents` | MCP server, hook, permission ของ AI agent |
-| `vswarm agents --inspect [--show] [--no-sandbox]` | เริ่ม MCP server ใน sandbox อ่านและ pin tool |
+| `vswarm agents --inspect [--show] [--no-sandbox] [--timeout s]` | เริ่ม MCP server ใน sandbox อ่านและ pin tool |
 | `vswarm watch on [--every นาที]` · `off` · `status` · `run` | ตรวจเบื้องหลังพร้อมแจ้งเตือน |
 | `vswarm preflight [--quiet] [--strict] [--fresh] [--max-age s] [--then cmd…]` | ด่าน PASS/WARN/BLOCK |
 | `vswarm gate ssh <pattern…> [--cert]` · `gate status` · `gate remove` | ด่านใน `~/.ssh/config` |
@@ -431,7 +433,7 @@ vswarm trust           # กุญแจที่เครื่องนี้�
 | `vswarm cert [--host h]` | ขอใบรับรองอายุสั้น (เฉพาะตอนผ่าน) |
 | `vswarm guard on` · `off` · `status` | ด่านตรวจ package ใน shell |
 | `vswarm pkg <tool> [--] <args…>` | ตรวจคำสั่งติดตั้งเอง exit 3 เมื่อควรหยุด |
-| `vswarm try <target> [--net none\|registries\|all] [--yes] [-- cmd…]` · `--list` · `--clean [id]` | รันโค้ดใน sandbox |
+| `vswarm try <target> [--net none\|registries\|all] [--localhost] [--yes] [-- cmd…]` · `--list` · `--clean [id]` | รันโค้ดใน sandbox |
 | `vswarm respond [--yes] [--force]` | รับมือเหตุการณ์ |
 | `vswarm report [incident]` | เขียนรายงานใหม่ |
 | `vswarm unlock [--force]` | ปิดเหตุการณ์ |

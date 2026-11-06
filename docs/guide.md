@@ -343,6 +343,10 @@ An ordinary project:
 | home | a fake one, no tokens in the environment | the same |
 | network | only through the vswarm proxy, every host recorded | the same |
 
+Services already listening on your machine (databases, the Docker API, your dev servers) are out of reach too: on macOS
+each listening port is denied, on Linux the sandbox has its own network; `vswarm try … --localhost` lifts that on macOS
+when you test code against a server you run yourself.
+
 Verdicts: **DANGEROUS** (do not run it outside the sandbox) · **SUSPICIOUS** (read the findings first) ·
 **NOTHING SEEN** (in this run; not a guarantee) · **INCONCLUSIVE** (the command failed early).
 
@@ -448,7 +452,7 @@ For development: `vswarm update --unsigned` follows `main` without signature che
 | `vswarm diff` | what changed since the baseline |
 | `vswarm secrets` | long-lived credentials (values never shown) |
 | `vswarm agents` | MCP servers, hooks, permissions of AI agents |
-| `vswarm agents --inspect [--show] [--no-sandbox]` | start MCP servers sandboxed, read and pin their tools |
+| `vswarm agents --inspect [--show] [--no-sandbox] [--timeout s]` | start MCP servers sandboxed, read and pin their tools |
 | `vswarm watch on [--every min]` · `off` · `status` · `run` | background check with notifications |
 | `vswarm preflight [--quiet] [--strict] [--fresh] [--max-age s] [--then cmd…]` | the PASS/WARN/BLOCK gate |
 | `vswarm gate ssh <pattern…> [--cert]` · `gate status` · `gate remove` | the gate in `~/.ssh/config` |
@@ -456,7 +460,7 @@ For development: `vswarm update --unsigned` follows `main` without signature che
 | `vswarm cert [--host h]` | a short-lived certificate, only when preflight passes |
 | `vswarm guard on` · `off` · `status` | the install guard in your shell |
 | `vswarm pkg <tool> [--] <args…>` | check an install command; exit 3 when it should stop |
-| `vswarm try <target> [--net none\|registries\|all] [--yes] [-- cmd…]` · `--list` · `--clean [id]` | run code in a sandbox |
+| `vswarm try <target> [--net none\|registries\|all] [--localhost] [--yes] [-- cmd…]` · `--list` · `--clean [id]` | run code in a sandbox |
 | `vswarm respond [--yes] [--force]` | incident response |
 | `vswarm report [incident]` | write the report again |
 | `vswarm unlock [--force]` | close the incident |

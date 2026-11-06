@@ -483,6 +483,8 @@ export async function update(args: string[] = []) {
     process.exitCode = 3;
     return;
   }
+  // Newer tags nobody trusted signed: said out loud, because that is what a tampered repository looks like.
+  if (r.status !== "unsigned-repo") for (const t of r.ignored) console.log(`  ${c.amber("!")} ignored ${t}: not signed by a trusted release key`);
   if (r.status === "current") {
     for (const k of r.pinned ?? []) console.log(`  ${c.amber("!")} trusting release key ${c.bold(k.fp)} (${k.who}) from now on`);
     return ok(`already on ${r.at}, signed by a trusted release key\n`);

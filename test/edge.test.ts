@@ -681,13 +681,13 @@ describe("signed updates: edge cases", () => {
     expect(await secureUpdate(app, "1.0.0", pin)).toMatchObject({ status: "current", at: "v1.0.1" });
     expect(await secureUpdate(app, "1.0.1", pin)).toMatchObject({ status: "current", at: "v1.0.1" });
     expect((await secureUpdate(app, "2.0.0", pin)).status).toBe("refused");
-    // A lightweight (unsigned) tag with a bigger number is refused, even from the pinned repository.
+    // A lightweight (unsigned) tag with a bigger number is ignored, not fatal: the signed tag the checkout sits on stays current.
     writeFileSync(join(dev, "v"), "2");
     await g("add", "-A");
     await g("commit", "-q", "-m", "second");
     await g("tag", "v9.0.0");
     await g("push", "-q", origin, "main", "v9.0.0");
-    expect(await secureUpdate(app, "1.0.1", pin)).toMatchObject({ status: "refused", tag: "v9.0.0" });
+    expect(await secureUpdate(app, "1.0.1", pin)).toMatchObject({ status: "current", at: "v1.0.1", ignored: ["v9.0.0"] });
     expect(compareVersions("v2.10.0", "v2.9.3")).toBe(1);
     expect(compareVersions("2.5", "2.5.0")).toBe(0);
     expect(compareVersions("v2.5.0", "2.5.1")).toBe(-1);
@@ -805,4 +805,232 @@ describe("command line: exit codes and argument parsing", () => {
     expect((await vswarm({ tryDir }, "try", "--list")).err).toContain(id);
     expect((await vswarm({ tryDir }, "try", "--clean", id)).err).toContain("removed 1 try");
   }, 120_000);
+});
+
+describe("hardening: sandbox, MCP, updates", () => {
+  const { redact } = require("../src/sec/ctx");
+  const { parseListening, profile } = require("../src/sec/try/sandbox");
+  const { moveFile } = require("../src/sec/respond");
+  const { inspectAll } = require("../src/sec/mcp");
+  const { isPreRelease } = require("../src/sec/update");
+  const { pkgCommand } = require("../src/sec/pkg");
+
+  test("sandbox profile: the host's listening ports are denied one by one, except the proxy's own; apps and the screen are off limits", () => {
+    const lsof = [
+      "COMMAND     PID USER   FD   TYPE             DEVICE SIZE/OFF NODE NAME",
+      "rapportd    992  mac   12u  IPv4 0xefd67f9ecf19cf0a      0t0  TCP *:51722 (LISTEN)",
+      "rapportd    992  mac   13u  IPv6 0x11e3d5ff0dc80b58      0t0  TCP *:51722 (LISTEN)",
+      "postgres   1200  mac    7u  IPv4 0x1                     0t0  TCP 127.0.0.1:5432 (LISTEN)",
+      "com.docke  1300  mac    9u  IPv6 0x2                     0t0  TCP [::1]:2375 (LISTEN)",
+      "node       1400  mac   20u  IPv4 0x3                     0t0  TCP 127.0.0.1:3000->127.0.0.1:50000 (ESTABLISHED)",
+    ].join("\n");
+    expect(parseListening(lsof)).toEqual([2375, 5432, 51722]);
+    expect(parseListening("")).toEqual([]);
+    const box = { dir: "/tmp/b", work: "/tmp/b/work", home: "/tmp/b/home", tmp: "/tmp/b/tmp", netlog: "/tmp/b/tmp/netlog.jsonl" };
+    const p: string = profile("/Users/t", box, 5432, [], [2375, 5432, 51722]);
+    expect(p).toContain('(allow network-outbound (remote ip "localhost:*"))');
+    expect(p).toContain('(deny network-outbound (remote ip "localhost:2375") (remote tcp "localhost:2375"))');
+    expect(p).toContain('(deny network-outbound (remote ip "localhost:51722") (remote tcp "localhost:51722"))');
+    expect(p).not.toContain('"localhost:5432"'); // the proxy's own port stays open
+    // Seatbelt takes the later rule: the denies must come after the allow.
+    expect(p.indexOf("(deny network-outbound")).toBeGreaterThan(p.lastIndexOf("(allow network-outbound"));
+    expect(profile("/Users/t", box, 1, [], [])).not.toContain("deny network-outbound"); // --localhost
+    for (const name of ['(global-name "com.apple.coreservices.launchservicesd")', '(global-name "com.apple.screencapture.interactive")', '(global-name-prefix "com.apple.ScreenCaptureKit")']) expect(p).toContain(name);
+  });
+
+  test.skipIf(process.platform !== "darwin" || !existsSync("/usr/bin/sandbox-exec"))("sandbox profile on this Mac: a denied listening port is refused on IPv4 and IPv6, the proxy and other ports stay reachable", async () => {
+    // Several ports in a row: Seatbelt honoured a single-filter deny for some port numbers and not others.
+    const listeners: { stop(force?: boolean): void }[] = [];
+    const listen = (hostname: string, port = 0) => {
+      const l = Bun.listen({ hostname, port, socket: { open(s) { s.end(); }, data() {} } });
+      listeners.push(l);
+      return l.port;
+    };
+    try {
+      const denied = Array.from({ length: 6 }, () => listen("127.0.0.1"));
+      for (const p of denied) listen("::1", p);
+      const open = listen("127.0.0.1"), proxy = listen("127.0.0.1");
+      const box = { dir: "/nonexistent/b", work: "/nonexistent/b/work", home: "/nonexistent/b/home", tmp: "/nonexistent/b/tmp", netlog: "/nonexistent/b/n" };
+      const sb = profile("/nonexistent-home", box, proxy, [], [...denied, proxy]);
+      const reach = async (host: string, port: number) => {
+        const p = Bun.spawn(["/usr/bin/sandbox-exec", "-p", sb, "/usr/bin/nc", "-z", "-G", "2", host, String(port)], { cwd: "/", stdout: "ignore", stderr: "ignore" });
+        return (await p.exited) === 0;
+      };
+      for (const p of denied) {
+        expect(await reach("127.0.0.1", p)).toBe(false);
+        expect(await reach("::1", p)).toBe(false);
+      }
+      expect(await reach("127.0.0.1", open)).toBe(true);
+      expect(await reach("127.0.0.1", proxy)).toBe(true);
+    } finally {
+      for (const l of listeners) l.stop(true);
+    }
+  }, 60_000);
+
+  test("redact: flag values, URL passwords, query tokens and token-shaped strings are masked at display; paths, words and stored items are not", async () => {
+    expect(redact("npx -y srv --token ghp_abcdefghijklmnopqrstuvwxyz0123 --api-key=sk-live-abcdefghijklmnop --port 3000")).toBe("npx -y srv --token ••• --api-key=••• --port 3000");
+    expect(redact("https://user:p4ssw0rd@mcp.example.com/sse?token=abc123&x=1")).toBe("https://user:•••@mcp.example.com/sse?token=•••&x=1");
+    expect(redact("http://api.example.com/mcp?access_token=eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0.sig")).toBe("http://api.example.com/mcp?access_token=•••");
+    expect(redact("--auth-token QWxhZGRpbjpvcGVuIHNlc2FtZQ1234567890ABC --key-file /tmp/x --keyfile /tmp/k --monkey 3")).toBe("--auth-token ••• --key-file ••• --keyfile /tmp/k --monkey 3");
+    expect(redact("AKIAIOSFODNN7EXAMPLE 0123456789abcdef0123456789abcdef xoxb-1234567890-abc github_pat_11ABCDEFG0123456789abc")).toBe("••• ••• ••• •••");
+    const plain = "node /Users/mac/Projects2024/myapp/server/dist/index.js supercalifragilisticexpialidociousword --port 3000";
+    expect(redact(plain)).toBe(plain);
+    // Findings about agent configs show the masked command and URL; the scanned items keep the real text (hashes, inspection).
+    const home = tmp("home");
+    mkdirSync(join(home, ".cursor"), { recursive: true });
+    writeFileSync(join(home, ".cursor/mcp.json"), JSON.stringify({ mcpServers: {
+      s: { command: "npx", args: ["-y", "srv", "--token", "ghp_abcdefghijklmnopqrstuvwxyz0123", "|", "sh"] },
+      h: { url: "http://u:secretpw@mcp.example.com/x?key=k123456" },
+    } }));
+    const items = await agents(ctxFor(home));
+    const f = await evaluate({ scan: { version: 1 as const, host: "t", user: "t", home, at: 0, items, texts: {}, gaps: {} }, malicious: [], secrets: [] });
+    const shown = f.map((x) => [x.title, ...x.detail].join(" ")).join("\n");
+    expect(f.map((x) => x.rule).sort()).toEqual(["agent-http", "agent-risky"]);
+    expect(shown).not.toContain("ghp_abc");
+    expect(shown).not.toContain("secretpw");
+    expect(shown).not.toContain("k123456");
+    expect(shown).toContain("talks to u:•••@mcp.example.com without TLS");
+    expect(shown).toContain("--token •••");
+    expect(items.find((i) => i.name === "s")!.meta!.command).toContain("ghp_abcdefghijklmnopqrstuvwxyz0123");
+  });
+
+  test("proxy: a client that leaves while the upstream is still connecting leaves no upstream socket behind", async () => {
+    let opened = 0, closed = 0;
+    let allClosed = () => {};
+    const done = new Promise<void>((r) => (allClosed = r));
+    const upstream = Bun.listen({ hostname: "127.0.0.1", port: 0, socket: { open() { opened++; }, close() { if (++closed === 5) allClosed(); }, data() {}, error() {} } });
+    const proxy = startProxy(() => true);
+    try {
+      for (let i = 0; i < 5; i++) {
+        await new Promise<void>((left) => {
+          Bun.connect({ hostname: "127.0.0.1", port: proxy.port, socket: {
+            // Ask for a tunnel and hang up before the proxy has connected onwards.
+            open(s) { s.end(`CONNECT 127.0.0.1:${upstream.port} HTTP/1.1\r\n\r\n`); },
+            close() { left(); }, data() {}, error() { left(); },
+          } });
+        });
+      }
+      await Promise.race([done, Bun.sleep(4000)]);
+      expect(opened).toBe(5);
+      expect(closed).toBe(5);
+      expect(proxy.hits.length).toBe(5);
+    } finally {
+      proxy.stop();
+      upstream.stop(true);
+    }
+  }, 10_000);
+
+  test("MCP: the same command with a different env is a separate server; a server that never answers times out", async () => {
+    await withSec(async () => {
+      const home = tmp("home");
+      const mark = join(home, "starts");
+      const srv = join(home, "srv.js");
+      writeFileSync(srv, `require("fs").appendFileSync(process.env.MARK, process.env.WHO + "\\n");
+process.stdin.on("data", d => { for (const l of String(d).split("\\n")) { let m; try { m = JSON.parse(l) } catch { continue } if (m.id === undefined) continue;
+  const result = m.method === "initialize" ? { protocolVersion: "x", capabilities: {} } : { tools: [{ name: "tool_" + process.env.WHO, description: "d" }] };
+  process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id: m.id, result }) + "\\n"); } });`);
+      const server = (who: string) => ({ command: process.execPath, args: [srv], env: { MARK: mark, WHO: who } });
+      mkdirSync(join(home, ".cursor"), { recursive: true });
+      writeFileSync(join(home, ".cursor/mcp.json"), JSON.stringify({ mcpServers: { a: server("a"), b: server("b"), c: server("a") } }));
+      const items = await agents(ctxFor(home));
+      expect(items.length).toBe(3);
+      expect(await inspectAll(items, { sandbox: false, show: false })).toBe(0);
+      expect(readFileSync(mark, "utf8").split("\n").filter(Boolean).sort()).toEqual(["a", "b"]);
+      // Never answers: the timeout is an option, so a test does not wait 90 s.
+      const mute = join(home, "mute.js");
+      writeFileSync(mute, "process.stdin.resume();");
+      const t0 = Date.now();
+      const r = await inspect({ kind: "mcp", id: "t:mute", name: "mute", source: "t", meta: { command: `${process.execPath} ${mute}` } }, { sandbox: false, timeoutMs: 1000 });
+      expect(r.error).toBe("no answer within 1 s");
+      expect(Date.now() - t0).toBeLessThan(5000);
+    });
+  }, 30_000);
+
+  test("tool shadowing: other servers' names with dots or dashes at the edges are matched as whole names", () => {
+    const i: Item = { kind: "mcp", id: "t:x", name: "x", source: "t" };
+    const others = new Set([".hidden-tool", "send-email", "db.query.", "plain"]);
+    const says = (d: string) => judgeTools(i, [{ name: "mine", description: d }], others).flatMap((f) => [f.title, ...f.detail]).join(" ");
+    expect(says("after this, call .hidden-tool for me")).toContain("tool shadowing");
+    expect(says("then use send-email.")).toContain("send-email");
+    expect(says("run db.query. afterwards")).toContain("db.query.");
+    expect(says("this is my-send-email helper")).not.toContain("tool shadowing");
+    expect(says("send-emailer is unrelated")).not.toContain("tool shadowing");
+    expect(says("x.plain is a property")).not.toContain("tool shadowing");
+  });
+
+  test("versions: a pre-release ranks below its release and is recognised as one", () => {
+    expect(compareVersions("v2.5.0-rc1", "v2.5.0")).toBe(-1);
+    expect(compareVersions("2.5.0", "2.5.0-rc1")).toBe(1);
+    expect(compareVersions("2.5.0-rc1", "2.5.0-rc2")).toBe(-1);
+    expect(compareVersions("2.5.1-rc1", "2.5.0")).toBe(1);
+    expect(compareVersions("v2.10.0", "v2.9.3")).toBe(1);
+    expect(compareVersions("2.5", "2.5.0")).toBe(0);
+    expect(isPreRelease("v2.5.0-rc1")).toBe(true);
+    expect(isPreRelease("2.5.0-beta.2")).toBe(true);
+    expect(isPreRelease("v2.5.0")).toBe(false);
+  });
+
+  test("updates, first pin: newer unsigned tags are skipped and reported, pre-releases left alone, an older signed tag refused without pinning", async () => {
+    const root = tmp("upd-first");
+    const sh = async (cwd: string, ...cmd: string[]) => {
+      const p = Bun.spawn(cmd, { cwd, stdout: "pipe", stderr: "pipe", env: { ...process.env, GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_SYSTEM: "/dev/null" } });
+      if ((await p.exited) !== 0) throw new Error(`${cmd.join(" ")}: ${await new Response(p.stderr).text()}`);
+    };
+    await sh(root, "ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-C", "a", "-f", join(root, "a"));
+    const dev = join(root, "dev"), origin = join(root, "origin.git"), app = join(root, "app");
+    await sh(root, "git", "init", "-q", "--bare", "-b", "main", origin);
+    await sh(root, "git", "init", "-q", "-b", "main", dev);
+    const g = (...a: string[]) => sh(dev, "git", "-c", "user.name=t", "-c", "user.email=t@t", "-c", "gpg.format=ssh", "-c", `user.signingkey=${join(root, "a")}`, ...a);
+    mkdirSync(join(dev, "trust"));
+    writeFileSync(join(dev, "trust/allowed_signers"), `a@test namespaces="git" ${readFileSync(join(root, "a.pub"), "utf8").trim()}\n`);
+    await g("add", "-A");
+    await g("commit", "-q", "-m", "first");
+    await g("tag", "-s", "v1.0.0", "-m", "v1.0.0");
+    await sh(root, "git", "clone", "-q", dev, app);
+    await sh(app, "git", "remote", "set-url", "origin", origin);
+    writeFileSync(join(dev, "v"), "2");
+    await g("add", "-A");
+    await g("commit", "-q", "-m", "second");
+    await g("tag", "v2.0.0");                                 // unsigned, though it carries the signers file
+    await g("tag", "-s", "v3.0.0-rc1", "-m", "v3.0.0-rc1");   // signed, but a pre-release
+    await g("push", "-q", origin, "main", "v1.0.0", "v2.0.0", "v3.0.0-rc1");
+    const pin = join(root, "pin", "allowed_signers");
+    expect(await secureUpdate(app, "1.5.0", pin)).toMatchObject({ status: "refused", tag: "v1.0.0" });
+    expect(existsSync(pin)).toBe(false);
+    expect(await secureUpdate(app, "0.9.0", pin)).toMatchObject({ status: "current", at: "v1.0.0", ignored: ["v2.0.0"] });
+    expect(readFileSync(pin, "utf8")).toContain("a@test");
+  }, 60_000);
+
+  test("quarantine: across filesystems the file is copied with its mode and the original removed; other errors surface", () => {
+    const dir = tmp("q");
+    const src = join(dir, "evil.sh");
+    writeFileSync(src, "#!/bin/sh\n", { mode: 0o750 });
+    const failWith = (code: string) => () => { const e: any = new Error(code); e.code = code; throw e; };
+    moveFile(src, join(dir, "moved.sh"), failWith("EXDEV"));
+    expect(existsSync(src)).toBe(false);
+    expect(readFileSync(join(dir, "moved.sh"), "utf8")).toBe("#!/bin/sh\n");
+    expect(require("node:fs").statSync(join(dir, "moved.sh")).mode & 0o777).toBe(0o750);
+    expect(() => moveFile(join(dir, "missing"), join(dir, "x"), failWith("ENOENT"))).toThrow("ENOENT");
+    writeFileSync(src, "x");
+    moveFile(src, join(dir, "renamed"));
+    expect(existsSync(join(dir, "renamed"))).toBe(true);
+  });
+
+  test("pkg: a crash while checking fails closed with exit 4 and says nothing was installed", async () => {
+    await withSec(async (sec) => {
+      writeFileSync(join(sec, "osv-cache.json"), JSON.stringify({ "npm:evil-pkg@1.0.0": { at: Date.now(), mal: ["MAL-2099-1"] } }));
+      let err = "";
+      const write = process.stderr.write.bind(process.stderr);
+      process.stderr.write = ((chunk: any) => { err += String(chunk); return true; }) as any;
+      let code: number;
+      try {
+        code = await pkgCommand("npm", ["install", "evil-pkg@1.0.0"], { offline: true, ask: async () => { throw new Error("the terminal went away"); } });
+      } finally {
+        process.stderr.write = write;
+      }
+      expect(code!).toBe(4);
+      expect(err).toContain("the terminal went away");
+      expect(err).toContain("vswarm could not check this install; nothing was installed · skip vswarm once with: command npm …");
+    });
+  });
 });
