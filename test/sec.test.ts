@@ -444,7 +444,7 @@ describe("signed updates", () => {
     for (const k of ["a", "b"]) await sh(root, "ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-C", k, "-f", join(root, k));
     const signer = (k: string) => `${k}@test namespaces="git" ${readFileSync(join(root, `${k}.pub`), "utf8").trim()}\n`;
     const dev = join(root, "dev"), origin = join(root, "origin.git"), app = join(root, "app");
-    await sh(root, "git", "init", "-q", "--bare", origin);
+    await sh(root, "git", "init", "-q", "--bare", "-b", "main", origin);
     await sh(root, "git", "init", "-q", "-b", "main", dev);
     const g = (...a: string[]) => sh(dev, "git", "-c", "user.name=t", "-c", "user.email=t@t", "-c", "gpg.format=ssh", ...a);
     const release = async (v: string, key?: string, signers = signer("a")) => {
