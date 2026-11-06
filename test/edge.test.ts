@@ -1232,7 +1232,7 @@ process.stdin.on("data", d => { for (const l of String(d).split("\\n")) { let m;
       }
       expect(code!).toBe(4);
       expect(err).toContain("the terminal went away");
-      expect(err).toContain("vswarm could not check this install; nothing was installed · skip vswarm once with: command npm …");
+      expect(err).toContain(`vswarm could not check this install; nothing was installed · skip vswarm once with: ${process.platform === "win32" ? "npm.cmd …" : "command npm …"}`);
     });
   });
 });
