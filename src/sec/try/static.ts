@@ -3,7 +3,7 @@
 // install scripts, VS Code tasks that run when the folder opens, loaders tucked into config files, obfuscation.
 
 import { closeSync, lstatSync, openSync, readdirSync, readSync } from "node:fs";
-import { join, relative } from "node:path";
+import { join, relative, sep } from "node:path";
 import { lookAlike } from "../intel";
 import type { Finding, Severity } from "../types";
 
@@ -68,7 +68,8 @@ function walk(root: string, max = 20_000): string[] {
 
 export function staticCheck(root: string): Finding[] {
   const out: Finding[] = [];
-  const rel = (p: string) => relative(root, p);
+  // Forward slashes on every platform: the checks and the findings compare and show paths the same way.
+  const rel = (p: string) => relative(root, p).split(sep).join("/");
   const add = (id: string, severity: Severity, title: string, detail: string[] = []) => out.push({ id: `try:${id}`, rule: "try-static", severity, title, detail });
 
   for (const p of walk(root)) {
