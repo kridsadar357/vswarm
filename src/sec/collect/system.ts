@@ -264,7 +264,7 @@ export async function running(ctx: Ctx): Promise<Item[]> {
     exeOf.set(pid, exe);
     if (user !== ctx.user || !exe.startsWith("/")) continue;
     const where = suspiciousLocation(exe, ctx.home);
-    if (where) out.set(`proc:${exe}`, { kind: "proc", id: exe, name: exe.split("/").pop()!, path: exe, meta: { where, pid: Number(pid) } });
+    if (where) out.set(`proc:${exe}`, { kind: "proc", id: exe, name: exe.split(/[\\/]/).pop()!, path: exe, meta: { where, pid: Number(pid) } });
   }
   const remotes = new Map<string, Set<string>>();
   for (const [pid, remote, cmd] of await connections(ctx)) {
@@ -275,7 +275,7 @@ export async function running(ctx: Ctx): Promise<Item[]> {
   }
   for (const [exe, set] of remotes) {
     out.set(`conn:${exe}`, {
-      kind: "conn", id: exe, name: exe.split("/").pop()!, path: exe,
+      kind: "conn", id: exe, name: exe.split(/[\\/]/).pop()!, path: exe,
       meta: { remotes: [...set].slice(0, 6).join(" "), count: set.size, where: exe.startsWith("/") ? suspiciousLocation(exe, ctx.home) : undefined },
     });
   }

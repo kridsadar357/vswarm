@@ -94,7 +94,7 @@ export function writeReport(inc: Incident): string[] {
         };
         const file = join(drafts, `${i.name.replace(/[^A-Za-z0-9@._-]/g, "_")}.json`);
         writeFileSync(file, JSON.stringify(osv, null, 2), { mode: 0o600 });
-        lines.push(`- OpenSSF draft: \`osv-drafts/${file.split("/").pop()}\` → pull request to https://github.com/ossf/malicious-packages`);
+        lines.push(`- OpenSSF draft: \`osv-drafts/${file.split(/[\\/]/).pop()}\` → pull request to https://github.com/ossf/malicious-packages`);
       }
       lines.push("");
     }
