@@ -568,6 +568,9 @@ async function runInstall(tool: string, args: string[], scripted: string[]): Pro
 async function pkgCheck(tool: string, args: string[], opt: { offline: boolean; strict?: boolean; get?: Fetcher; ask: (q: string, def?: boolean) => Promise<boolean> }): Promise<{ code: number; scripted: string[] }> {
   const p = plan(tool, args);
   if (p.skip) return { code: 0, scripted: [] };
+  // Your team's own package names are not look-alikes here either.
+  const { applyAllow, loadPolicy } = await import("./team");
+  applyAllow((await loadPolicy()).policy);
   const r = await checkInstall(p, { offline: opt.offline, get: opt.get });
   const done = (code: number) => ({ code, scripted: r.scripted });
   // Strict: what could not be checked is a reason to stop, not a notice. Offline on purpose (--offline) is not.

@@ -474,6 +474,14 @@ vswarm accept --remove <id>
 ![vswarm accept](img/accept.png)
 ![vswarm accept --list](img/accept-list.png)
 
+Findings about vswarm's own files (a baseline or lock changed outside vswarm) cannot be accepted either: they are
+fixed by recording a new baseline or `vswarm unlock`.
+
+**For a team:** a signed policy in a git repository can accept findings and allow package names for everyone, require
+a baseline, the watch or the guard, and name the hosts the ssh gate should cover. `vswarm team join <git url>` pins the
+policy's signing keys after you confirm them; `vswarm team sync` takes only a newer policy signed by those keys. See
+[team.md](team.md).
+
 ## 12. Decoy credentials: canary
 
 Fake credentials where stealers look. Nobody has a reason to use them, so any use means the machine or a copy of its
@@ -553,6 +561,7 @@ Maintainers: the steps that switch signing on are in [SECURITY.md](../SECURITY.m
 | `vswarm report --json [--sign key] [--out dir]` | this machine's state for a server or team, optionally signed |
 | `vswarm unlock [--force]` | close the incident |
 | `vswarm accept <id…>` · `--all` · `--list` · `--remove <id>` | accept reviewed findings |
+| `vswarm team join <git url> [--fingerprint fp]` · `sync` · `status` · `leave` · `sign <file> --key k` | a signed team policy ([team.md](team.md)) |
 | `vswarm canary plant aws\|dns\|env` · `list` · `remove <id\|all>` | decoy credentials |
 | `vswarm selftest` | measured detection rate |
 | `vswarm update [--unsigned]` · `vswarm trust [pin]` | updates (signature-checked once signed releases exist) |

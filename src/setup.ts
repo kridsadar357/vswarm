@@ -224,6 +224,7 @@ export const COMMANDS: [string, string][] = [
   ["install", "set up launcher, PATH, completions"],
   ["update", "update vswarm (signature-checked once releases are signed)"],
   ["trust", "release keys updates must be signed with"],
+  ["team", "follow a signed team policy"],
   ["uninstall", "remove launcher and PATH"],
   ["help", "show help"],
 ];
@@ -421,6 +422,15 @@ export async function gate(args: string[], home = homedir()) {
   const certAt = args.indexOf("--cert");
   const withCert = certAt >= 0;
   if (withCert) args.splice(certAt, 1);
+  // --team: the hosts your team policy names, plus any given here.
+  const teamAt = args.indexOf("--team");
+  if (teamAt >= 0) {
+    args.splice(teamAt, 1);
+    const { loadPolicy } = await import("./sec/team");
+    const hosts = (await loadPolicy()).policy?.gate?.ssh ?? [];
+    if (!hosts.length) throw new Error("the team policy names no ssh hosts (gate.ssh), or this machine follows none: vswarm team status");
+    for (const h of hosts) if (!args.includes(h)) args.push(h);
+  }
   if (action === "ssh" && !args.length) throw new Error('name the hosts to guard, e.g. vswarm gate ssh "prod-*" "*.wallet.internal"');
   if (withCert && !existsSync(join(HOME, "ca", "ca_key"))) throw new Error("no CA yet: vswarm ca init");
   const cert = withCert ? { key: join(HOME, "ca", "session"), cert: join(HOME, "ca", "session-cert.pub") } : undefined;

@@ -415,6 +415,10 @@ vswarm accept --remove <id>
 ![vswarm accept](img/accept.png)
 ![vswarm accept --list](img/accept-list.png)
 
+สิ่งที่เกี่ยวกับไฟล์ของ vswarm เอง (เช่น baseline หรือ lock ถูกแก้จากภายนอก) ก็ยอมรับไม่ได้เหมือนกัน แก้ได้ด้วยการบันทึก baseline ใหม่ หรือ `vswarm unlock`
+
+**สำหรับทีม:** เก็บนโยบายที่เซ็นแล้วไว้ใน git repository ของทีม ใช้ยอมรับ finding และอนุญาตชื่อ package ให้ทุกคนพร้อมกัน, กำหนดให้ทุกเครื่องต้องมี baseline, watch หรือ guard และระบุ host ที่ด่าน ssh ต้องครอบคลุม `vswarm team join <git url>` จะจำกุญแจที่ใช้เซ็นนโยบายไว้หลังจากเรายืนยันแล้ว จากนั้น `vswarm team sync` จะรับเฉพาะนโยบายที่ใหม่กว่าและเซ็นด้วยกุญแจนั้น รายละเอียดอยู่ใน [team.md](team.md) (ภาษาอังกฤษ)
+
 ## 12. credential ล่อ: canary
 
 credential ปลอมที่วางไว้ในจุดที่โปรแกรมขโมยข้อมูลชอบเปิดดู ไม่มีใครมีเหตุผลต้องใช้มัน ดังนั้นถ้ามีการใช้ แปลว่าเครื่องหรือสำเนาไฟล์ของคุณอยู่ในมือคนอื่น การแจ้งเตือนมาจาก [canarytokens.org](https://canarytokens.org) (ฟรี โดย Thinkst) ทาง e-mail จึงยังเตือนได้แม้ไฟล์ถูกขโมยออกไปแล้ว
@@ -481,6 +485,7 @@ vswarm trust           # กุญแจที่เครื่องนี้�
 | `vswarm report --json [--sign key] [--out dir]` | สถานะเครื่องนี้เป็น JSON ให้ server หรือทีมใช้ตัดสิน เซ็นด้วยกุญแจ SSH ได้ |
 | `vswarm unlock [--force]` | ปิดเหตุการณ์ |
 | `vswarm accept <id…>` · `--all` · `--list` · `--remove <id>` | ยอมรับสิ่งที่ตรวจแล้ว |
+| `vswarm team join <git url> [--fingerprint fp]` · `sync` · `status` · `leave` · `sign <file> --key k` | นโยบายของทีมที่เซ็นแล้ว ([team.md](team.md)) |
 | `vswarm canary plant aws\|dns\|env` · `list` · `remove <id\|all>` | credential ล่อ |
 | `vswarm selftest` | วัดอัตราการจับ |
 | `vswarm update [--unsigned]` · `vswarm trust [pin]` | อัปเดต (ตรวจลายเซ็นเมื่อมี release ที่เซ็นแล้ว) |

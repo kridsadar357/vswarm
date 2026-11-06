@@ -8,7 +8,8 @@ import { join } from "node:path";
 import type { Ctx } from "../src/sec/ctx";
 import { check } from "../src/sec/engine";
 import { verdictNow } from "../src/sec/gate";
-import { osvMalicious } from "../src/sec/intel";
+import { lookAlike, osvMalicious } from "../src/sec/intel";
+import { applyAllow, loadPolicy, matches, parsePolicy, signPolicy, teamJoin, teamSync } from "../src/sec/team";
 import { posture, REPORT_NAMESPACE, signReport, writePosture } from "../src/sec/report";
 import { forBaseline, scan } from "../src/sec/scan";
 import { DPAPI_PROTECT, DPAPI_UNPROTECT, dpapiStore, fileStore, keychainStore, platformStore, secretServiceStore, type KeyStore, type Runner } from "../src/sec/seal";
@@ -377,5 +378,132 @@ describe("signed reports for a server that decides", () => {
     expect(verify(readFileSync(file, "utf8"))).toBe(0);
     expect(verify(text.replace('"block"', '"pass"'))).not.toBe(0);
     await expect(signReport(text, join(dir, "missing"))).rejects.toThrow("could not sign");
+  }), 60_000);
+});
+
+describe("team policy: signed, pinned on first use, never rolled back", () => {
+  const hasTools = !WIN && !!Bun.which("ssh-keygen") && !!Bun.which("git");
+  const sh = (cmd: string[], cwd?: string) => {
+    const r = Bun.spawnSync(cmd, { cwd, stdout: "pipe", stderr: "pipe" });
+    if (r.exitCode !== 0) throw new Error(`${cmd.join(" ")}: ${r.stderr.toString()}`);
+    return r.stdout.toString();
+  };
+  // Commits in a throwaway repository; never the user's identity, hooks or commit signing.
+  const gitc = (repo: string, ...a: string[]) => sh(["git", "-c", "user.name=t", "-c", "user.email=t@example.invalid", "-c", "commit.gpgsign=false", "-c", "core.hooksPath=/dev/null", "-C", repo, ...a]);
+  const key = (dir: string, name: string) => {
+    sh(["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-C", name, "-f", join(dir, name)]);
+    return { path: join(dir, name), line: `${name}@team namespaces="vswarm-team" ${readFileSync(join(dir, name + ".pub"), "utf8").split(" ").slice(0, 2).join(" ")}` };
+  };
+  const policy = (serial: number, extra: object = {}) => JSON.stringify({ "vswarm-team": 1, name: "acme", serial, ...extra }, null, 2) + "\n";
+
+  async function teamRepo() {
+    const keys = tmp("team-keys");
+    const repo = tmp("team-repo");
+    const alice = key(keys, "alice");
+    const mallory = key(keys, "mallory");
+    sh(["git", "init", "-q", repo]);
+    writeFileSync(join(repo, "allowed_signers"), alice.line + "\n");
+    const publish = async (text: string, by = alice) => {
+      writeFileSync(join(repo, "vswarm-team.json"), text);
+      rmSync(join(repo, "vswarm-team.json.sig"), { force: true });
+      await signPolicy(join(repo, "vswarm-team.json"), by.path);
+      gitc(repo, "add", "-A");
+      gitc(repo, "commit", "-q", "-m", "policy");
+    };
+    return { repo, alice, mallory, publish };
+  }
+
+  const withTeam = <T>(fn: () => Promise<T>) => withState(async () => {
+    const prev = process.env.VSWARM_TEAM_DIR;
+    process.env.VSWARM_TEAM_DIR = tmp("team");
+    try {
+      return await fn();
+    } finally {
+      if (prev === undefined) delete process.env.VSWARM_TEAM_DIR;
+      else process.env.VSWARM_TEAM_DIR = prev;
+    }
+  });
+
+  test("the policy's shape is checked before anything of it is used", () => {
+    expect(parsePolicy(policy(3, { accept: ["secret:env-files"], gate: { ssh: ["prod-*"] } })).serial).toBe(3);
+    expect(() => parsePolicy("{")).toThrow("not valid JSON");
+    expect(() => parsePolicy(JSON.stringify({ name: "x", serial: 1 }))).toThrow('"vswarm-team": 1');
+    expect(() => parsePolicy(policy(0))).toThrow("serial");
+    expect(() => parsePolicy(policy(1, { gate: { ssh: ["prod-* ; ProxyCommand x"] } }))).toThrow("ssh host pattern");
+    expect(() => parsePolicy(policy(1, { accept: [1] }))).toThrow("accept");
+    expect(matches(["conn-unsigned:/usr/local/bin/*", "secret:env-files"], "conn-unsigned:/usr/local/bin/tool")).toBe(true);
+    expect(matches(["secret:env-files"], "secret:env-files-x")).toBe(false);
+  });
+
+  test.skipIf(!hasTools)("join pins the signers only after they are confirmed, and only a policy they signed is taken", () => withTeam(async () => {
+    const t = await teamRepo();
+    await t.publish(policy(1, { accept: ["secret:env-files"], allow: { npm: ["@acme/*", "axois"] } }));
+    // Not confirmed: nothing kept.
+    await expect(teamJoin(t.repo, async () => false)).rejects.toThrow("not confirmed");
+    expect((await loadPolicy()).policy).toBeUndefined();
+    let seen: { fp: string }[] = [];
+    const j = await teamJoin(t.repo, async (keys) => ((seen = keys), true));
+    expect(j.policy.name).toBe("acme");
+    expect(j.signer).toBe("alice@team");
+    expect(seen[0].fp).toMatch(/^SHA256:/);
+    expect((await loadPolicy()).policy?.serial).toBe(1);
+    // The team's own names are not look-alikes once the policy is applied.
+    applyAllow((await loadPolicy()).policy);
+    expect(lookAlike("npm", "axois")).toBeUndefined();
+    applyAllow(undefined);
+    expect(lookAlike("npm", "axois")).toBe("axios");
+    await expect(teamJoin(t.repo, async () => true)).rejects.toThrow("already follows");
+
+    // A newer policy signed by the pinned key: taken.
+    await t.publish(policy(2, { accept: ["secret:env-files"] }));
+    expect((await teamSync()).policy.serial).toBe(2);
+    // Changed without a new signature: refused, and the policy here stays as it was.
+    writeFileSync(join(t.repo, "vswarm-team.json"), policy(3, { accept: ["*"] }));
+    gitc(t.repo, "commit", "-q", "-am", "edit");
+    await expect(teamSync()).rejects.toThrow("does not verify");
+    expect((await loadPolicy()).policy?.serial).toBe(2);
+    // Signed by someone the repository does not list: refused.
+    await t.publish(policy(3), t.mallory);
+    await expect(teamSync()).rejects.toThrow("not signed by a key");
+    // The repository lists a new signer: a decision for people, so a sync refuses it even when it is signed.
+    writeFileSync(join(t.repo, "allowed_signers"), `${t.alice.line}\n${t.mallory.line}\n`);
+    await t.publish(policy(4), t.mallory);
+    await expect(teamSync()).rejects.toThrow("different signers");
+    // An older policy, properly signed (a replay): refused.
+    writeFileSync(join(t.repo, "allowed_signers"), `${t.alice.line}\n`);
+    await t.publish(policy(1));
+    await expect(teamSync()).rejects.toThrow("older than the one here");
+    expect((await loadPolicy()).policy?.serial).toBe(2);
+  }), 60_000);
+
+  test.skipIf(!hasTools)("a repository without a signature is not joined", () => withTeam(async () => {
+    const t = await teamRepo();
+    writeFileSync(join(t.repo, "vswarm-team.json"), policy(1));
+    gitc(t.repo, "add", "-A");
+    gitc(t.repo, "commit", "-q", "-m", "unsigned");
+    await expect(teamJoin(t.repo, async () => true)).rejects.toThrow("not signed");
+    expect((await loadPolicy()).policy).toBeUndefined();
+  }), 60_000);
+
+  test.skipIf(!hasTools)("in a check: team-accepted findings drop out, requirements warn, and a hand-edited local copy is not used", () => withTeam(async () => {
+    const t = await teamRepo();
+    await t.publish(policy(1, { accept: ["file:.zshrc:*"], require: { baseline: true, baselineMaxDays: 30 }, gate: { ssh: ["prod-*"] } }));
+    await teamJoin(t.repo, async () => true);
+    const m = await machine();
+    m.plant();
+    const r = await check(m.ctx, { offline: true });
+    expect(r.findings.some((f) => f.rule === "startup-file")).toBe(false);
+    expect(r.accepted).toBeGreaterThan(0);
+    expect(r.findings.filter((f) => f.rule === "team-require").map((f) => f.id)).toEqual(["team:gate"]);
+    expect(r.verdict).toBe("warn");
+    // The local copy is sealed: edited by hand, it is set aside and said so.
+    const local = join(process.env.VSWARM_TEAM_DIR!, "policy.json");
+    writeFileSync(local, readFileSync(local, "utf8").replace(`"file:.zshrc:*"`, `"*"`));
+    expect((await loadPolicy()).untrusted).toContain("seal does not match");
+    const again = await check(m.ctx, { offline: true });
+    expect(again.findings.some((f) => f.rule === "startup-file")).toBe(true);
+    expect(again.findings.some((f) => f.id === "vswarm-state:team-policy")).toBe(true);
+    // The report carries the team, for a team that collects them.
+    expect(posture(r, { name: "acme", serial: 1 }).team).toEqual({ name: "acme", serial: 1 });
   }), 60_000);
 });

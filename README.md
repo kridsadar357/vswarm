@@ -205,6 +205,19 @@ connections, lists every credential to rotate **from another device**, and asks 
 [OpenSSF malicious-packages](https://github.com/ossf/malicious-packages) and the package registries. Nothing is sent
 anywhere; you review and send.
 
+### For a small team
+
+```bash
+vswarm team join git@github.com:acme/vswarm-policy.git   # pins the policy's signing keys once you confirm them
+vswarm team sync · vswarm team status                     # newer signed policy only · what this machine lacks
+vswarm report --json --sign ~/.ssh/device --out ~/reports # a signed report per run, to collect however you like
+```
+
+The team policy is a JSON file in a git repository you control, signed with an SSH key: findings accepted for
+everyone, the team's own package names, required checks (baseline age, watch, guard) and the hosts the ssh gate
+should cover. Unsigned policies, policies signed by another key, a changed list of signers and older policies are
+refused. No server, no upload: see [docs/team.md](docs/team.md) and [docs/server-side.md](docs/server-side.md).
+
 ## What it checks
 
 | Area | What | Why |

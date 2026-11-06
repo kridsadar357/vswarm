@@ -24,7 +24,10 @@ import { caCommand, certCommand } from "./sec/cert";
 import { cleanTries, listTries, tryIt, type Net } from "./sec/try";
 
 /** The team policy this machine follows, for reports (none until vswarm team join). */
-const teamLabel = async (): Promise<{ name: string; serial: number } | undefined> => undefined;
+const teamLabel = async (): Promise<{ name: string; serial: number } | undefined> => {
+  const { policy } = await (await import("./sec/team")).loadPolicy();
+  return policy ? { name: policy.name, serial: policy.serial } : undefined;
+};
 
 /** Where vswarm's own options end: what follows `--` or `--then` belongs to the command being wrapped. */
 function own(args: string[]): number {
@@ -100,6 +103,9 @@ function usage() {
   row("vswarm report [incident]", "write the incident report again");
   row("vswarm report --json [--sign key] [--out dir]", "this machine's state for a server that decides (signed with an SSH key)");
   row("vswarm unlock", "close the incident once the machine is clean");
+  console.log(`\n  ${c.bold("team")}`);
+  row("vswarm team join <git url> [--fingerprint fp]", "follow a signed team policy (accepted findings, allowlists, required checks)");
+  row("vswarm team sync · status · leave", "fetch it again (signature checked) · what this machine lacks");
   console.log(`\n  ${c.bold("trust, but verify")}`);
   row("vswarm selftest", "plant fake threats in a sandbox home, print the detection rate");
   row("vswarm doctor · install · update · uninstall", "set-up (update: signed releases once published, main until then)");
@@ -315,12 +321,20 @@ async function main() {
     }
 
     case "gate":
-      noMoreOptions(cmd, args, ["--cert"]);
+      noMoreOptions(cmd, args, ["--cert", "--team"]);
       return gate(args);
 
     case "guard":
       noMoreOptions(cmd, args, ["--ignore-scripts", "--sandbox", "--strict"]);
       return guard(args);
+
+    case "team": {
+      const { teamCommand } = await import("./sec/team");
+      const action = args.shift() ?? "status";
+      const opt = { fingerprint: flag(args, "--fingerprint"), key: flag(args, "--key"), yes: has(args, "--yes", "-y"), ask: yes };
+      noMoreOptions(cmd, args);
+      return teamCommand(action, args, opt);
+    }
 
     case "watch": {
       const { watchCommand } = await import("./sec/schedule");

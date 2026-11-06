@@ -149,9 +149,11 @@ export async function watchOff(): Promise<string[]> {
   return gone;
 }
 
+/** Whether the background job is installed for the user whose home this is. */
+export const watchInstalled = (home = homedir()) => (win() ? existsSync(taskXml()) : mac() ? existsSync(plistPath(home)) : existsSync(join(unitDir(home), "vswarm-watch.timer")));
+
 export function watchState(): { on: boolean; state?: State } {
-  const on = win() ? existsSync(taskXml()) : mac() ? existsSync(plistPath()) : existsSync(join(unitDir(), "vswarm-watch.timer"));
-  return { on, state: readJson<State>(stateFile()) };
+  return { on: watchInstalled(), state: readJson<State>(stateFile()) };
 }
 
 /** A desktop notification; silently nothing where there is no desktop. */

@@ -6,6 +6,7 @@ import { evaluate, uncovered } from "./rules";
 import { forBaseline, scan as runScan } from "./scan";
 import { secrets as findSecrets } from "./secrets";
 import { ensureSec, files, lockState, readAccepted, readBaseline, saveLast, type Lock } from "./store";
+import { applyAllow, loadPolicy, matches, requirements } from "./team";
 import { RANK, verdictOf, type Finding, type Scan, type Verdict } from "./types";
 
 export interface Check {
@@ -41,7 +42,14 @@ export async function check(ctx: Ctx, opt: { offline?: boolean; osvNewOnly?: boo
   // A quiet gate asks OSV only about packages it has never asked about, with a short wait, so a package installed a
   // minute ago is checked before production access while a slow network still cannot hold up a login.
   const osv = await osvMalicious(scanned.items, files.osv(), { offline: opt.offline, onlyNew: opt.osvNewOnly, timeoutMs: opt.osvNewOnly ? 3000 : undefined });
+  // The team policy, if this machine follows one: its own package names are not look-alikes, its accepted findings
+  // count as accepted, and what it requires is checked.
+  const team = await loadPolicy();
+  applyAllow(team.policy);
+  if (team.untrusted)
+    state("team-policy", "medium", "the team policy on this machine was changed outside vswarm; it is not used", [`policy.json ${team.untrusted}`], "Fetch the signed one again: vswarm team sync");
   const all = await evaluate({ scan: scanned, baseline, malicious: osv.hits, secrets: secretFindings, sign: opt.sign });
+  if (team.policy) own.push(...(await requirements(team.policy, ctx, baseline?.at)));
   // MCP servers against what `agents --inspect` saw last, without starting any of them.
   const { loadPins, mcpDrift } = await import("./mcp");
   const pinned = await loadPins();
@@ -61,7 +69,7 @@ export async function check(ctx: Ctx, opt: { offline?: boolean; osvNewOnly?: boo
       "Unlock the login keychain (macOS) or keyring (Linux) and check again; vswarm doctor shows where the key is");
   // A known-malicious package can never be accepted away.
   const findings = [...own, ...all]
-    .filter((f) => f.rule === "malicious" || f.rule === STATE_RULE || !acceptedIds[f.id])
+    .filter((f) => f.rule === "malicious" || f.rule === STATE_RULE || f.rule === "team-require" || (!acceptedIds[f.id] && !matches(team.policy?.accept, f.id)))
     .sort((x, y) => RANK[y.severity] - RANK[x.severity]);
   const notes: string[] = [];
   if (!baseline) notes.push("No baseline yet: only always-wrong things are checked. Run `vswarm baseline` on a machine you trust.");
