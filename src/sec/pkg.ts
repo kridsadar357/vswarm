@@ -525,3 +525,34 @@ export function guardBlock(launcher: string): string {
     GUARD_END,
   ].join("\n");
 }
+
+/**
+ * The same guard for PowerShell (profile.ps1). Each function calls bun and the CLI by full path, not vswarm.cmd:
+ * cmd.exe would read & or | inside a package URL as its own. The real tool is found as an application on PATH, so
+ * the function never calls itself.
+ */
+export function psGuardBlock(bun: string, cli: string): string {
+  const q = (s: string) => `'${s.replace(/['\u2018\u2019\u201a\u201b]/g, "$&$&")}'`;
+  const fn = (tool: string, subs?: string) =>
+    `function ${tool} { __vswarm_go ${tool} ${subs === undefined ? "'.*'" : q(`^(${subs.replace(/""/g, "")})$`)} $args }`;
+  return [
+    GUARD_START,
+    "# Package installs are checked by vswarm first. Skip once: npm.cmd ...   Turn off: vswarm guard off",
+    "function __vswarm_go($tool, $installs, $a) {",
+    "  $real = Get-Command -Name $tool -CommandType Application -TotalCount 1 -ErrorAction SilentlyContinue",
+    "  if (-not $real) { Write-Error \"${tool}: not found on PATH\"; return }",
+    "  $first = if ($a.Count) { [string]$a[0] } else { '' }",
+    "  if ($first -notmatch $installs) { & $real @a; return }",
+    `  & ${q(bun)} ${q(cli)} pkg $tool '--' @a`,
+    "  if ($LASTEXITCODE -ne 0) { return }",
+    // Socket Firewall, when present, checks every download of the install too (VSWARM_SFW=off to skip it).
+    `  $sfw = if ($env:VSWARM_SFW -ne 'off' -and @(${[...SFW].map(q).join(", ")}) -contains $tool) { Get-Command -Name sfw -CommandType Application -TotalCount 1 -ErrorAction SilentlyContinue }`,
+    "  if ($sfw) { & $sfw $tool @a } else { & $real @a }",
+    "}",
+    ...Object.entries(INSTALLS).filter(([t]) => t !== "brew").map(([t, subs]) => fn(t, subs)),
+    fn("npx"),
+    fn("bunx"),
+    fn("uvx"),
+    GUARD_END,
+  ].join("\n");
+}

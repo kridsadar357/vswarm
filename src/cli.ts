@@ -63,7 +63,7 @@ function noMoreOptions(cmd: string, args: string[], known: string[] = []) {
 }
 
 /** Commands that need a Unix shell, ssh config, launchd/systemd or a sandbox; Windows gets them in a later phase. */
-const NOT_ON_WINDOWS = new Set(["gate", "guard", "try", "ca", "cert", "canary", "shot", "pkg"]);
+const NOT_ON_WINDOWS = new Set(["try", "ca", "cert", "canary", "shot"]);
 
 function usage() {
   banner("check your machine before it touches production");
@@ -103,7 +103,7 @@ function usage() {
   console.log(`\n  ${c.bold("gates for other tools")}`);
   console.log(c.dim("    ~/.aws/config     credential_process = vswarm preflight --quiet --then aws configure export-credentials --profile prod-sso --format process"));
   console.log(c.dim("    kubeconfig user   exec: { command: vswarm, args: [preflight, --quiet, --then, kubelogin, get-token, …] }"));
-  if (process.platform === "win32") console.log(c.amber("\n  Windows preview: scan, baseline, diff, watch, secrets, agents, preflight, accept, respond, report, unlock, selftest,\n  doctor, install, update and uninstall work. gate, guard, try, ca, cert, canary, pkg and shot are not on Windows yet; use them inside WSL."));
+  if (process.platform === "win32") console.log(c.amber("\n  Windows preview: try and agents --inspect need the sandbox, and ca, cert, canary and shot are not here yet;\n  use those inside WSL. Everything else works."));
   console.log(c.dim("\n  Local-first, no telemetry. Only package names and versions go to api.osv.dev for the known-malicious check (--offline skips it).\n"));
 }
 

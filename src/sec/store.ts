@@ -83,8 +83,9 @@ export function removeBlock(text: string, start: string, end: string): string {
 // Blocks vswarm writes into your files (PATH in ~/.zshrc, the ssh gate, the install guard, canaries). Their hashes
 // are kept so a scan does not report vswarm's own lines as a change. A block that differs by one character from what
 // vswarm wrote is not recognised, and is checked like any other line.
-const BLOCK = /# >>> vswarm[^\n]*>>>\n[\s\S]*?# <<< vswarm[^\n]*<<<\n?/g;
-const blockHash = (b: string) => createHash("sha256").update(b.trim()).digest("hex");
+// Line endings do not count: an editor on Windows may turn the block's \n into \r\n.
+const BLOCK = /# >>> vswarm[^\r\n]*>>>\r?\n[\s\S]*?# <<< vswarm[^\r\n]*<<<(\r?\n)?/g;
+const blockHash = (b: string) => createHash("sha256").update(b.replace(/\r\n/g, "\n").trim()).digest("hex");
 
 export function recordManaged(text: string) {
   const m = read<Record<string, number>>(files.managed()) ?? {};

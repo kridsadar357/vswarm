@@ -375,7 +375,7 @@ describe("windows: respond and the command line", () => {
 
   test.if(process.platform === "win32")("on Windows, commands of later phases stop with exit 4 and point to WSL", async () => {
     const sec = tmp("sec");
-    for (const cmd of [["gate", "ssh", "prod-*"], ["guard", "on"], ["try", "."], ["ca", "init"], ["cert"], ["canary", "list"], ["shot", "x"], ["pkg", "npm", "i", "x"], ["agents", "--inspect"]]) {
+    for (const cmd of [["try", "."], ["ca", "init"], ["cert"], ["canary", "list"], ["shot", "x"], ["agents", "--inspect"]]) {
       const r = await vswarm(sec, ...cmd);
       expect([cmd.join(" "), r.code]).toEqual([cmd.join(" "), 4]);
       expect(r.err).toContain("not on Windows yet");
@@ -453,6 +453,93 @@ describe("windows: background watch as a scheduled task", () => {
       // Through the real collector path: the same snapshot with and without the task.
       const items = windowsItems({ tasks: [{ path: "\\vswarm\\", name: "watch", state: "Ready", actions: [action] }] }, tmp("home")).items;
       expect(items.filter((i) => !ownWatchTask(i))).toEqual([]);
+    } finally {
+      delete process.env.VSWARM_SEC_DIR;
+    }
+  });
+});
+
+describe("windows: ssh gate and install guard", () => {
+  const { sshGate, cmdWord, readKept, writeKept, setBlock } = require("../src/setup");
+  const { psGuardBlock, GUARD_START, GUARD_END } = require("../src/sec/pkg");
+  const { recordManaged, stripManaged } = require("../src/sec/store");
+
+  test("the gate runs through cmd.exe: spaces escaped with ^, no host name, % and quotes refused, no certificates", () => {
+    const g = sshGate(["prod-*"], ["C:\\Users\\a b\\.vswarm\\bin\\vswarm.cmd"], { win: true });
+    expect(g).toContain('Match originalhost prod-* !exec "C:\\Users\\a^ b\\.vswarm\\bin\\vswarm.cmd preflight --quiet"');
+    expect(g).toContain('ProxyCommand cmd.exe /d /c "echo vswarm: this machine did not pass preflight; run: vswarm preflight 1>&2 & exit 1"');
+    expect(g).not.toContain("%h");
+    expect(cmdWord("C:\\a&b (x)\\v^.cmd")).toBe("C:\\a^&b^ ^(x^)\\v^^.cmd");
+    expect(() => cmdWord("C:\\%TEMP%\\v.cmd")).toThrow("%");
+    expect(() => sshGate(["prod-*"], ["C:\\v.cmd"], { win: true, cert: { key: "k", cert: "c" } })).toThrow("not on Windows");
+    // macOS and Linux keep the shell form.
+    expect(sshGate(["prod-*"], ["/v/vswarm"], { win: false })).toContain('!exec "/v/vswarm preflight --quiet --host %h"');
+  });
+
+  test("the PowerShell guard calls bun and the CLI by full path, quoted for PowerShell, and has no brew", () => {
+    const b = psGuardBlock("C:\\Users\\a b\\.bun\\bin\\bun.exe", "C:\\Users\\o'x\\.vswarm\\app\\src\\cli.ts");
+    expect(b.startsWith(GUARD_START) && b.endsWith(GUARD_END)).toBe(true);
+    expect(b).toContain("& 'C:\\Users\\a b\\.bun\\bin\\bun.exe' 'C:\\Users\\o''x\\.vswarm\\app\\src\\cli.ts' pkg $tool '--' @a");
+    expect(b).toContain("function npm { __vswarm_go npm '^(install|i|");
+    expect(b).toContain("function yarn { __vswarm_go yarn '^(|install|");
+    expect(b).toContain("function npx { __vswarm_go npx '.*' $args }");
+    expect(b).not.toContain("function brew");
+  });
+
+  test("a profile keeps its encoding when the guard is added and removed", () => {
+    const d = tmp("enc");
+    const sec = tmp("sec");
+    process.env.VSWARM_SEC_DIR = sec;
+    const block = psGuardBlock("C:\\b\\bun.exe", "C:\\ทดสอบ\\cli.ts");
+    try {
+      const cases: [string, Buffer][] = [
+        ["utf16le", Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from("Set-Alias ll ls\r\n# ไทย\r\n", "utf16le")])],
+        ["utf8bom", Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf]), Buffer.from("$x = 'ไทย'\n")])],
+        // A Thai line in Windows-874: not UTF-8, so its bytes must come back exactly.
+        ["latin1", Buffer.from([0x24, 0x78, 0x3d, 0x27, 0xb7, 0xb4, 0xca, 0xcd, 0xba, 0x27, 0x0a])],
+      ];
+      for (const [enc, bytes] of cases) {
+        const f = join(d, `${enc}.ps1`);
+        writeFileSync(f, bytes);
+        const before = readKept(f);
+        expect(before.enc).toBe(enc);
+        if (enc === "latin1") {
+          // The new lines carry Thai characters this code page file cannot hold as they are: refused, file untouched.
+          expect(() => setBlock(f, block, GUARD_START, GUARD_END)).toThrow("not UTF-8");
+          expect(readFileSync(f).equals(bytes)).toBe(true);
+          setBlock(f, psGuardBlock("C:\\b\\bun.exe", "C:\\a\\cli.ts"), GUARD_START, GUARD_END);
+        } else setBlock(f, block, GUARD_START, GUARD_END);
+        const after = readKept(f);
+        expect(after.enc).toBe(enc);
+        expect(after.text.startsWith(before.text.trimEnd())).toBe(true);
+        expect(after.text).toContain(GUARD_START);
+        // The scan does not count vswarm's own block as a change.
+        expect(stripManaged(after.text).trimEnd()).toBe(before.text.trimEnd());
+        setBlock(f, null, GUARD_START, GUARD_END);
+        expect(readKept(f).text.trimEnd()).toBe(before.text.trimEnd());
+        expect(readKept(f).enc).toBe(enc);
+      }
+      // A new profile gets a UTF-8 BOM, so Windows PowerShell 5.1 does not read it as ANSI.
+      const fresh = join(d, "new", "profile.ps1");
+      setBlock(fresh, block, GUARD_START, GUARD_END);
+      expect(readKept(fresh).enc).toBe("utf8bom");
+      // A plain UTF-8 profile that now holds non-ASCII text gets the BOM too.
+      const plain = join(d, "plain.ps1");
+      writeFileSync(plain, "Set-Alias ll ls\n");
+      setBlock(plain, block, GUARD_START, GUARD_END);
+      expect(readKept(plain).enc).toBe("utf8bom");
+    } finally {
+      delete process.env.VSWARM_SEC_DIR;
+    }
+  });
+
+  test("vswarm's block is still its own after an editor turns its line endings into CRLF", () => {
+    process.env.VSWARM_SEC_DIR = tmp("sec");
+    try {
+      const block = psGuardBlock("C:\\b\\bun.exe", "C:\\a\\cli.ts") + "\n";
+      recordManaged(block);
+      expect(stripManaged("Set-Alias ll ls\r\n" + block.replace(/\n/g, "\r\n"))).toBe("Set-Alias ll ls\r\n");
+      expect(stripManaged(block.replace("pkg $tool", "pkg $tool; iex $x"))).toContain("iex");
     } finally {
       delete process.env.VSWARM_SEC_DIR;
     }

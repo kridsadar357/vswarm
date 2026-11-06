@@ -9,7 +9,7 @@
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { exec, fileHash, sha256, type Ctx } from "../ctx";
-import { isManagedFile } from "../store";
+import { isManagedFile, stripManaged } from "../store";
 import type { Item } from "../types";
 import { suspiciousLocation, WIN_PATH } from "./system";
 
@@ -301,7 +301,11 @@ export async function windows(ctx: Ctx): Promise<{ items: Item[]; texts: Record<
   }
   const r = windowsItems(snap, ctx.home);
   for (const [k, v] of Object.entries(r.gaps)) ctx.gap?.(k, v);
-  return { items: r.items.filter((i) => !ownWatchTask(i)), texts: r.texts };
+  // vswarm's own blocks in a PowerShell profile (the install guard) are left out, as in ~/.zshrc.
+  const texts: Record<string, string> = {};
+  for (const [p, t] of Object.entries(r.texts)) texts[p] = stripManaged(t);
+  const items = r.items.filter((i) => !ownWatchTask(i)).map((i) => (i.kind === "rc" && texts[i.id] !== undefined ? { ...i, hash: sha256(texts[i.id]) } : i));
+  return { items, texts };
 }
 
 /** vswarm's own background check (vswarm watch), with exactly the action vswarm registered. */

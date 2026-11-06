@@ -34,25 +34,64 @@ jobs:
           bun src/cli.ts scan --offline || code=$?
           echo "exit $code"
           [ "$code" = 0 ] || [ "$code" = 3 ]
-      # Windows (phase 2): install, the background watch as a real scheduled task, and uninstall, on the runner.
-      - name: Windows install and watch
+      # Windows (phase 2) on the runner: install, the background watch as a real scheduled task, the ssh gate through
+      # Windows OpenSSH, the install guard in a PowerShell profile, and uninstall. The data folder has a space in its
+      # name on purpose: the gate's cmd.exe line has to escape it.
+      - name: Windows install, watch, gate and guard
         if: runner.os == 'Windows'
         shell: powershell
         run: |
           $ErrorActionPreference = 'Stop'
-          $env:VSWARM_HOME = Join-Path $env:RUNNER_TEMP 'vswarm-home'
+          $env:VSWARM_HOME = Join-Path $env:RUNNER_TEMP 'vswarm home'
           $vs = Join-Path $env:VSWARM_HOME 'bin\vswarm.cmd'
-          bun src/cli.ts install --yes; if ($LASTEXITCODE) { throw "install exit $LASTEXITCODE" }
+          $cli = (Resolve-Path src\cli.ts).Path
+          function vswarm { bun $cli @args; if ($LASTEXITCODE -and $LASTEXITCODE -ne 3) { throw "vswarm $args exit $LASTEXITCODE" } }
+          function sshTry($h) { (cmd /c "ssh -o BatchMode=yes -o ConnectTimeout=3 $h true 2>&1") -join "`n" }
+          vswarm install --yes
           if (-not (Test-Path $vs)) { throw "no launcher at $vs" }
-          bun src/cli.ts baseline --yes; if ($LASTEXITCODE) { throw "baseline exit $LASTEXITCODE" }
-          bun src/cli.ts watch on --every 30; if ($LASTEXITCODE) { throw "watch on exit $LASTEXITCODE" }
+          vswarm baseline --yes
+
+          "== watch"
+          vswarm watch on --every 30
           $t = Get-ScheduledTask -TaskPath '\vswarm\' -TaskName 'watch'
           "$($t.Actions[0].Execute) $($t.Actions[0].Arguments)"
-          bun src/cli.ts watch run; if ($LASTEXITCODE) { throw "watch run exit $LASTEXITCODE" }
-          # vswarm's own task is not a new scheduled task in the diff.
-          $diff = (bun src/cli.ts diff) -join "`n"
+          vswarm watch run
+
+          "== gate"
+          vswarm gate ssh "probe-*"
+          Get-Content (Join-Path $HOME '.ssh\config')
+          $lock = Join-Path $env:VSWARM_HOME 'sec\lock'
+          Set-Content -Path $lock -Value '{"incident":"ci","at":0,"reason":"CI"}'
+          $o = sshTry 'probe-1'; $o
+          if ($o -notmatch 'did not pass preflight') { throw 'the gate did not stop ssh while an incident was open' }
+          $o = sshTry 'other-host'; $o
+          if ($o -match 'vswarm') { throw 'the gate touched a host it does not guard' }
+          Remove-Item $lock
+          vswarm accept --all
+          $o = sshTry 'probe-1'; $o
+          if ($o -match 'did not pass preflight' -or $o -notmatch 'resolve hostname') { throw 'the gate stopped ssh although preflight passes' }
+
+          "== guard"
+          vswarm guard on
+          $docs = [Environment]::GetFolderPath('MyDocuments')
+          $prof = Join-Path $docs 'WindowsPowerShell\profile.ps1'
+          if (-not (Select-String -Path $prof -Pattern 'vswarm guard' -Quiet)) { throw "no guard in $prof" }
+          $work = Join-Path $env:RUNNER_TEMP 'guard-work'; New-Item -ItemType Directory -Force $work | Out-Null
+          Push-Location $work
+          $o = (powershell -NoLogo -NonInteractive -Command "npm install axois; 'exit=' + `$LASTEXITCODE") -join "`n"; $o
+          if ($o -notmatch 'exit=3' -or (Test-Path node_modules\axois)) { throw 'the guard let a look-alike package in' }
+          $o = (powershell -NoLogo -NonInteractive -Command "npm --version; 'exit=' + `$LASTEXITCODE") -join "`n"; $o
+          if ($o -notmatch 'exit=0') { throw 'the guard broke a command that installs nothing' }
+          Pop-Location
+
+          "== vswarm's own changes are not findings"
+          $diff = (bun $cli diff) -join "`n"
           $diff
-          if ($diff -match 'vswarm\\watch') { throw 'the scan reported vswarm''s own task' }
-          bun src/cli.ts uninstall; if ($LASTEXITCODE) { throw "uninstall exit $LASTEXITCODE" }
+          foreach ($p in 'vswarm\\watch', 'profile\.ps1', '\.ssh\\config') { if ($diff -match $p) { throw "the scan reported vswarm's own $p" } }
+
+          "== uninstall"
+          vswarm uninstall
           if (Get-ScheduledTask -TaskPath '\vswarm\' -TaskName 'watch' -ErrorAction SilentlyContinue) { throw 'uninstall left the task behind' }
           if (Test-Path $vs) { throw 'uninstall left the launcher behind' }
+          if (Select-String -Path $prof -Pattern 'vswarm guard' -Quiet) { throw 'uninstall left the guard behind' }
+          if (Select-String -Path (Join-Path $HOME '.ssh\config') -Pattern 'vswarm gate' -Quiet) { throw 'uninstall left the gate behind' }

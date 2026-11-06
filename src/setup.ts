@@ -8,7 +8,7 @@ import { dirname, join, resolve } from "node:path";
 import { ensureHome, HOME, paths, VERSION } from "./home";
 import { dq, exec, shq } from "./sec/ctx";
 import { blockRegex, files, loadBaseline, loadLock, recordManaged, removeBlock } from "./sec/store";
-import { GUARD_END, GUARD_START, guardBlock } from "./sec/pkg";
+import { GUARD_END, GUARD_START, guardBlock, psGuardBlock } from "./sec/pkg";
 import { fingerprints, PIN, secureUpdate } from "./sec/update";
 
 export const CLI = resolve(import.meta.dir, "cli.ts");
@@ -144,8 +144,34 @@ export function rcFiles(home = homedir(), bin = paths.bin(), comp = paths.comple
   return out;
 }
 
-function setBlock(file: string, body: string | null, start = BLOCK_START, end = BLOCK_END) {
-  const old = existsSync(file) ? readFileSync(file, "utf8") : "";
+type Enc = "utf8" | "utf8bom" | "utf16le" | "latin1";
+
+/**
+ * A file as text, with the encoding to write it back in. PowerShell profiles come as UTF-16 (Windows PowerShell's
+ * own redirections), UTF-8 with or without a BOM, or the ANSI code page; a block added to one must not garble the rest.
+ */
+export function readKept(file: string): { text: string; enc: Enc } | undefined {
+  if (!existsSync(file)) return;
+  const buf = readFileSync(file);
+  if (buf[0] === 0xff && buf[1] === 0xfe) return { text: buf.subarray(2).toString("utf16le"), enc: "utf16le" };
+  if (buf[0] === 0xef && buf[1] === 0xbb && buf[2] === 0xbf) return { text: buf.subarray(3).toString("utf8"), enc: "utf8bom" };
+  try {
+    return { text: new TextDecoder("utf-8", { fatal: true }).decode(buf), enc: "utf8" };
+  } catch {
+    // Not UTF-8: bytes one to one, so whatever code page it is in comes back unchanged.
+    return { text: buf.toString("latin1"), enc: "latin1" };
+  }
+}
+
+export function writeKept(file: string, text: string, enc: Enc) {
+  if (enc === "latin1" && /[^\x00-\xff]/.test(text)) throw new Error(`${file} is not UTF-8 and the new lines are; save it as UTF-8 first`);
+  const bom = enc === "utf16le" ? Buffer.from([0xff, 0xfe]) : enc === "utf8bom" ? Buffer.from([0xef, 0xbb, 0xbf]) : Buffer.alloc(0);
+  writeFileSync(file, Buffer.concat([bom, Buffer.from(text, enc === "utf16le" ? "utf16le" : enc === "latin1" ? "latin1" : "utf8")]));
+}
+
+export function setBlock(file: string, body: string | null, start = BLOCK_START, end = BLOCK_END) {
+  const kept = readKept(file);
+  const old = kept?.text ?? "";
   // body may carry its own markers (guardBlock does); the managed block is always start…end.
   const block = body?.startsWith(start) ? `${body}\n` : `${start}\n${body}\n${end}\n`;
   if (body !== null && old.includes(block)) return false;
@@ -153,7 +179,10 @@ function setBlock(file: string, body: string | null, start = BLOCK_START, end = 
   const next = body === null ? rest : rest.trimEnd() + (rest.trim() ? "\n\n" : "") + block;
   if (next === old) return false;
   mkdirSync(dirname(file), { recursive: true });
-  writeFileSync(file, next);
+  // Windows PowerShell 5.1 reads a UTF-8 file without a BOM as ANSI: new profiles, and non-ASCII paths, get a BOM.
+  const ps1 = file.toLowerCase().endsWith(".ps1");
+  const enc: Enc = kept ? (ps1 && kept.enc === "utf8" && /[^\x00-\x7f]/.test(next) ? "utf8bom" : kept.enc) : ps1 ? "utf8bom" : "utf8";
+  writeKept(file, next, enc);
   if (body !== null) recordManaged(block);
   return true;
 }
@@ -316,16 +345,11 @@ export async function doctor(): Promise<boolean> {
   const w = watchState();
   if (w.on) ok("background watch on", w.state ? `last check ${new Date(w.state.at).toLocaleString()}` : "no check yet");
   else console.log(`  ${c.dim("·")} background watch off  ${c.dim("vswarm watch on")}`);
-  if (WIN) {
-    console.log(`  ${c.dim("·")} ssh gate and install guard are not on Windows yet  ${c.dim("use them inside WSL")}`);
-    console.log();
-    return good;
-  }
   const sshCfgPath = join(homedir(), ".ssh/config");
   const sshCfg = existsSync(sshCfgPath) ? readFileSync(sshCfgPath, "utf8") : "";
   if (sshCfg.includes(GATE_START)) ok("ssh gate installed", "~/.ssh/config");
   else console.log(`  ${c.dim("·")} ssh gate not installed  ${c.dim('vswarm gate ssh "prod-*"')}`);
-  if (guardOn()) ok("install guard on", "npm, pip, brew … are checked before installing");
+  if (await guardOn()) ok("install guard on", "npm, pip, brew … are checked before installing");
   else console.log(`  ${c.dim("·")} install guard off  ${c.dim("vswarm guard on")}`);
   console.log();
   return good;
@@ -336,19 +360,35 @@ export const GATE_START = "# >>> vswarm gate >>>";
 const GATE_END = "# <<< vswarm gate <<<";
 
 /** The ~/.ssh/config block: hosts matching the patterns connect only when preflight passes. */
-export function sshGate(patterns: string[], launcher: string[], opt: { cert?: { key: string; cert: string } } = {}): string {
+/**
+ * One path for cmd.exe, which runs Match exec on Windows OpenSSH. ssh's own tokenizer allows no quotes inside the
+ * exec string, so spaces and cmd's special characters are escaped with ^ instead; % (ssh and cmd both expand it)
+ * and quotes are refused.
+ */
+export function cmdWord(p: string): string {
+  if (/["%\r\n]/.test(p)) throw new Error(`cannot put ${p} in ~/.ssh/config: it contains % or a double quote`);
+  return p.replace(/[ &|<>^()]/g, "^$&");
+}
+
+export function sshGate(patterns: string[], launcher: string[], opt: { cert?: { key: string; cert: string }; win?: boolean } = {}): string {
+  const win = opt.win ?? WIN;
   // Both end up on one line of ~/.ssh/config: a space, quote or newline in a pattern would change what the line means.
   const bad = patterns.find((p) => !/^[\w*?!.:\[\]-]+$/.test(p));
   if (bad !== undefined) throw new Error(`"${bad}" is not an ssh host pattern (letters, digits, . - * ? and !)`);
   if (launcher.some((p) => /["\n]/.test(p))) throw new Error(`cannot put ${launcher.join(" ")} in ~/.ssh/config: it contains a double quote`);
-  // The command sits inside ssh's double quotes; a part with spaces or shell characters gets single quotes of its own.
-  const q = launcher.map(shq).join(" ");
+  if (win && opt.cert) throw new Error("short-lived certificates are not on Windows yet; use vswarm gate ssh without --cert");
+  // The command sits inside ssh's double quotes; a part with spaces or shell characters gets single quotes of its own
+  // (on Windows, cmd.exe escapes). Windows leaves out --host %h: the host name would reach cmd.exe unescaped.
+  const q = launcher.map(win ? cmdWord : shq).join(" ");
+  const tail = win ? "" : " --host %h";
   return [
     GATE_START,
     `# Hosts below connect only after \`vswarm preflight\` passes. Remove with: vswarm gate remove`,
     // originalhost is the name you typed (ssh vrfix-prod), before any HostName substitution.
-    `Match originalhost ${patterns.join(",")} !exec "${q} ${opt.cert ? "cert" : "preflight"} --quiet --host %h"`,
-    `    ProxyCommand /bin/sh -c 'echo "vswarm: this machine did not pass preflight; run: vswarm preflight" >&2; exit 1'`,
+    `Match originalhost ${patterns.join(",")} !exec "${q} ${opt.cert ? "cert" : "preflight"} --quiet${tail}"`,
+    win
+      ? `    ProxyCommand cmd.exe /d /c "echo vswarm: this machine did not pass preflight; run: vswarm preflight 1>&2 & exit 1"`
+      : `    ProxyCommand /bin/sh -c 'echo "vswarm: this machine did not pass preflight; run: vswarm preflight" >&2; exit 1'`,
     // With certificates: log in with the fresh session key and its certificate first.
     ...(opt.cert ? [`Match originalhost ${patterns.join(",")}`, `    IdentityFile ${opt.cert.key}`, `    CertificateFile ${opt.cert.cert}`] : []),
     GATE_END,
@@ -384,37 +424,67 @@ export async function gate(args: string[], home = homedir()) {
   if (block) recordManaged(block + "\n");
   ok(action === "ssh" ? `ssh gate added for ${args.join(", ")}` : "ssh gate removed", cfgPath);
   if (old) console.log(`  ${c.dim(`backup ${backup}`)}`);
-  if (action === "ssh") console.log(`  ${c.dim("test it: ssh -G <a matching host> | grep -i proxycommand  (empty while preflight passes)")}`);
+  if (action === "ssh") console.log(`  ${c.dim(`test it: ssh -G <a matching host> | ${WIN ? "findstr /i" : "grep -i"} proxycommand  (empty while preflight passes)`)}`);
 }
 
 // ── Install guard: npm, pip, brew … ask vswarm before they install
-function guardFiles(): string[] {
-  return rcFiles().map((r) => r.file).filter((f) => /\.(zsh|bash)rc$/.test(f));
+let docsDir: Promise<string | undefined> | undefined;
+/** The real Documents folder (OneDrive may hold it), where PowerShell looks for profiles. */
+function windowsDocs(): Promise<string | undefined> {
+  return (docsDir ??= (async () => {
+    const { powershell } = await import("./sec/schedule");
+    const r = await exec([powershell(), "-NoProfile", "-NonInteractive", "-Command", "[Environment]::GetFolderPath('MyDocuments')"], { timeoutMs: 30_000 });
+    return r.out.trim() || undefined;
+  })());
 }
 
-export function guardOn(): boolean {
-  return guardFiles().some((f) => existsSync(f) && readFileSync(f, "utf8").includes(GUARD_START));
+/** Where the guard goes: ~/.zshrc and ~/.bashrc, or on Windows the profile.ps1 of Windows PowerShell and of PowerShell 7. */
+async function guardFiles(adding = false): Promise<string[]> {
+  if (!WIN) return rcFiles().map((r) => r.file).filter((f) => /\.(zsh|bash)rc$/.test(f));
+  const docs = await windowsDocs();
+  if (!docs) throw new Error("could not find your Documents folder, where PowerShell profiles live");
+  const ps7 = join(docs, "PowerShell", "profile.ps1");
+  // PowerShell 7's profile only where PowerShell 7 is installed; removing looks in both.
+  return [join(docs, "WindowsPowerShell", "profile.ps1"), ...(!adding || Bun.which("pwsh") || existsSync(dirname(ps7)) ? [ps7] : [])];
+}
+
+export async function guardOn(): Promise<boolean> {
+  return (await guardFiles()).some((f) => (readKept(f)?.text ?? "").includes(GUARD_START));
+}
+
+/** PowerShell runs no profile under the Restricted and AllSigned policies (Restricted is the Windows default). */
+async function profilesRun(): Promise<{ ok: boolean; policy: string }> {
+  const { powershell } = await import("./sec/schedule");
+  const r = await exec([powershell(), "-NoProfile", "-NonInteractive", "-Command", "[string](Get-ExecutionPolicy)"], { timeoutMs: 30_000 });
+  const policy = r.out.trim() || "unknown";
+  return { ok: !/^(Restricted|AllSigned|Undefined|unknown)$/i.test(policy), policy };
 }
 
 export async function guard(args: string[]) {
   const action = args.shift() ?? "status";
   if (action === "status") {
-    if (guardOn()) ok("install guard is on", guardFiles().join(", "));
+    if (await guardOn()) ok("install guard is on", (await guardFiles()).join(", "));
     else console.log(`  ${c.dim("·")} install guard is off  ${c.dim("vswarm guard on")}`);
     return;
   }
   if (action !== "on" && action !== "off") throw new Error("usage: vswarm guard on | off | status");
   const launcher = existsSync(launcherPath()) ? launcherPath() : undefined;
   if (action === "on" && !launcher) throw new Error("install the launcher first: vswarm install");
-  for (const f of guardFiles()) {
-    const changed = setBlock(f, action === "on" ? guardBlock(launcher!) : null, GUARD_START, GUARD_END);
+  const body = action === "off" ? null : WIN ? psGuardBlock(process.execPath, CLI) : guardBlock(launcher!);
+  for (const f of await guardFiles(action === "on")) {
+    const changed = setBlock(f, body, GUARD_START, GUARD_END);
     ok(changed ? `${action === "on" ? "added to" : "removed from"} ${f}` : `already ${action} in ${f}`);
   }
   if (action === "on") {
-    console.log(`  ${c.dim("npm, npx, pnpm, yarn, bun, bunx, pip, pip3, uv, uvx, pipx and brew now ask vswarm before installing")}`);
-    console.log(`  ${c.dim("new terminals have it; this one: source " + guardFiles()[0])}`);
+    console.log(`  ${c.dim(`npm, npx, pnpm, yarn, bun, bunx, pip, pip3, uv, uvx, pipx${WIN ? "" : " and brew"} now ask vswarm before installing`)}`);
+    if (WIN) {
+      const p = await profilesRun();
+      if (!p.ok) warn(`PowerShell's execution policy is ${p.policy}: it runs no profile, so the guard stays off`, "allow local scripts for your user: Set-ExecutionPolicy -Scope CurrentUser RemoteSigned");
+      console.log(`  ${c.dim("new PowerShell windows have it; this one: . " + (await guardFiles(true))[0])}`);
+    } else console.log(`  ${c.dim("new terminals have it; this one: source " + (await guardFiles())[0])}`);
     console.log(`  ${c.dim("try it: npm install axois   (a look-alike of axios; nothing is installed unless you say so)")}`);
-  } else console.log(`  ${c.dim("open a new terminal, or: unset -f npm npx pnpm yarn bun bunx pip pip3 uv uvx pipx brew")}`);
+  } else if (WIN) console.log(`  ${c.dim("open a new PowerShell window")}`);
+  else console.log(`  ${c.dim("open a new terminal, or: unset -f npm npx pnpm yarn bun bunx pip pip3 uv uvx pipx brew")}`);
 }
 
 /**
@@ -427,7 +497,7 @@ export function adoptManagedBlocks() {
   if (existsSync(launcherPath())) known.push(guardBlock(launcherPath()) + "\n");
   const sshCfg = join(homedir(), ".ssh", "config");
   const cfg = existsSync(sshCfg) ? readFileSync(sshCfg, "utf8") : "";
-  const m = /Match originalhost (\S+) !exec "(.+) (preflight|cert) --quiet --host %h"/.exec(cfg);
+  const m = /Match originalhost (\S+) !exec "(.+) (preflight|cert) --quiet(?: --host %h)?"/.exec(cfg);
   if (m && existsSync(launcherPath())) {
     const cert = m[3] === "cert" ? { key: join(HOME, "ca", "session"), cert: join(HOME, "ca", "session-cert.pub") } : undefined;
     // A pattern sshGate would refuse today was not written by vswarm; that block simply stays visible to scans.
@@ -496,7 +566,7 @@ export async function uninstall(args: string[]) {
   rmSync(paths.completions(), { recursive: true, force: true });
   const sshCfg = join(homedir(), ".ssh/config");
   if (existsSync(sshCfg) && readFileSync(sshCfg, "utf8").includes(GATE_START)) await gate(["remove"]);
-  if (guardOn()) await guard(["off"]);
+  if (await guardOn()) await guard(["off"]);
   if (args.includes("--purge")) {
     rmSync(HOME, { recursive: true, force: true });
     ok("data removed", HOME);
