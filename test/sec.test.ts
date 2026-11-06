@@ -158,7 +158,8 @@ describe("vswarm try", () => {
     expect(staticCheck(fixture("clean-app"))).toEqual([]);
   });
 
-  test.skipIf(process.platform !== "darwin")("the sandbox stops the fake interview repo and records what it tried", async () => {
+  const sandbox = process.platform === "darwin" || (process.platform === "linux" && !!Bun.which("bwrap"));
+  test.skipIf(!sandbox)("the sandbox stops the fake interview repo and records what it tried", async () => {
     const dir = mkdtempSync(join(tmpdir(), "vs-try-"));
     process.env.VSWARM_TRY_DIR = dir;
     try {
@@ -168,14 +169,55 @@ describe("vswarm try", () => {
       expect(titles).toContain("login job");
       expect(titles).toContain("shell start-up file");
       expect(titles).toContain("203.0.113.9");
-      // A read is only denied (and logged) when the file exists; CI machines have no SSH key.
-      if (r.logRead && existsSync(join(require("node:os").homedir(), ".ssh/id_ed25519"))) expect(titles).toContain("SSH keys");
+      // macOS logs a denied read only when the file exists (CI machines have no SSH key); strace logs every attempt.
+      const home = require("node:os").homedir();
+      if (r.logRead && (process.platform === "linux" || existsSync(join(home, ".ssh/id_ed25519")))) expect(titles).toContain("SSH keys");
+      if (process.platform === "linux" && r.logRead) expect(titles).toContain("background process");
       // Nothing reached the real home.
-      expect(existsSync(join(require("node:os").homedir(), "Library/LaunchAgents/com.dev.helper.plist"))).toBe(false);
+      expect(existsSync(join(home, "Library/LaunchAgents/com.dev.helper.plist"))).toBe(false);
+      expect(existsSync(join(home, ".config/systemd/user/dev-helper.service"))).toBe(false);
     } finally {
       delete process.env.VSWARM_TRY_DIR;
     }
   }, 120_000);
+});
+
+describe("linux sandbox", () => {
+  const { traceDenials, bwrapArgs } = require("../src/sec/try/linux");
+  const box = { dir: "/home/u/.vswarm/try/x", work: "/home/u/.vswarm/try/x/work", home: "/home/u/.vswarm/try/x/home", tmp: "/home/u/.vswarm/try/x/tmp", netlog: "" };
+
+  test("strace lines become the same attempts the macOS sandbox log reports", () => {
+    const d = mkdtempSync(join(tmpdir(), "vs-trace-"));
+    const log = join(d, "trace.log");
+    writeFileSync(log, [
+      `7 execve("/usr/bin/node", ["node", "x.js"], 0x7ffd /* 20 vars */) = 0`,
+      `7 openat(AT_FDCWD, "/home/u/.ssh/id_ed25519", O_RDONLY|O_CLOEXEC) = -1 ENOENT (No such file or directory)`,
+      `7 openat(AT_FDCWD, "/home/u/.vswarm/try/x/work/a.js", O_RDONLY) = 3`,
+      `7 openat(AT_FDCWD, "/etc/cron.d/x", O_WRONLY|O_CREAT|O_TRUNC, 0644) = -1 EROFS (Read-only file system)`,
+      `7 openat(AT_FDCWD, "/tmp/scratch", O_WRONLY|O_CREAT, 0644) = 4`,
+      `7 openat(AT_FDCWD, "/home/package.json", O_RDWR|O_CLOEXEC) = -1 ENOENT (No such file or directory)`,
+      `7 openat(AT_FDCWD, "/home/u/.config/autostart/x.desktop", O_WRONLY|O_CREAT|O_TRUNC, 0644) = 4`,
+      `7 openat(AT_FDCWD, "/sys/kernel/debug/tracing/trace_marker", O_WRONLY) = -1 EACCES (Permission denied)`,
+      `7 connect(5, {sa_family=AF_INET, sin_port=htons(1224), sin_addr=inet_addr("203.0.113.9")}, 16) = -1 ENETUNREACH (Network is unreachable)`,
+      `7 connect(6, {sa_family=AF_INET, sin_port=htons(3128), sin_addr=inet_addr("127.0.0.1")}, 16) = 0`,
+      `7 connect(8, {sa_family=AF_UNIX, sun_path="/run/user/1000/bus"}, 110) = -1 ENOENT (No such file or directory)`,
+      `9 setsid()                         = 9`,
+      `9 execve("/usr/bin/sleep", ["sleep", "20"], 0x7ffd /* 20 vars */) = 0`,
+    ].join("\n"));
+    expect(traceDenials(log, "/home/u", box).map((x: any) => `${x.op} ${x.target}`)).toEqual([
+      "file-read /home/u/.ssh/id_ed25519", "file-write /etc/cron.d/x", "file-write /home/u/.config/autostart/x.desktop", "network-outbound 203.0.113.9:1224", "unix-connect /run/user/1000/bus", "setsid sleep",
+    ]);
+  });
+
+  test("bubblewrap hides every home and /run, keeps the try folder, and has no network", () => {
+    const a = bwrapArgs("/home/u", box, { tools: ["/home/u/.bun"], bun: "/home/u/.bun/bin/bun", interactive: false }).join(" ");
+    expect(a).toContain("--unshare-net");
+    expect(a).toContain("--unshare-pid");
+    expect(a).toContain("--new-session");
+    expect(a).toContain(`--bind ${box.dir} ${box.dir}`);
+    expect(a).toContain("--ro-bind /home/u/.bun /home/u/.bun");
+    expect(a.indexOf("--tmpfs /home")).toBeLessThan(a.indexOf("--bind " + box.dir));
+  });
 });
 
 describe("short-lived SSH certificates", () => {

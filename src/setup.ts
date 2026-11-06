@@ -246,9 +246,12 @@ export async function doctor(): Promise<boolean> {
   let good = true;
   step("runtime");
   ok(`bun ${Bun.version}`, process.execPath);
-  for (const tool of process.platform === "darwin" ? ["codesign", "plutil", "lsof", "ps"] : ["lsof", "ps"]) {
+  const tools: [string, string][] = process.platform === "darwin"
+    ? [["codesign", "some checks will be skipped"], ["plutil", "some checks will be skipped"], ["lsof", "connections will not be checked"], ["ps", "processes will not be checked"]]
+    : [["ss", "connections will not be checked (iproute2)"], ["bwrap", "vswarm try needs it: sudo apt install bubblewrap"], ["strace", "vswarm try will not see file and connection attempts: sudo apt install strace"]];
+  for (const [tool, why] of tools) {
     if (Bun.which(tool)) ok(tool);
-    else warn(`${tool} not found`, "some checks will be skipped");
+    else warn(`${tool} not found`, why);
   }
   const git = await version(["git", "--version"]);
   if (git) ok(git);

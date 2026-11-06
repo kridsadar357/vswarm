@@ -10,7 +10,12 @@ vswarm อยู่ตรงก่อนขั้นสุดท้ายนั�
 
 ## ติดตั้ง
 
-ใช้กับ macOS เป็นหลัก ส่วน Linux ใช้ได้เกือบทุกการตรวจ ยกเว้นการตรวจลายเซ็นโปรแกรม ต้องมี [Bun](https://bun.sh) และ git
+ใช้ได้ทั้ง macOS และ Linux ต้องมี [Bun](https://bun.sh) และ git บน Linux ถ้าจะใช้ `vswarm try` ต้องลง bubblewrap และ strace ด้วย (`sudo apt install bubblewrap strace`)
+
+บน Linux vswarm ตรวจ systemd unit, XDG autostart, `/etc/ld.so.preload` และ process จาก `/proc`
+- `vswarm try` ใช้ bubblewrap: ซ่อน home ทุกคน ซ่อน `/run` (socket ของ Docker, D-Bus, keyring) ระบบเป็นอ่านอย่างเดียว และมี network กับ pid ของตัวเอง
+- strace บันทึกทุกไฟล์ที่โค้ดพยายามเปิด และทุกที่อยู่ที่พยายามต่อออกไป
+- Ubuntu 24.04 จำกัด user namespace: `sudo sysctl kernel.apparmor_restrict_unprivileged_userns=0`
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/kridsadar357/vswarm/main/install.sh | sh

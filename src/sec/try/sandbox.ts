@@ -11,7 +11,12 @@ import { join } from "node:path";
 const TOOLCHAINS = [
   ".bun", ".nvm", ".npm-global", ".volta", ".fnm", ".nodenv", ".pyenv", ".rbenv", ".rustup", ".cargo/bin", ".deno",
   ".local/bin", ".local/share/pnpm", "Library/pnpm", ".asdf", ".local/share/mise", ".sdkman", "go/bin", ".cache/ms-playwright",
+  ".local/share/fnm", ".local/lib", ".linuxbrew",
 ];
+
+export function toolchains(realHome: string): string[] {
+  return TOOLCHAINS.map((t) => join(realHome, t)).filter((p) => existsSync(p));
+}
 
 const q = (s: string) => `"${s.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
 
@@ -24,7 +29,7 @@ export interface Box {
 }
 
 export function profile(realHome: string, box: Box, proxyPort: number): string {
-  const tools = TOOLCHAINS.map((t) => join(realHome, t)).filter((p) => existsSync(p));
+  const tools = toolchains(realHome);
   const mine = [box.work, box.home, box.tmp];
   return `(version 1)
 (deny default)

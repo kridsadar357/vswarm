@@ -2,7 +2,7 @@
 
 import type { Ctx } from "./ctx";
 import { brew, browsers, cargo, editors, node, python } from "./collect/packages";
-import { binaries, launchd, running, startupFiles } from "./collect/system";
+import { autostart, binaries, launchd, preload, running, startupFiles } from "./collect/system";
 import type { Item, Scan } from "./types";
 
 export async function scan(ctx: Ctx, opt: { live?: boolean } = {}): Promise<Scan> {
@@ -18,6 +18,8 @@ export async function scan(ctx: Ctx, opt: { live?: boolean } = {}): Promise<Scan
     ["editor extensions", () => editors(ctx)],
     ["browser extensions", () => browsers(ctx)],
     ["launchd", () => launchd(ctx)],
+    ["systemd and autostart", () => autostart(ctx)],
+    ["ld.so.preload", () => preload(ctx)],
     ["startup files", async () => {
       const r = await startupFiles(ctx);
       texts = r.texts;

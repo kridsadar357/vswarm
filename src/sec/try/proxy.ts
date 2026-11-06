@@ -24,17 +24,15 @@ export function allowedBy(mode: "none" | "registries" | "all") {
   return (host: string) => mode === "all" || (mode === "registries" && REGISTRIES.some((r) => host === r || host.endsWith("." + r)));
 }
 
-export function startProxy(allow: (host: string) => boolean): Proxy {
+/** Listens on 127.0.0.1, or on a unix socket (Linux: the sandbox has its own network and reaches it through a file). */
+export function startProxy(allow: (host: string) => boolean, opt: { unix?: string } = {}): Proxy {
   const hits: ProxyHit[] = [];
   type State = { buf: Buffer; up?: any; open: boolean; pending: Buffer[] };
-  const server = Bun.listen<State>({
-    hostname: "127.0.0.1",
-    port: 0,
-    socket: {
-      open(s) {
+  const handlers = {
+      open(s: import("bun").Socket<State>) {
         s.data = { buf: Buffer.alloc(0), open: false, pending: [] };
       },
-      data(s, chunk) {
+      data(s: import("bun").Socket<State>, chunk: Buffer) {
         const st = s.data;
         if (st.up) {
           if (st.open) st.up.write(chunk);
@@ -102,11 +100,11 @@ export function startProxy(allow: (host: string) => boolean): Proxy {
           },
         }).catch(() => s.end("HTTP/1.1 502 Bad Gateway\r\n\r\n"));
       },
-      close(s) {
+      close(s: import("bun").Socket<State>) {
         if (s.data?.up && s.data.open) s.data.up.end();
       },
       error() {},
-    },
-  });
-  return { port: server.port, hits, stop: () => server.stop(true) };
+  } satisfies import("bun").SocketHandler<State>;
+  const server = opt.unix ? Bun.listen<State>({ unix: opt.unix, socket: handlers }) : Bun.listen<State>({ hostname: "127.0.0.1", port: 0, socket: handlers });
+  return { port: opt.unix ? 0 : (server as any).port, hits, stop: () => server.stop(true) };
 }

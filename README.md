@@ -18,7 +18,8 @@ access (ssh, AWS, Kubernetes) from a machine that does not pass.
 
 ## Install
 
-macOS first. Linux works for most checks (no code-signature checks). Needs [Bun](https://bun.sh) and git.
+macOS and Linux. Needs [Bun](https://bun.sh) and git; on Linux, `vswarm try` also needs bubblewrap and strace
+(`sudo apt install bubblewrap strace`).
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/kridsadar357/vswarm/main/install.sh | sh
@@ -201,6 +202,24 @@ a technique you have seen is the most useful contribution you can make.
 - With `vswarm guard on`, the names you install also go to the registry they come from (registry.npmjs.org,
   api.npmjs.org, api.deps.dev, pypi.org): the same names your package manager is about to send anyway.
 - Credential checks report where and what kind, never the value.
+
+## Linux
+
+The same commands, with Linux's own places to hide:
+
+| | macOS | Linux |
+| --- | --- | --- |
+| login jobs | LaunchAgents / LaunchDaemons | systemd units (user and system), XDG autostart |
+| system-wide hooks | | `/etc/ld.so.preload` |
+| running programs | `ps`, `lsof` | `/proc`, `ss` |
+| `vswarm try` walls | Seatbelt (`sandbox-exec`) | bubblewrap: every home hidden, system read-only, `/run` hidden (Docker, D-Bus, keyring and agent sockets), own network and pid namespace |
+| `vswarm try` record | the sandbox's deny log | strace: every path it tried and every address it tried to connect to |
+| code signatures | `codesign` | not checked; new programs on PATH are reported as unverified |
+
+Things that differ: on Linux the code's background processes end with the sandbox (reported as "detaches from the
+terminal"); a hidden home is an empty writable folder, so writes there are recorded and thrown away. Ubuntu 24.04
+limits user namespaces: `sudo sysctl kernel.apparmor_restrict_unprivileged_userns=0`, or give bwrap an AppArmor
+profile. Inside Docker, run the container with `--security-opt seccomp=unconfined --security-opt apparmor=unconfined`.
 
 ## Limits
 

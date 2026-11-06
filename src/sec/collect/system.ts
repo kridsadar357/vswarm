@@ -1,5 +1,6 @@
-// Ways code keeps itself running or gets run without being asked: launchd jobs, shell startup files,
-// cron, git hooks, ssh access files, new executables on PATH, and what is running and talking right now.
+// Ways code keeps itself running or gets run without being asked: launchd jobs (macOS), systemd units and XDG
+// autostart entries (Linux), shell startup files, cron, git hooks, ssh access files, /etc/ld.so.preload, new
+// executables on PATH, and what is running and talking right now.
 
 import { lstatSync, readlinkSync } from "node:fs";
 import { join } from "node:path";
@@ -35,7 +36,37 @@ export async function launchd(ctx: Ctx): Promise<Item[]> {
   return out;
 }
 
-const RC_FILES = [".zshrc", ".zprofile", ".zshenv", ".zlogin", ".bashrc", ".bash_profile", ".profile", ".config/fish/config.fish", ".gitconfig", ".ssh/config", ".ssh/authorized_keys", ".npmrc", ".curlrc"];
+/** systemd units and XDG autostart entries: the Linux equivalents of launchd login jobs. Same item kind, same rules. */
+export async function autostart(ctx: Ctx): Promise<Item[]> {
+  const dirs: [string, string][] = [
+    [join(ctx.home, ".config/systemd/user"), "user"],
+    [join(ctx.home, ".config/autostart"), "user"],
+    ...(ctx.system ? ([["/etc/systemd/system", "system-daemon"], ["/etc/systemd/user", "system-agent"], ["/etc/xdg/autostart", "system-agent"]] as [string, string][]) : []),
+  ];
+  const out: Item[] = [];
+  for (const [dir, source] of dirs) {
+    for (const f of ls(dir)) {
+      if (!/\.(service|timer|desktop)$/.test(f)) continue;
+      const path = join(dir, f);
+      const text = readText(path, 200_000);
+      if (text === undefined) continue;
+      // ExecStart=-/path …  (systemd prefixes: - @ : + !)   Exec=/path … (desktop entries)
+      const program = [...text.matchAll(/^\s*(?:ExecStart|ExecStartPre|Exec)\s*=\s*[-@:+!]*(.+)$/gm)].map((m) => m[1].trim()).join(" ; ");
+      out.push({ kind: "launch", id: path, name: f, path, hash: sha256(text), source, meta: { program: program.slice(0, 300) } });
+    }
+  }
+  return out;
+}
+
+/** /etc/ld.so.preload makes every program on the system load a library first: a classic Linux rootkit trick. */
+export async function preload(ctx: Ctx): Promise<Item[]> {
+  if (!ctx.system) return [];
+  const t = readText("/etc/ld.so.preload");
+  const libs = (t ?? "").split(/\s+/).filter((l) => l && !l.startsWith("#"));
+  return libs.length ? [{ kind: "preload", id: "/etc/ld.so.preload", name: "/etc/ld.so.preload", path: "/etc/ld.so.preload", hash: sha256(t!), meta: { libs: libs.join(" ") } }] : [];
+}
+
+const RC_FILES = [".zshrc", ".zprofile", ".zshenv", ".zlogin", ".bashrc", ".bash_profile", ".bash_login", ".profile", ".ssh/rc", ".xprofile", ".xinitrc", ".config/fish/config.fish", ".gitconfig", ".ssh/config", ".ssh/authorized_keys", ".npmrc", ".curlrc"];
 
 export async function startupFiles(ctx: Ctx): Promise<{ items: Item[]; texts: Record<string, string> }> {
   const items: Item[] = [];
@@ -92,6 +123,7 @@ const KNOWN_HIDDEN = /^\.(bun|cargo|rustup|npm|npm-global|nvm|volta|pyenv|rbenv|
 
 export function suspiciousLocation(path: string, home: string): string | undefined {
   if (/^\/(private\/)?(tmp|var\/tmp)\//.test(path)) return "runs from a temp folder";
+  if (path.startsWith("/dev/shm/")) return "runs from shared memory (/dev/shm)";
   if (path.startsWith("/Users/Shared/")) return "runs from /Users/Shared";
   if (path.startsWith(home + "/")) {
     const rel = path.slice(home.length + 1);
@@ -102,30 +134,61 @@ export function suspiciousLocation(path: string, home: string): string | undefin
 }
 
 /** Running programs, keyed by their executable, and which of them hold connections to other machines. */
+/** pid, user and full executable path of every process. Linux ps prints only a short name, so /proc is read there. */
+async function processes(ctx: Ctx): Promise<{ pid: string; user: string; exe: string }[]> {
+  if (process.platform === "linux") {
+    const out: { pid: string; user: string; exe: string }[] = [];
+    for (const pid of ls("/proc")) {
+      if (!/^\d+$/.test(pid)) continue;
+      try {
+        // Only our own processes can be resolved without root, which is what the rules look at anyway.
+        out.push({ pid, user: ctx.user, exe: readlinkSync(`/proc/${pid}/exe`).replace(/ \(deleted\)$/, "") });
+      } catch {}
+    }
+    return out;
+  }
+  const ps = await ctx.run(["ps", "-e", "-ww", "-o", "pid=,user=,comm="], 8000);
+  return (ps ?? "").split("\n").map((l) => /^\s*(\d+)\s+(\S+)\s+(.+)$/.exec(l)).filter(Boolean).map((m) => ({ pid: m![1], user: m![2], exe: m![3] }));
+}
+
+/** Established TCP connections as [pid, remote]: lsof where it exists (macOS), ss on Linux. */
+async function connections(ctx: Ctx): Promise<[string, string, string][]> {
+  const out: [string, string, string][] = [];
+  const lsof = await ctx.run(["lsof", "-nP", "-iTCP", "-sTCP:ESTABLISHED"], 10_000);
+  if (lsof !== undefined) {
+    for (const line of lsof.split("\n").slice(1)) {
+      const cols = line.trim().split(/\s+/);
+      const name = cols.find((c) => c.includes("->"));
+      if (cols[1] && name) out.push([cols[1], name.split("->")[1], cols[0]]);
+    }
+    return out;
+  }
+  // ss -tnpH: State Recv-Q Send-Q Local Peer users:(("node",pid=123,fd=21))
+  const ss = await ctx.run(["ss", "-tnpH", "state", "established"], 10_000);
+  for (const line of (ss ?? "").split("\n")) {
+    const cols = line.trim().split(/\s+/);
+    const users = /users:\(\("([^"]+)",pid=(\d+)/.exec(line);
+    // With a state filter ss leaves out the State column: Recv-Q Send-Q Local Peer [users]
+    const peer = cols[cols[0] === "ESTAB" ? 4 : 3];
+    if (users && peer) out.push([users[2], peer, users[1]]);
+  }
+  return out;
+}
+
 export async function running(ctx: Ctx): Promise<Item[]> {
   if (!ctx.system) return [];
-  const ps = await ctx.run(["ps", "-axww", "-o", "pid=,user=,comm="], 8000);
   const exeOf = new Map<string, string>();
   const out = new Map<string, Item>();
-  for (const line of (ps ?? "").split("\n")) {
-    const m = /^\s*(\d+)\s+(\S+)\s+(.+)$/.exec(line);
-    if (!m) continue;
-    const [, pid, user, exe] = m;
+  for (const { pid, user, exe } of await processes(ctx)) {
     exeOf.set(pid, exe);
     if (user !== ctx.user || !exe.startsWith("/")) continue;
     const where = suspiciousLocation(exe, ctx.home);
     if (where) out.set(`proc:${exe}`, { kind: "proc", id: exe, name: exe.split("/").pop()!, path: exe, meta: { where, pid: Number(pid) } });
   }
-  const lsof = await ctx.run(["lsof", "-nP", "-iTCP", "-sTCP:ESTABLISHED"], 10_000);
   const remotes = new Map<string, Set<string>>();
-  for (const line of (lsof ?? "").split("\n").slice(1)) {
-    const cols = line.trim().split(/\s+/);
-    const pid = cols[1];
-    const name = cols.find((c) => c.includes("->"));
-    if (!pid || !name) continue;
-    const remote = name.split("->")[1];
-    if (/^(127\.|\[::1\]|localhost|\[fe80)/.test(remote)) continue;
-    const exe = exeOf.get(pid) ?? cols[0];
+  for (const [pid, remote, cmd] of await connections(ctx)) {
+    if (/^(127\.|\[::1\]|localhost|\[fe80|\[::ffff:127\.)/.test(remote)) continue;
+    const exe = exeOf.get(pid) ?? cmd;
     if (!remotes.has(exe)) remotes.set(exe, new Set());
     remotes.get(exe)!.add(remote);
   }

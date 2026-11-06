@@ -10,7 +10,8 @@ import { run } from "../ctx";
 import { c, finding as printFinding, line } from "../print";
 import { RANK, verdictOf, type Finding, type Verdict } from "../types";
 import { allowedBy, startProxy } from "./proxy";
-import { cleanEnv, profile, type Box } from "./sandbox";
+import { bwrapArgs, FORWARDER, freshProc, inner, INNER_PORT, traceDenials } from "./linux";
+import { cleanEnv, profile, toolchains, type Box } from "./sandbox";
 import { staticCheck } from "./static";
 import { behaviour, denials, network, plantedFiles } from "./watch";
 
@@ -69,6 +70,7 @@ export async function prepare(source: string, box: Box): Promise<string> {
 
 const SEED: Record<string, string> = {
   ".zshrc": `PS1='%F{magenta}(vswarm try)%f %1~ %# '\n`,
+  ".bashrc": `PS1='(vswarm try) \\W \\$ '\n`,
   ".gitconfig": `[user]\n\tname = vswarm try\n\temail = try@localhost\n`,
 };
 
@@ -91,7 +93,11 @@ async function leftovers(rootPid: number, box: Box, seen: Set<number>): Promise<
 }
 
 export async function tryIt(source: string, command: string[], opt: { net: Net; ask: (q: string) => Promise<boolean>; yes?: boolean; quiet?: boolean }): Promise<TryResult> {
-  if (process.platform !== "darwin" || !existsSync("/usr/bin/sandbox-exec")) throw new Error("vswarm try needs macOS (sandbox-exec). Linux support (bubblewrap) is planned.");
+  const linux = process.platform === "linux";
+  const bwrap = linux ? Bun.which("bwrap") : undefined;
+  const strace = linux ? Bun.which("strace") ?? undefined : undefined;
+  if (linux && !bwrap) throw new Error("vswarm try on Linux needs bubblewrap: sudo apt install bubblewrap strace  (dnf/pacman: bubblewrap strace)");
+  if (!linux && (process.platform !== "darwin" || !existsSync("/usr/bin/sandbox-exec"))) throw new Error("vswarm try needs macOS (sandbox-exec) or Linux (bubblewrap)");
   const name = basename(source.replace(/\.git$/, "").replace(/\/+$/, "")) || "code";
   const want = join(TRY_DIR(), `${stamp()}-${name.replace(/[^A-Za-z0-9._-]/g, "_").slice(0, 40)}`);
   mkdirSync(want, { recursive: true, mode: 0o700 });
@@ -114,7 +120,8 @@ export async function tryIt(source: string, command: string[], opt: { net: Net; 
 
   // 2 · run in the sandbox
   const shell = command.length === 0;
-  const cmd = shell ? [process.env.SHELL?.endsWith("zsh") ? process.env.SHELL : "/bin/zsh", "-i"] : command;
+  const sh = [process.env.SHELL, "/bin/zsh", "/bin/bash", "/bin/sh"].find((x) => x && existsSync(x))!;
+  const cmd = shell ? [sh, "-i"] : command;
   const serious = staticFindings.some((f) => RANK[f.severity] >= RANK.high);
   line(`\n${c.bold("2  run in the sandbox")} ${c.dim(`· network: ${opt.net === "none" ? "blocked (attempts recorded)" : opt.net === "registries" ? "package registries only" : "open, every host recorded"} · no access to your home, keychain or clipboard`)}`);
   if (serious && !opt.yes && !(await opt.ask(`  ${c.red("This code has red flags above.")} Run it in the sandbox to see what it does?`))) {
@@ -122,21 +129,32 @@ export async function tryIt(source: string, command: string[], opt: { net: Net; 
     return { box, source: what, command: cmd, exit: null, staticFindings, runFindings: [], verdict: verdictOf(staticFindings), leftovers: [], logRead: false };
   }
   if (shell) line(c.dim(`  a shell opens inside the sandbox in work/ · try the code (npm install, npm test, python main.py …) · type exit when done`));
-  const proxy = startProxy(allowedBy(opt.net));
-  const profilePath = join(dir, "sandbox.sb");
-  writeFileSync(profilePath, profile(homedir(), box, proxy.port));
+  const proxy = startProxy(allowedBy(opt.net), linux ? { unix: join(box.tmp, "proxy.sock") } : {});
+  let argv: string[];
+  if (linux) {
+    writeFileSync(join(box.tmp, "forwarder.js"), FORWARDER);
+    const hostProc = !(await freshProc(bwrap!));
+    if (hostProc) line(c.dim("  · this system does not allow a private /proc (a container?); the sandbox sees the host's /proc read-only"));
+    argv = [bwrap!, ...bwrapArgs(homedir(), box, { tools: toolchains(homedir()), bun: process.execPath, interactive: shell, hostProc }), "--", ...inner(box, process.execPath, cmd, strace)];
+    writeFileSync(join(dir, "sandbox.json"), JSON.stringify(argv, null, 1) + "\n");
+  } else {
+    const profilePath = join(dir, "sandbox.sb");
+    writeFileSync(profilePath, profile(homedir(), box, proxy.port));
+    argv = ["/usr/bin/sandbox-exec", "-f", profilePath, ...cmd];
+  }
   const t0 = Date.now();
   const tree = { pids: new Set<number>(), names: new Set<string>() };
-  const p = Bun.spawn(["/usr/bin/sandbox-exec", "-f", profilePath, ...cmd], {
+  const p = Bun.spawn(argv, {
     cwd: box.work,
-    env: cleanEnv(box, proxy.port, homedir()),
+    env: cleanEnv(box, linux ? INNER_PORT : proxy.port, homedir()),
     stdin: "inherit",
     stdout: "inherit",
     stderr: "inherit",
   });
   // Follow the run's process tree, so daemons it starts are known even after they detach.
   tree.pids.add(p.pid);
-  let polling = true;
+  // Linux: the pid namespace ends everything with the sandbox, and strace sees every process; no polling needed.
+  let polling = !linux;
   const poll = (async () => {
     while (polling) {
       const ps = await run(["ps", "-axo", "pid=,ppid=,comm="], 5000);
@@ -156,15 +174,15 @@ export async function tryIt(source: string, command: string[], opt: { net: Net; 
   await poll;
 
   // 3 · what it tried
-  line(`\n${c.bold("3  what it tried")} ${c.dim("· reading the sandbox log …")}`);
-  const left = await leftovers(p.pid, box, tree.pids);
+  line(`\n${c.bold("3  what it tried")} ${c.dim(linux ? (strace ? "· reading the strace log …" : "") : "· reading the sandbox log …")}`);
+  const left = linux ? [] : await leftovers(p.pid, box, tree.pids);
   if (left.length) {
     line(`  ${c.amber("!")} ${left.length} process${left.length > 1 ? "es" : ""} still running after it exited (it started something in the background)`);
     for (const l of left.slice(0, 5)) line(`      ${c.dim(`${l.pid} ${l.command.slice(0, 120)}`)}`);
     if (opt.yes || (await opt.ask("  Stop them?"))) for (const l of left) await run(["kill", "-9", String(l.pid)]);
   }
-  await Bun.sleep(1500); // the log is written a moment after the denials
-  const d = await denials(t0, p.pid, tree);
+  if (!linux) await Bun.sleep(1500); // the log is written a moment after the denials
+  const d = linux ? (strace ? traceDenials(join(box.tmp, "trace.log"), homedir(), box) : undefined) : await denials(t0, p.pid, tree);
   proxy.stop();
   const planted = plantedFiles(box.home, new Set(Object.keys(SEED)), SEED);
   const net = network(proxy.hits, box.netlog);
@@ -178,7 +196,9 @@ export async function tryIt(source: string, command: string[], opt: { net: Net; 
   }
   if (!runFindings.length) line(`  ${c.green("✔")} nothing suspicious: no reads of your secrets, no planted files, no outside connections`);
   for (const f of runFindings.sort((a, b) => RANK[b.severity] - RANK[a.severity])) printFinding({ ...f, id: "" }, true);
-  if (d === undefined) line(c.dim("  · could not read the macOS sandbox log; file and keychain attempts are not included"));
+  if (d === undefined) line(c.dim(linux ? "  · strace is not installed, so file and connection attempts are not included: sudo apt install strace" : "  · could not read the macOS sandbox log; file and keychain attempts are not included"));
+  if (linux && exit !== 0 && /* bwrap's own failure, before the code ran */ !existsSync(join(box.tmp, "forwarder.ready")))
+    line(c.amber("  ! the sandbox did not start (see bwrap's message above). \"Permission denied\" or \"No permissions to create new namespace\" means this kernel limits user namespaces (Ubuntu 24.04: sudo sysctl kernel.apparmor_restrict_unprivileged_userns=0, or an AppArmor profile for bwrap); in Docker, run the container with --security-opt seccomp=unconfined --security-opt apparmor=unconfined."));
 
   const all = [...staticFindings, ...runFindings];
   const verdict = verdictOf(all);

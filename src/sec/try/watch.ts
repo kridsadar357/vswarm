@@ -29,6 +29,9 @@ const SENSITIVE: [RegExp, string][] = [
   [/\/Library\/Application Support\/(Google\/Chrome|BraveSoftware|Microsoft Edge|Arc|Firefox)\/.*(Cookies|Login Data|Web Data|Local State)/, "browser passwords and cookies"],
   [/\/Library\/Application Support\/(Exodus|Electrum|atomic|Ledger Live|Bitcoin|Ethereum|Phantom)/, "crypto wallets"],
   [/\/Library\/(Messages|Mail|Safari|Cookies)\//, "Messages, Mail or Safari data"],
+  [/\/\.config\/(google-chrome|chromium|BraveSoftware|microsoft-edge)\/.*(Cookies|Login Data|Web Data|Local State)|\/\.mozilla\/firefox\//, "browser passwords and cookies"],
+  [/\/\.config\/(Exodus|Electrum|atomic|Ledger Live)\/|\/\.electrum\/|\/\.bitcoin\/|\/\.ethereum\//, "crypto wallets"],
+  [/\/\.local\/share\/keyrings\/|\/\.gnupg\/|\/\.password-store\//, "the keyring or GPG keys"],
   [/\/\.(zsh|bash)_history$/, "shell history"],
   [/\/(Desktop|Documents|Downloads)\//, "personal documents"],
 ];
@@ -96,7 +99,7 @@ export function plantedFiles(home: string, seeded: Set<string>, seedText: Record
   for (const rel of walk(home)) {
     const changed = seeded.has(rel) && seedText[rel] !== undefined && readFileSync(join(home, rel), "utf8") !== seedText[rel];
     if (seeded.has(rel) && !changed) continue;
-    if (/^Library\/LaunchAgents\//.test(rel)) out.push({ path: rel, why: "tried to install a login job (runs at every login)", severity: "high" });
+    if (/^Library\/LaunchAgents\/|^\.config\/(systemd\/user|autostart)\//.test(rel)) out.push({ path: rel, why: "tried to install a login job (runs at every login)", severity: "high" });
     else if (/^\.(zshrc|zprofile|zshenv|bashrc|bash_profile|profile)$|^\.config\/fish\//.test(rel)) out.push({ path: rel, why: changed ? "changed your shell start-up file" : "created a shell start-up file", severity: "high" });
     else if (/^\.ssh\//.test(rel)) out.push({ path: rel, why: "wrote into ~/.ssh (keys or authorized_keys)", severity: "high" });
     else if (/^Library\/Application Support\//.test(rel)) out.push({ path: rel, why: "wrote into Application Support", severity: "medium" });
@@ -141,12 +144,15 @@ export function behaviour(d: Denial[] | undefined, planted: ReturnType<typeof pl
   }
   for (const [what, paths] of reads) add(`read:${what}`, "high", `Tried to read ${what}`, [...paths].slice(0, 6));
   const writes = (d ?? []).filter((x) => x.op.startsWith("file-write") && !/^\/dev\//.test(x.target));
-  if (writes.length) add("write-outside", writes.some((w) => /LaunchAgents|LaunchDaemons|\/etc\/|\/usr\/local\/bin|\.zshrc|\.bashrc/.test(w.target)) ? "high" : "medium",
+  if (writes.length) add("write-outside", writes.some((w) => /LaunchAgents|LaunchDaemons|\/etc\/|\/usr\/local\/bin|\.zshrc|\.bashrc|\.profile|systemd\/user|\/autostart\/|\.ssh\//.test(w.target)) ? "high" : "medium",
     `Tried to write outside its folder (${writes.length})`, writes.slice(0, 6).map((w) => `${w.target.replace(realHome, "~")} (${w.proc})`));
-  const keychain = (d ?? []).filter((x) => x.op === "mach-lookup" && /SecurityServer|securityd|pasteboard|appleevents|tccd/.test(x.target));
-  if (keychain.length) add("services", "high", "Tried to reach the keychain, clipboard or other apps", keychain.slice(0, 6).map((k) => `${k.target} (${k.proc})`));
+  const keychain = (d ?? []).filter((x) => (x.op === "mach-lookup" && /SecurityServer|securityd|pasteboard|appleevents|tccd/.test(x.target)) ||
+    (x.op === "unix-connect" && /bus|keyring|docker\.sock|ssh|gnupg|gpg-agent|containerd|podman/.test(x.target)));
+  if (keychain.length) add("services", "high", "Tried to reach the keychain, clipboard, agents or other apps", keychain.slice(0, 6).map((k) => `${k.target} (${k.proc})`));
   const direct = (d ?? []).filter((x) => x.op.startsWith("network-outbound") && !/mDNSResponder/.test(x.target));
   const dns = (d ?? []).some((x) => x.op.startsWith("network-outbound") && /mDNSResponder/.test(x.target));
+  const detached = (d ?? []).filter((x) => x.op === "setsid");
+  if (detached.length) add("detached", "medium", "Started a background process that detaches from the terminal (ended with the sandbox)", detached.slice(0, 5).map((x) => `${x.proc} (pid ${x.pid} inside)`));
   for (const p of planted) add(`planted:${p.path}`, p.severity, `${p.why}: ~/${p.path}`, []);
   const pm = net.filter((n) => !n.allowed && REGISTRIES.some((r) => n.host === r || n.host.endsWith("." + r)));
   if (pm.length) add("net-registry", "info", `The package manager tried its registry (blocked; --net registries allows it)`, pm.map((n) => n.host));

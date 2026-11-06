@@ -65,6 +65,11 @@ export async function evaluate(input: RuleInput): Promise<Finding[]> {
           detail: [`remotes: ${i.meta?.remotes}`, i.path ?? ""], fix: "If you do not recognise it, disconnect from the network and run vswarm respond", item: i });
       }
     }
+    if (i.kind === "preload") {
+      add({ id: `preload:${i.hash?.slice(0, 12)}`, rule: "preload", severity: "high", title: "/etc/ld.so.preload makes every program load a library first",
+        detail: [`libraries: ${i.meta?.libs}`, "Almost no normal system uses this file; Linux rootkits and credential stealers do."],
+        fix: "Unless your own security or debugging tool put it there, vswarm respond", item: i });
+    }
     if (i.kind === "launch") {
       const prog = String(i.meta?.program ?? "");
       const exe = prog.split(" ").find((p) => p.startsWith("/") && !/^\/(bin|usr\/bin)\/(ba|z)?sh$/.test(p) && !/^\/usr\/bin\/(env|python3?|osascript|open)$/.test(p)) ?? "";
