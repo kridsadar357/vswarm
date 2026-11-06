@@ -3,7 +3,11 @@
 import type { Ctx } from "./ctx";
 import { brew, browsers, cargo, editors, node, python } from "./collect/packages";
 import { autostart, binaries, launchd, preload, running, startupFiles } from "./collect/system";
+import { agents } from "./collect/agents";
 import type { Item, Scan } from "./types";
+
+/** Every item kind the collectors produce; stored with a baseline so later checks know what it covered. */
+export const COVERS = ["brew", "brew-tap", "npm", "pip", "cargo", "editor-ext", "browser-ext", "launch", "rc", "ssh", "cron", "git-hooks", "hosts", "preload", "bin", "proc", "conn", "mcp", "agent-hook", "agent-perm", "agent-plugin"];
 
 export async function scan(ctx: Ctx, opt: { live?: boolean } = {}): Promise<Scan> {
   const gaps: Record<string, string> = {};
@@ -17,6 +21,7 @@ export async function scan(ctx: Ctx, opt: { live?: boolean } = {}): Promise<Scan
     ["cargo", () => cargo(ctx)],
     ["editor extensions", () => editors(ctx)],
     ["browser extensions", () => browsers(ctx)],
+    ["AI agents and MCP", () => agents(ctx)],
     ["launchd", () => launchd(ctx)],
     ["systemd and autostart", () => autostart(ctx)],
     ["ld.so.preload", () => preload(ctx)],
@@ -36,7 +41,7 @@ export async function scan(ctx: Ctx, opt: { live?: boolean } = {}): Promise<Scan
       gaps[name] = String(e?.message ?? e);
     }
   }));
-  return { version: 1, host: ctx.host, user: ctx.user, home: ctx.home, at: Date.now(), items, texts, gaps };
+  return { version: 1, host: ctx.host, user: ctx.user, home: ctx.home, at: Date.now(), items, texts, gaps, covers: COVERS };
 }
 
 /** A scan without the moment-to-moment parts, as stored for a baseline. */

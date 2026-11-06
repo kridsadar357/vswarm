@@ -37,6 +37,18 @@ vswarm canary plant aws                  # วาง credential ล่อ ถ้
 vswarm guard on                          # npm, pip, brew … ถาม vswarm ก่อนติดตั้งทุกครั้ง
 ```
 
+### vswarm agents: ตรวจ AI agent และ MCP
+
+AI agent รันโค้ดด้วยสิทธิ์ของคุณ และการตั้งค่าเป็นตัวกำหนดว่ามันเริ่มอะไรเองได้บ้าง vswarm ตรวจ:
+- MCP server ของ Claude Code (ทุก profile), Claude Desktop, Cursor, Windsurf, VS Code, Gemini CLI และ Codex
+- hook และ `statusLine` ของ Claude Code, โหมด permission และ plugin
+
+ระดับความรุนแรง:
+- **สูง (หยุด):** MCP หรือ hook ที่ดาวน์โหลดแล้วรัน หรือรันจากโฟลเดอร์ชั่วคราว, MCP ที่ใช้ชื่อ package เลียนแบบ
+- **กลาง (เตือน):** MCP server หรือ hook ที่เพิ่มหรือเปลี่ยนตั้งแต่ baseline, agent ได้สิทธิ์กว้างขึ้น, MCP ที่ต่อแบบ http ไม่เข้ารหัส, token ที่วางไว้ตรงๆ ใน config
+
+ดูรายการทั้งหมดด้วย `vswarm agents`
+
 ### vswarm guard: ตรวจ package ก่อนติดตั้ง
 
 `vswarm guard on` ครอบคำสั่ง npm, npx, pnpm, yarn, bun, bunx, pip, pip3, uv, uvx, pipx และ brew ใน shell

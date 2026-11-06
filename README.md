@@ -90,6 +90,22 @@ vswarm canary plant env ~/develop/old-project
 vswarm canary list · vswarm canary remove <id>
 ```
 
+### AI agents and MCP servers
+
+Coding agents run code with your access, and their settings decide what they may start on their own. `vswarm agents`
+lists, and `scan` / `preflight` check, the MCP servers of Claude Code (every profile), Claude Desktop, Cursor,
+Windsurf, VS Code, Gemini CLI and Codex, Claude Code hooks and `statusLine` commands, permission modes and plugins.
+
+| Signal | Severity |
+| --- | --- |
+| MCP server or hook that downloads, decodes or backgrounds something, or runs from a temp/cache/hidden folder | high |
+| MCP server started through npx/uvx with a look-alike package name | high |
+| new or changed MCP server, new or changed hook, agent given more freedom (bypass, `Bash(*)`) since the baseline | medium |
+| remote MCP server over plain http; token pasted into an MCP config | medium |
+
+A baseline taken before vswarm checked agents does not report every existing server as new; it says the baseline
+is older than the check, and `vswarm baseline` brings it up to date.
+
 ### Check packages before they install
 
 Most stealers arrive as a package: a look-alike name, a hijacked release, a name an AI assistant made up and an

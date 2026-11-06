@@ -409,3 +409,25 @@ describe("install guard", () => {
     }
   });
 });
+
+describe("AI agents and MCP", () => {
+  const { literalSecrets, agents } = require("../src/sec/collect/agents");
+  const { evaluate } = require("../src/sec/rules");
+
+  test("tokens pasted into MCP configs are named, references are not", () => {
+    const tok = ["gh", "p_", "x".repeat(36)].join("");
+    expect(literalSecrets({ env: { GITHUB_TOKEN: tok, API_BASE: "https://api.example.com/v1", OTHER_KEY: "${OTHER_KEY}" }, headers: { Authorization: "Bearer " + "y".repeat(30) } })).toEqual(["GITHUB_TOKEN", "Authorization"]);
+  });
+
+  test("an old baseline does not make every MCP server look new, a current one does", async () => {
+    const home = mkdtempSync(join(tmpdir(), "vs-ag-"));
+    mkdirSync(join(home, ".cursor"), { recursive: true });
+    writeFileSync(join(home, ".cursor/mcp.json"), JSON.stringify({ mcpServers: { local: { url: "http://127.0.0.1:9000/mcp" }, remote: { url: "http://mcp.example.net/mcp" } } }));
+    const items = await agents({ home, system: false, pathDirs: [], run: async () => undefined, host: "t", user: "t" });
+    const scan = { version: 1, host: "t", user: "t", home, at: 0, items, texts: {}, gaps: {}, covers: ["mcp"] };
+    const base = (covers?: string[]) => ({ ...scan, items: [], covers });
+    const rules = async (b: any) => (await evaluate({ scan, baseline: b, malicious: [], secrets: [] })).map((f: any) => f.rule).sort();
+    expect(await rules(base(undefined))).toEqual(["agent-http"]);
+    expect(await rules(base(["mcp"]))).toEqual(["agent-http", "agent-mcp-new", "agent-mcp-new"]);
+  });
+});

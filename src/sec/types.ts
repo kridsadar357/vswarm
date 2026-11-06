@@ -28,7 +28,14 @@ export interface Scan {
   texts: Record<string, string>;
   /** Collectors that failed, with why; a scan with gaps says so instead of passing quietly. */
   gaps: Record<string, string>;
+  /** Item kinds this scan's collectors look for. A kind a baseline did not cover is not "new" against it. */
+  covers?: string[];
 }
+
+/** Kinds that vswarm 2.3 and earlier did not record, for baselines saved before `covers` existed. */
+export const ADDED_KINDS: Record<string, string> = {
+  mcp: "AI agents and MCP", "agent-hook": "AI agents and MCP", "agent-perm": "AI agents and MCP", "agent-plugin": "AI agents and MCP",
+};
 
 export type Severity = "critical" | "high" | "medium" | "low" | "info";
 

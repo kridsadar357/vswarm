@@ -2,7 +2,7 @@
 
 import type { Ctx } from "./ctx";
 import { osvMalicious } from "./intel";
-import { evaluate } from "./rules";
+import { evaluate, uncovered } from "./rules";
 import { forBaseline, scan as runScan } from "./scan";
 import { secrets as findSecrets } from "./secrets";
 import { ensureSec, files, loadAccepted, loadBaseline, loadLock, saveLast, type Lock } from "./store";
@@ -34,6 +34,8 @@ export async function check(ctx: Ctx, opt: { offline?: boolean; sign?: Parameter
     .sort((a, b) => RANK[b.severity] - RANK[a.severity]);
   const notes: string[] = [];
   if (!baseline) notes.push("No baseline yet: only always-wrong things are checked. Run `vswarm baseline` on a machine you trust.");
+  const fresh = uncovered(scanned, baseline);
+  if (fresh.length) notes.push(`Your baseline is older than these checks: ${fresh.join(", ")}. Review them (vswarm agents), then vswarm baseline.`);
   if (osv.error) notes.push(osv.error);
   if (opt.offline) notes.push("Offline: known-malicious check used the cache only.");
   // Places skipped for the same reason are listed together.

@@ -164,6 +164,7 @@ export const COMMANDS: [string, string][] = [
   ["baseline", "remember this machine as clean"],
   ["diff", "what changed since the baseline"],
   ["secrets", "long-lived credentials on this machine"],
+  ["agents", "MCP servers, hooks and permissions of AI agents"],
   ["preflight", "gate before production access (ssh/aws/kubectl)"],
   ["accept", "accept reviewed findings"],
   ["respond", "lock, collect evidence, rotate, quarantine, report"],

@@ -56,6 +56,7 @@ function usage() {
   row("vswarm baseline", "record this machine as clean (after a scan you trust)");
   row("vswarm diff", "only what changed since the baseline");
   row("vswarm secrets", "long-lived credentials on this machine (never prints values)");
+  row("vswarm agents", "MCP servers, hooks and permissions of AI coding agents");
   console.log(`\n  ${c.bold("gate production access")}`);
   row("vswarm preflight [--quiet] [--strict]", "PASS / WARN / BLOCK; exit 3 on BLOCK");
   row("vswarm preflight --then <command…>", "run the command only if this machine passes");
@@ -114,6 +115,27 @@ async function main() {
       saveBaseline(forBaseline(r.scan));
       line(`  ${c.green("✔")} baseline recorded ${c.dim(files.baseline())}`);
       line(c.dim("  From now on, scan and preflight report what changes from this point."));
+      return;
+    }
+
+    case "agents": {
+      // What AI agents on this machine may start or run on their own.
+      const { agents } = await import("./sec/collect/agents");
+      const list = await agents(realCtx());
+      line(`${c.violet("▼ vswarm agents")} ${c.dim("· MCP servers, hooks and permissions of AI coding agents on this machine")}`);
+      if (!list.length) line(`  ${c.green("✔")} no agent settings found`);
+      const short = (p?: string) => (p ?? "").replace(homedir(), "~");
+      for (const [kind, title] of [["mcp", "MCP servers"], ["agent-hook", "hooks (run on their own)"], ["agent-perm", "permissions"], ["agent-plugin", "plugins"]] as const) {
+        const xs = list.filter((i) => i.kind === kind);
+        if (!xs.length) continue;
+        line(`\n  ${c.bold(title)}`);
+        for (const i of xs) {
+          if (kind === "agent-perm") line(`    ${i.meta?.bypass ? c.amber("bypass") : c.green("asks  ")}  ${i.name}${i.meta?.wide ? c.dim(`  allows ${i.meta.wide}`) : ""}`);
+          else if (kind === "agent-plugin") line(`    ${i.name} ${c.dim(String(i.source))}`);
+          else line(`    ${c.cyan(String(i.source).padEnd(26))} ${i.name.replace(`${i.source} `, "")}\n      ${c.dim(String(i.meta?.command ?? i.meta?.url ?? short(i.path)).slice(0, 140))}${i.meta?.secrets ? c.amber(`  token in plain text: ${i.meta.secrets}`) : ""}`);
+        }
+      }
+      line(c.dim("\n  Changes from your baseline show up in vswarm diff and block or warn in preflight."));
       return;
     }
 

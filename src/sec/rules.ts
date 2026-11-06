@@ -4,10 +4,28 @@
 
 import { lookAlike, signature, type Malicious, type Signature } from "./intel";
 import { suspiciousLocation } from "./collect/system";
-import type { Finding, Item, Scan, Severity } from "./types";
+import { ADDED_KINDS, type Finding, type Item, type Scan, type Severity } from "./types";
 
 /** Lines in a shell startup file that fetch, decode or start something in the background. */
 const RISKY_LINE = /\b(curl|wget|nc|ncat|socat|base64|openssl\s+enc|eval|osascript|python3?\s+-c|node\s+-e|perl\s+-e|ruby\s+-e|nohup|launchctl|chmod\s+\+x)\b|&\s*$|\|\s*(ba|z)?sh\b|\/tmp\/|\.cache\//;
+
+/** The program an MCP server or hook runs, and the package it pulls when it is started through npx/uvx/bunx. */
+function launcher(cmd: string): { exe?: string; pkg?: { eco: "npm" | "pip"; name: string } } {
+  const parts = cmd.split(/\s+/).filter(Boolean);
+  const exe = parts.find((p) => p.startsWith("/") || p.startsWith("~/"))?.replace(/^~/, process.env.HOME ?? "~");
+  const runner = parts.findIndex((p) => /(^|\/)(npx|bunx|pnpx|uvx|pipx)$/.test(p) || p === "dlx");
+  if (runner < 0) return { exe };
+  const eco = /uvx|pipx/.test(parts[runner]) ? "pip" : "npm";
+  // Skip flags and their values (--from x, -y, --offline); the package is the first plain word after that.
+  let name: string | undefined;
+  for (let i = runner + 1; i < parts.length; i++) {
+    if (parts[i] === "--from") return { exe, pkg: { eco, name: parts[i + 1]?.replace(/[=@<>].*$/, "") } };
+    if (parts[i].startsWith("-")) continue;
+    name = parts[i];
+    break;
+  }
+  return { exe, pkg: name ? { eco, name: name.replace(/(?<=.)@[^/]*$/, "").replace(/[=<>].*$/, "") } : undefined };
+}
 
 function key(i: Item) {
   return `${i.kind}|${i.id}`;
@@ -28,6 +46,14 @@ export interface RuleInput {
   sign?: (path: string) => Promise<Signature>;
 }
 
+/** Checks the baseline did not cover yet, by name, so the summary can say so. */
+export function uncovered(scan: Scan, baseline?: Scan): string[] {
+  if (!baseline) return [];
+  const kinds = new Set(scan.items.map((i) => i.kind));
+  const names = [...kinds].filter((k) => (baseline.covers ? !baseline.covers.includes(k) : ADDED_KINDS[k])).map((k) => ADDED_KINDS[k] ?? k);
+  return [...new Set(names)];
+}
+
 export async function evaluate(input: RuleInput): Promise<Finding[]> {
   const { scan, baseline } = input;
   const sign = input.sign ?? signature;
@@ -35,7 +61,9 @@ export async function evaluate(input: RuleInput): Promise<Finding[]> {
   const out: Finding[] = [];
   const add = (f: Finding) => out.push(f);
   const before = new Map((baseline?.items ?? []).map((i) => [key(i), i]));
-  const isNew = (i: Item) => baseline !== undefined && !before.has(key(i));
+  // A baseline from before a check existed says nothing about what that check finds.
+  const covered = (kind: string) => (baseline?.covers ? baseline.covers.includes(kind) : !ADDED_KINDS[kind]);
+  const isNew = (i: Item) => baseline !== undefined && covered(i.kind) && !before.has(key(i));
   const changed = (i: Item) => {
     const b = before.get(key(i));
     return b !== undefined && b.hash !== undefined && i.hash !== undefined && b.hash !== i.hash;
@@ -65,6 +93,26 @@ export async function evaluate(input: RuleInput): Promise<Finding[]> {
           detail: [`remotes: ${i.meta?.remotes}`, i.path ?? ""], fix: "If you do not recognise it, disconnect from the network and run vswarm respond", item: i });
       }
     }
+    if (i.kind === "mcp" || i.kind === "agent-hook") {
+      const cmd = String(i.meta?.command ?? "");
+      const what = i.kind === "mcp" ? `MCP server ${i.name} (${i.source})` : `Agent hook ${i.name}`;
+      const l = launcher(cmd);
+      const where = l.exe ? suspiciousLocation(l.exe, home) : undefined;
+      const like = l.pkg ? lookAlike(l.pkg.eco, l.pkg.name) : undefined;
+      if (where || like || (cmd && RISKY_LINE.test(cmd.replace(/\.cache\//g, "")))) {
+        add({ id: `agent-risky:${i.kind}:${i.id}:${i.hash?.slice(0, 12)}`, rule: "agent-risky", severity: "high",
+          title: `${what} ${where ? `starts a program that ${where}` : like ? `runs ${l.pkg!.name}, which looks like ${like}` : "runs a command that downloads, decodes or backgrounds something"}`,
+          detail: [cmd.slice(0, 200), i.path ?? ""], fix: "An agent runs this with your access. Remove it unless you set it up yourself; then vswarm respond", item: i });
+      }
+      const url = String(i.meta?.url ?? "");
+      if (/^http:\/\//.test(url) && !/^http:\/\/(localhost|127\.|\[::1\])/.test(url))
+        add({ id: `agent-http:${i.id}`, rule: "agent-http", severity: "medium", title: `${what} talks to ${new URL(url).host} without TLS`, detail: [url], fix: "Anyone on the network path can read or change what the agent sends and gets; use https", item: i });
+      if (i.meta?.secrets)
+        add({ id: `agent-secret:${i.id}`, rule: "secret", severity: "medium", title: `${what} keeps a token in plain text: ${i.meta.secrets}`, detail: [i.path ?? ""],
+          fix: "Reference an environment variable or the OS keychain instead of pasting the value into the config", item: i });
+    }
+    if (i.kind === "agent-perm" && i.meta?.bypass)
+      add({ id: `agent-bypass:${i.id}`, rule: "agent-perm", severity: "low", title: `${i.name}: the agent may run commands without asking (bypass permissions)`, detail: [i.path ?? ""], item: i });
     if (i.kind === "preload") {
       add({ id: `preload:${i.hash?.slice(0, 12)}`, rule: "preload", severity: "high", title: "/etc/ld.so.preload makes every program load a library first",
         detail: [`libraries: ${i.meta?.libs}`, "Almost no normal system uses this file; Linux rootkits and credential stealers do."],
@@ -145,6 +193,24 @@ export async function evaluate(input: RuleInput): Promise<Finding[]> {
             fix: risky.length ? "These lines download, decode or start something in the background; remove them unless you wrote them" : "Check the change is yours", item: i });
           break;
         }
+        case "mcp":
+          add({ id: `agent-mcp:${i.id}:${i.hash?.slice(0, 12)}`, rule: fresh ? "agent-mcp-new" : "agent-mcp-changed", severity: "medium",
+            title: `${fresh ? "New" : "Changed"} MCP server for ${i.source}: ${i.name}`, detail: [String(i.meta?.command ?? i.meta?.url ?? ""), i.path ?? ""],
+            fix: "An MCP server acts with the agent's access to your files and shell; keep it only if you added it", item: i });
+          break;
+        case "agent-hook":
+          add({ id: `agent-hook:${i.id}:${i.hash?.slice(0, 12)}`, rule: "agent-hook", severity: "medium",
+            title: `${fresh ? "New" : "Changed"} agent hook: ${i.name}`, detail: [String(i.meta?.command ?? ""), i.path ?? ""],
+            fix: "Hooks run shell commands on their own, every time the agent starts or uses a tool; keep it only if you wrote it", item: i });
+          break;
+        case "agent-perm":
+          if (i.meta?.bypass || i.meta?.wide)
+            add({ id: `agent-perm:${i.id}:${i.hash?.slice(0, 12)}`, rule: "agent-perm-wider", severity: "medium", title: `${i.name}: the agent was given more freedom`,
+              detail: [i.meta?.bypass ? "bypass permissions is on" : "", i.meta?.wide ? `allows without asking: ${i.meta.wide}` : "", i.path ?? ""].filter(Boolean), fix: "Check you changed this yourself", item: i });
+          break;
+        case "agent-plugin":
+          if (fresh) add({ id: `agent-plugin:${i.id}`, rule: "agent-plugin", severity: "low", title: `New agent plugin (${i.source}): ${i.name}`, detail: [], item: i });
+          break;
         case "git-hooks":
           if (fresh) add({ id: `hook:${i.id}`, rule: "git-hook", severity: "medium", title: `New global git hook: ${i.name}`, detail: [i.path ?? ""], item: i });
           break;
