@@ -994,15 +994,17 @@ describe("parsing, CLI and collectors", () => {
     }
   });
 
-  test("the clean-app fixture is not collected by bun test, and its test script still runs", () => {
+  test("the clean-app fixture is not collected by bun test, and its test script still runs", async () => {
     const app = join(import.meta.dir, "fixtures", "clean-app");
     const all = require("node:fs").readdirSync(app, { recursive: true }) as string[];
     expect(all.some((f) => /\.(test|spec)\.|_test\./.test(f))).toBe(false);
     const script = JSON.parse(readFileSync(join(app, "package.json"), "utf8")).scripts.test as string;
     expect(script).toBe("node src/check.js");
-    const p = Bun.spawnSync([Bun.which("node") ?? process.execPath, ...script.split(" ").slice(1)], { cwd: app, stdout: "pipe", stderr: "pipe" });
-    expect(p.exitCode).toBe(0);
-    expect(p.stdout.toString()).toContain("1 test passed");
+    // Bun.spawn, not spawnSync: spawnSync on Windows runners sometimes fails with "Out of memory" (bun 1.3.0).
+    const p = Bun.spawn([Bun.which("node") ?? process.execPath, ...script.split(" ").slice(1)], { cwd: app, stdout: "pipe", stderr: "pipe" });
+    const [out, code] = await Promise.all([new Response(p.stdout).text(), p.exited]);
+    expect(code).toBe(0);
+    expect(out).toContain("1 test passed");
     expect(staticCheck(app)).toEqual([]);
   });
 });
