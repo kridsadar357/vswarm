@@ -29,7 +29,18 @@ vswarm selftest                      # ฝังภัยจำลองใน h
 vswarm try ./assignment -- npm install   # รันโค้ดที่ไม่ไว้ใจใน sandbox แล้วรายงานว่ามันพยายามทำอะไร
 vswarm ca init && vswarm gate ssh --cert "prod-*"   # ใบรับรอง ssh อายุ 15 นาที ออกให้เมื่อเครื่องผ่านเท่านั้น
 vswarm canary plant aws                  # วาง credential ล่อ ถ้ามีคนใช้จะได้ e-mail เตือน
+vswarm guard on                          # npm, pip, brew … ถาม vswarm ก่อนติดตั้งทุกครั้ง
 ```
+
+### vswarm guard: ตรวจ package ก่อนติดตั้ง
+
+`vswarm guard on` ครอบคำสั่ง npm, npx, pnpm, yarn, bun, bunx, pip, pip3, uv, uvx, pipx และ brew ใน shell
+ตอนสั่งติดตั้ง vswarm จะตรวจก่อนที่สคริปต์ติดตั้งจะได้รัน ส่วนคำสั่งอื่น เช่น `npm run dev` ไม่ผ่าน vswarm เลย
+
+- **หยุดและถามก่อน:** package ที่มีรายงานว่าอันตราย (OSV `MAL-`), ชื่อเลียนแบบ package ดัง (axois, reqeusts), ชื่อที่ไม่มีจริงแต่คล้ายของดัง, package ที่เพิ่งสร้างไม่ถึง 30 วัน มีคนโหลดน้อย และมีสคริปต์ติดตั้ง
+- **เตือนแล้วไปต่อ:** เวอร์ชันที่เพิ่งออกไม่ถึง 48 ชั่วโมง (ช่วงที่ release ถูกแฮ็กมักโดนดึงออก), ติดตั้งจาก git URL หรือ tarball, Homebrew tap ของบุคคลที่สาม
+- `npm install` เปล่าๆ จะเช็คทุกเวอร์ชันใน lockfile กับ OSV
+- ข้าม vswarm ครั้งเดียวด้วย `command npm …` ปิดด้วย `vswarm guard off` ตรวจเองด้วย `vswarm pkg npm install <ชื่อ>`
 
 ### vswarm try: รันโค้ดที่ไม่ไว้ใจ
 
@@ -50,6 +61,7 @@ vswarm canary plant aws                  # วาง credential ล่อ ถ้
 
 - ข้อมูลอยู่ในเครื่องที่ `~/.vswarm/sec` เจ้าของเครื่องอ่านได้คนเดียว ไม่มี telemetry
 - ส่งออกอย่างเดียว คือชื่อและเวอร์ชันของ package ไปที่ `api.osv.dev` เพื่อเช็คกับรายการ package อันตราย (ใช้ `--offline` เพื่อปิด)
+- ถ้าเปิด `vswarm guard` ชื่อ package ที่กำลังจะติดตั้งจะถูกส่งไปถาม registry ต้นทางด้วย (เป็นชื่อเดียวกับที่ package manager กำลังจะส่งอยู่แล้ว)
 - การตรวจ credential บอกแค่ตำแหน่งกับชนิด ไม่อ่านค่าออกมา
 
 ## ข้อจำกัด

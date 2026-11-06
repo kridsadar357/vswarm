@@ -14,7 +14,8 @@ import { secrets as findSecrets } from "./sec/secrets";
 import { selftest } from "./sec/selftest";
 import { clearLock, files, loadAccepted, loadBaseline, loadLast, loadLock, saveAccepted, saveBaseline } from "./sec/store";
 import { RANK, type Finding, type Verdict } from "./sec/types";
-import { ask, banner, canAsk, COMMANDS, completion, doctor, gate, install, uninstall, update } from "./setup";
+import { ask, banner, canAsk, COMMANDS, completion, doctor, gate, guard, install, uninstall, update } from "./setup";
+import { checkInstall, plan } from "./sec/pkg";
 import { shot } from "./shot";
 import { loadCanaries, plantAws, plantDns, plantEnv, removeCanary } from "./sec/canary";
 import { homedir } from "node:os";
@@ -63,6 +64,9 @@ function usage() {
   row("vswarm canary plant aws|dns|env · list", "decoy credentials that alert you when used");
   row('vswarm cert · gate ssh --cert "prod-*"', "15-minute certificate, only when preflight passes");
   row("vswarm accept <id…> | --all | --list", "mark reviewed findings as expected");
+  console.log(`\n  ${c.bold("before you install")}`);
+  row("vswarm guard on", "npm, pip, brew … ask vswarm before installing");
+  row("vswarm pkg npm install <name>", "check by hand: malicious, look-alike, brand new, scripts");
   console.log(`\n  ${c.bold("run code you do not trust")}`);
   row("vswarm try <folder|git URL|zip> [-- cmd]", "in a sandbox: no secrets, no network; reports what it tried");
   row("vswarm try … --net registries", "allow package registries only (npm install, pip install)");
@@ -205,6 +209,36 @@ async function main() {
 
     case "gate":
       return gate(args);
+
+    case "guard":
+      return guard(args);
+
+    case "pkg": {
+      // vswarm pkg <tool> [--] <the tool's arguments>; the shell wrapper calls this before every install.
+      const tool = args.shift();
+      if (!tool) throw new Error("usage: vswarm pkg npm|pnpm|yarn|bun|npx|bunx|pip|pip3|uv|uvx|pipx|brew [--] <arguments>   e.g. vswarm pkg npm install axois");
+      if (args[0] === "--") args.shift();
+      if (process.env.VSWARM_GUARD === "off") return;
+      const p = plan(tool, args);
+      if (p.skip) return;
+      const r = await checkInstall(p, { offline });
+      const quietPass = !r.findings.some((f) => f.severity !== "info") && !r.notes.length;
+      if (quietPass) {
+        if (process.stderr.isTTY) line(c.dim(`vswarm ✔ ${p.wants.length > 1 ? `${p.wants.length} packages` : p.from} checked · ${r.ms} ms`));
+        return;
+      }
+      line(`${c.violet("▼ vswarm")} checked ${p.from.startsWith(tool) ? p.from : `${tool} ${p.from}`} ${c.dim(`· ${r.ms} ms`)}`);
+      for (const f of r.findings.filter((x) => x.severity !== "info")) printFinding({ ...f, id: "" }, f.severity !== "low");
+      for (const n of r.notes) line(c.dim(`  · ${n}`));
+      if (r.verdict !== "block") {
+        if (r.findings.length) line(c.dim(`  ${VERDICT[r.verdict]} · going ahead`));
+        return;
+      }
+      if (await yes(`${c.red("Stop here.")} Install anyway?`, false)) return line(c.dim("  going ahead, as you said"));
+      line(c.dim(`  not installed · skip vswarm once with: command ${tool} …`));
+      process.exitCode = 3;
+      return;
+    }
 
     case "ca": {
       const action = args.shift() ?? "status";

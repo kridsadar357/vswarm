@@ -89,6 +89,37 @@ vswarm canary plant env ~/develop/old-project
 vswarm canary list · vswarm canary remove <id>
 ```
 
+### Check packages before they install
+
+Most stealers arrive as a package: a look-alike name, a hijacked release, a name an AI assistant made up and an
+attacker then registered. `vswarm guard on` puts a thin wrapper around npm, npx, pnpm, yarn, bun, bunx, pip, pip3,
+uv, uvx, pipx and brew in your shell. Installs are checked before the package manager runs any install script;
+everything else (`npm run dev`, `pip list`) does not even start vswarm.
+
+```
+$ npm install axois
+▼ vswarm checked npm axois · 412 ms
+  CRIT  axois@0.0.1-security: known malicious
+        OSV MAL-2025-15245
+  HIGH  npm axois: looks like axios
+        → did you mean axios?
+  ? Stop here. Install anyway? [y/N]
+```
+
+| Signal | Severity |
+| --- | --- |
+| known-malicious version (OSV `MAL-`) | critical, blocks |
+| one edit away from a popular name | high, blocks |
+| no such package, but it looks like a popular one | high, blocks |
+| package created in the last 30 days, few downloads, with an install script | high, blocks |
+| version published in the last 48 hours | medium, warns |
+| git URL, tarball, third-party Homebrew tap | medium, warns |
+| install script on an established package | low, one line |
+
+A bare `npm install` / `npm ci` checks every locked version against OSV. Blocking asks first; skip vswarm once with
+`command npm …`, or turn it off with `vswarm guard off`. Check by hand without the wrapper:
+`vswarm pkg npm install <name>`. If a registry cannot be reached, the install goes ahead with a notice.
+
 ### Run code you do not trust
 
 A "take-home assignment" from a recruiter, a repo a stranger sent, an installer: run it in a sandbox first.
@@ -167,6 +198,8 @@ a technique you have seen is the most useful contribution you can make.
 - Everything stays on your machine, under `~/.vswarm/sec` with owner-only permissions. No telemetry.
 - One network call: package **names and versions** to `api.osv.dev` for the known-malicious check, cached for a day.
   `--offline` skips it; the quiet gate (`preflight --quiet`) only uses the cache.
+- With `vswarm guard on`, the names you install also go to the registry they come from (registry.npmjs.org,
+  api.npmjs.org, api.deps.dev, pypi.org): the same names your package manager is about to send anyway.
 - Credential checks report where and what kind, never the value.
 
 ## Limits

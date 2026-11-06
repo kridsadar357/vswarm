@@ -1,0 +1,375 @@
+// Before an install: what is this package, and is it safe to let its install scripts run?
+//
+// `vswarm guard on` wraps npm, npx, pnpm, yarn, bun, bunx, pip, pip3, uv, pipx and brew in your shell. When you type an
+// install, vswarm reads the package names from the command line (or the lockfile, for a bare `npm install`) and asks
+// the registries before the package manager runs anything:
+//
+//   known-malicious   OSV MAL- records (OpenSSF malicious-packages)                      critical
+//   look-alike        one edit away from a popular name (axois, reqeusts)                 high
+//   does not exist    a name nobody published yet: a typo, or a name an AI made up        high when it looks like a popular one
+//   brand new         the version was published in the last 48 hours (hijacked releases)   medium
+//   new and unknown   package created in the last 30 days with few downloads              medium, high with an install script
+//   install script    preinstall / install / postinstall, or a Python sdist (setup.py)     low, raised by the signals above
+//   outside registry  git URLs, tarballs, third-party Homebrew taps                       medium
+//
+// Only package names and versions leave the machine (registry.npmjs.org, api.npmjs.org, api.deps.dev, pypi.org,
+// api.osv.dev). If a registry cannot be reached the install goes ahead with a notice: a broken network is not an attack.
+
+import { existsSync, readFileSync } from "node:fs";
+import { join } from "node:path";
+import { lookAlike, osvMalicious } from "./intel";
+import { files } from "./store";
+import { RANK, verdictOf, type Finding, type Item, type Severity, type Verdict } from "./types";
+
+export type Eco = "npm" | "pip" | "brew";
+
+export interface Want {
+  eco: Eco;
+  name: string;
+  /** Exact version when the command or lockfile pins one. */
+  version?: string;
+  /** git URL, tarball, path: installs code the registry never saw. */
+  outside?: string;
+  /** Homebrew tap, for user/tap/formula. */
+  tap?: string;
+}
+
+export interface Plan {
+  wants: Want[];
+  /** True when this command installs nothing (npm run, pip list): vswarm stays out of the way. */
+  skip: boolean;
+  /** Where the names came from, for the summary line. */
+  from: string;
+}
+
+const NPM_INSTALL = new Set(["install", "i", "add", "a", "isntall", "in", "ins", "inst", "insta", "instal", "update", "up", "upgrade"]);
+const NPM_RUN_PKG = new Set(["exec", "x", "dlx"]);
+// Options that take a value, so the value is not mistaken for a package name.
+const VALUE_OPTS = new Set(["--registry", "--prefix", "-C", "--cwd", "--tag", "--filter", "-F", "--workspace", "-w", "--cache", "--userconfig",
+  "-r", "--requirement", "-c", "--constraint", "-i", "--index-url", "--extra-index-url", "-f", "--find-links", "-t", "--target", "--python", "-p", "--package", "--with", "--root", "--platform"]);
+
+function names(args: string[]): string[] {
+  const out: string[] = [];
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i];
+    if (a === "--") break;
+    if (VALUE_OPTS.has(a)) {
+      i++;
+      continue;
+    }
+    if (a.startsWith("-")) continue;
+    out.push(a);
+  }
+  return out;
+}
+
+/** npm name[@version] → Want. Scoped names keep their leading @. */
+export function npmSpec(spec: string): Want {
+  if (/^(git\+|git:|github:|gitlab:|bitbucket:|https?:|file:|\.{0,2}\/|~\/)/.test(spec) || /\.(tgz|tar\.gz)$/.test(spec) || /^[\w-]+\/[\w.-]+(#.*)?$/.test(spec))
+    return { eco: "npm", name: spec, outside: spec };
+  // An alias (name@npm:real-name@1) installs the real name.
+  const alias = /^@?[^@]+@npm:(.+)$/.exec(spec);
+  if (alias) return npmSpec(alias[1]);
+  const at = spec.lastIndexOf("@");
+  const [name, range] = at > 0 ? [spec.slice(0, at), spec.slice(at + 1)] : [spec, ""];
+  return { eco: "npm", name, version: /^\d+\.\d+\.\d+([-+][\w.-]+)?$/.test(range) ? range : undefined };
+}
+
+/** pip requirement → Want, or nothing for local paths and editable installs of the project itself. */
+export function pipSpec(spec: string): Want | undefined {
+  const s = spec.trim().replace(/\s*[;#].*$/, "");
+  if (!s) return;
+  if (/^(git\+|https?:|hg\+|svn\+)/.test(s) || /\s@\s*(git\+|https?:)/.test(s)) return { eco: "pip", name: s, outside: s };
+  if (/^(\.|\/|~)/.test(s) || /\.(whl|tar\.gz|zip)$/.test(s)) return;
+  const m = /^([A-Za-z0-9][A-Za-z0-9._-]*)(\[[^\]]*\])?\s*(==\s*([\w.+!-]+))?/.exec(s);
+  if (!m) return;
+  return { eco: "pip", name: m[1].toLowerCase().replace(/[._]+/g, "-"), version: m[4] };
+}
+
+function requirements(path: string, depth = 0): Want[] {
+  if (depth > 3 || !existsSync(path)) return [];
+  const out: Want[] = [];
+  for (const raw of readFileSync(path, "utf8").split("\n")) {
+    const l = raw.trim();
+    if (!l || l.startsWith("#")) continue;
+    const inc = /^(-r|--requirement)\s+(\S+)/.exec(l);
+    if (inc) {
+      out.push(...requirements(join(path, "..", inc[2]), depth + 1));
+      continue;
+    }
+    if (l.startsWith("-")) continue;
+    const w = pipSpec(l);
+    if (w) out.push(w);
+  }
+  return out;
+}
+
+/** What a bare `npm install` would bring in: the lockfile when there is one, else the direct dependencies. */
+export function npmProject(dir: string): Want[] {
+  for (const lock of ["package-lock.json", "npm-shrinkwrap.json"]) {
+    const p = join(dir, lock);
+    if (!existsSync(p)) continue;
+    try {
+      const pkgs: Record<string, any> = JSON.parse(readFileSync(p, "utf8")).packages ?? {};
+      return Object.entries(pkgs)
+        .filter(([k, v]) => k && !v.link)
+        .map(([k, v]) => ({ eco: "npm" as const, name: v.name ?? k.split("node_modules/").at(-1)!, version: v.version, ...(v.resolved && !/^https:\/\/registry\.npmjs\.org\//.test(v.resolved) ? { outside: v.resolved } : {}) }));
+    } catch {}
+  }
+  try {
+    const pj = JSON.parse(readFileSync(join(dir, "package.json"), "utf8"));
+    return Object.entries({ ...pj.dependencies, ...pj.devDependencies, ...pj.optionalDependencies }).map(([n, r]) =>
+      String(r).startsWith("npm:") ? npmSpec(String(r).slice(4)) : /^(git|github:|https?:|file:)/.test(String(r)) ? { eco: "npm" as const, name: n, outside: String(r) } : { eco: "npm" as const, name: n });
+  } catch {
+    return [];
+  }
+}
+
+/** Reads a package-manager command line. `tool` is what was typed: npm, pnpm, yarn, bun, npx, bunx, pip, pip3, uv, pipx, brew. */
+export function plan(tool: string, args: string[], cwd = process.cwd()): Plan {
+  const none: Plan = { wants: [], skip: true, from: "" };
+  const sub = args[0];
+  if (tool === "npx" || tool === "bunx" || tool === "uvx") {
+    const spec = names(args)[0];
+    const w = spec ? (tool === "uvx" ? pipSpec(spec) : npmSpec(spec)) : undefined;
+    return w ? { wants: [w], skip: false, from: `${tool} ${spec}` } : none;
+  }
+  if (["npm", "pnpm", "yarn", "bun"].includes(tool)) {
+    if (sub && NPM_RUN_PKG.has(sub)) {
+      const spec = names(args.slice(1))[0];
+      return spec ? { wants: [npmSpec(spec)], skip: false, from: `${tool} ${sub} ${spec}` } : none;
+    }
+    // yarn with no arguments installs; `yarn <script>` runs a script.
+    const installs = (sub && NPM_INSTALL.has(sub)) || sub === "ci" || (tool === "yarn" && !sub);
+    if (!installs) return none;
+    const specs = names(args.slice(1));
+    // `npm update` without names, `npm ci` and bare installs read the project.
+    if (!specs.length || sub === "ci") {
+      const wants = npmProject(cwd);
+      return { wants, skip: !wants.length, from: `${wants.length} packages in this project` };
+    }
+    return { wants: specs.map(npmSpec), skip: false, from: specs.join(" ") };
+  }
+  if (["pip", "pip3", "uv", "pipx"].includes(tool)) {
+    let rest = args;
+    if (tool === "uv") {
+      if (sub === "pip") rest = args.slice(1);
+      else if (sub === "add" || sub === "tool") rest = sub === "tool" ? args.slice(1) : ["install", ...args.slice(1)];
+      else return none;
+    }
+    if (tool === "pipx" && !["install", "inject", "run"].includes(rest[0] ?? "")) return none;
+    if (tool !== "pipx" && rest[0] !== "install" && !(tool === "uv" && sub === "tool" && (rest[0] === "install" || rest[0] === "run"))) return none;
+    const wants: Want[] = [];
+    for (let i = 1; i < rest.length; i++) if (rest[i] === "-r" || rest[i] === "--requirement") wants.push(...requirements(join(cwd, rest[++i] ?? "")));
+    const specs = names(rest.slice(1));
+    // pipx inject <venv> <pkgs…>: the first name is the existing app.
+    for (const s of tool === "pipx" && rest[0] === "inject" ? specs.slice(1) : specs) {
+      const w = pipSpec(s);
+      if (w) wants.push(w);
+    }
+    return { wants, skip: !wants.length, from: wants.length > 3 ? `${wants.length} Python packages` : wants.map((w) => w.name).join(" ") };
+  }
+  if (tool === "brew") {
+    if (sub === "tap") {
+      const t = names(args.slice(1))[0];
+      return t ? { wants: [{ eco: "brew", name: t, tap: t }], skip: false, from: `brew tap ${t}` } : none;
+    }
+    if (!["install", "reinstall", "upgrade"].includes(sub ?? "")) return none;
+    const specs = names(args.slice(1));
+    const wants = specs.map((s): Want => {
+      const parts = s.split("/");
+      return parts.length === 3 ? { eco: "brew", name: s, tap: `${parts[0]}/${parts[1]}` } : { eco: "brew", name: s };
+    });
+    return { wants, skip: !wants.length, from: specs.join(" ") };
+  }
+  return none;
+}
+
+// ── What the registries say
+
+export interface Facts {
+  exists: boolean;
+  /** The version that would be installed. */
+  version?: string;
+  /** Install hooks of that version, when the registry tells. */
+  scripts?: string[];
+  /** Python: only a source distribution, so setup.py runs at install. */
+  sdistOnly?: boolean;
+  versionAt?: number;
+  createdAt?: number;
+  weeklyDownloads?: number;
+}
+
+export type Fetcher = (url: string) => Promise<{ status: number; json(): Promise<any> }>;
+
+const realFetch: Fetcher = (url) => fetch(url, { headers: { accept: "application/json", "user-agent": "vswarm" }, signal: AbortSignal.timeout(6000) });
+
+const enc = (n: string) => n.replace("/", "%2F");
+
+export async function npmFacts(name: string, version: string | undefined, get: Fetcher = realFetch): Promise<Facts> {
+  const man = await get(`https://registry.npmjs.org/${enc(name)}/${version ?? "latest"}`);
+  if (man.status === 404) return { exists: false };
+  if (man.status !== 200) throw new Error(`registry.npmjs.org ${man.status}`);
+  const m = await man.json();
+  const scripts = ["preinstall", "install", "postinstall", "prepare"].filter((s) => m.scripts?.[s]).map((s) => `${s}: ${m.scripts[s]}`);
+  const v = m.version as string;
+  const [dl, dep] = await Promise.all([
+    get(`https://api.npmjs.org/downloads/point/last-week/${name}`).then((r) => (r.status === 200 ? r.json() : undefined)).catch(() => undefined),
+    get(`https://api.deps.dev/v3/systems/npm/packages/${encodeURIComponent(name)}`).then((r) => (r.status === 200 ? r.json() : undefined)).catch(() => undefined),
+  ]);
+  const times: Record<string, number> = {};
+  for (const x of dep?.versions ?? []) if (x.publishedAt) times[x.versionKey?.version] = Date.parse(x.publishedAt);
+  const all = Object.values(times);
+  return { exists: true, version: v, scripts, versionAt: times[v], createdAt: all.length ? Math.min(...all) : undefined, weeklyDownloads: dl?.downloads };
+}
+
+export async function pipFacts(name: string, version: string | undefined, get: Fetcher = realFetch): Promise<Facts> {
+  const r = await get(`https://pypi.org/pypi/${name}/json`);
+  if (r.status === 404) return { exists: false };
+  if (r.status !== 200) throw new Error(`pypi.org ${r.status}`);
+  const d = await r.json();
+  const v: string = version ?? d.info?.version;
+  const rel: any[] = d.releases?.[v] ?? d.urls ?? [];
+  const at = (x: any) => Date.parse(x.upload_time_iso_8601 ?? x.upload_time);
+  const first = Object.values(d.releases ?? {}).flat().map(at).filter(Number.isFinite) as number[];
+  const mine = rel.map(at).filter(Number.isFinite);
+  return {
+    exists: true,
+    version: v,
+    sdistOnly: rel.length > 0 && rel.every((x) => x.packagetype === "sdist"),
+    versionAt: mine.length ? Math.min(...mine) : undefined,
+    createdAt: first.length ? Math.min(...first) : undefined,
+  };
+}
+
+const DAY = 86_400_000;
+const ago = (t: number) => {
+  const h = Math.round((Date.now() - t) / 3_600_000);
+  return h < 48 ? `${h} hours ago` : `${Math.round(h / 24)} days ago`;
+};
+
+const label = (w: Want) => `${w.eco === "pip" ? "PyPI" : w.eco} ${w.name}`;
+
+/** Findings for one wanted package, from what the registry said. */
+export function judge(w: Want, f: Facts | undefined, now = Date.now()): Finding[] {
+  const out: Finding[] = [];
+  const add = (rule: string, severity: Severity, title: string, detail: string[], fix?: string) =>
+    out.push({ id: `pkg:${rule}:${w.eco}:${w.name}`, rule: `pkg-${rule}`, severity, title, detail, fix });
+  if (w.eco === "brew") {
+    if (w.tap && !/^homebrew\//i.test(w.tap))
+      add("tap", "medium", `${w.name}: from the third-party tap ${w.tap}`, ["A tap is someone's git repository; its formulae run their own install code, outside Homebrew's review."],
+        `check who owns github.com/${w.tap.split("/")[0]}/homebrew-${w.tap.split("/")[1]} before trusting it`);
+    return out;
+  }
+  if (w.outside) {
+    add("outside", "medium", `${w.name}: installs code from outside the registry`, [`source: ${w.outside}`, "Nothing here was checked by the registry or by vswarm; it can run install scripts."],
+      "read it first, or try it in the sandbox: vswarm try <url>");
+    return out;
+  }
+  const near = lookAlike(w.eco, w.name);
+  if (!f) {
+    if (near) add("lookalike", "high", `${label(w)}: looks like ${near}`, ["One edit away from a popular package name: the classic typo-squat."], `did you mean ${near}?`);
+    return out;
+  }
+  if (!f.exists) {
+    add("missing", near ? "high" : "low", `${label(w)}: no such package`, [
+      near ? `It looks like ${near}. Someone can register this name at any time and wait for the typo.` : "A typo, or a name an AI assistant made up. Attackers register such names once they see them suggested.",
+    ], near ? `did you mean ${near}?` : "check the name on the registry website");
+    return out;
+  }
+  if (near) add("lookalike", "high", `${label(w)}: looks like ${near}`, ["One edit away from a popular package name: the classic typo-squat."], `did you mean ${near}?`);
+  const fresh = f.versionAt !== undefined && now - f.versionAt < 2 * DAY;
+  const young = f.createdAt !== undefined && now - f.createdAt < 30 * DAY;
+  const unknown = f.weeklyDownloads !== undefined ? f.weeklyDownloads < 500 : young;
+  const hooks = (f.scripts?.length ?? 0) > 0 || !!f.sdistOnly;
+  const hookText = f.scripts?.length ? f.scripts : f.sdistOnly ? ["only a source distribution: its setup.py runs during the install"] : [];
+  if (young && unknown)
+    add("new", hooks ? "high" : "medium", `${label(w)}: created ${ago(f.createdAt!)}${f.weeklyDownloads !== undefined ? `, ${f.weeklyDownloads} downloads last week` : ""}`,
+      [...(hooks ? ["and it runs code when installed:", ...hookText] : ["New and little used. Fine if you know the author; a common shape for fake packages."])],
+      hooks ? "read the install script first, or install with --ignore-scripts" : undefined);
+  else if (fresh)
+    add("fresh", "medium", `${label(w)}@${f.version}: published ${ago(f.versionAt!)}`, [
+      "Hijacked maintainer accounts publish poisoned versions that are pulled within hours or days.",
+      ...(hooks ? ["This version runs code when installed:", ...hookText] : []),
+    ], `pin the previous version unless you need this one${w.eco === "npm" ? ` (npm view ${w.name} versions)` : ""}`);
+  else if (hooks && w.eco === "npm")
+    add("scripts", "low", `${label(w)}@${f.version}: runs an install script`, hookText);
+  return out;
+}
+
+export interface PkgCheck {
+  plan: Plan;
+  findings: Finding[];
+  verdict: Verdict;
+  notes: string[];
+  ms: number;
+}
+
+/** Checks everything a command would install. Lockfiles are checked against OSV only; named packages also against the registry. */
+export async function checkInstall(p: Plan, opt: { get?: Fetcher; offline?: boolean; osvCache?: string } = {}): Promise<PkgCheck> {
+  const t0 = Date.now();
+  const get = opt.get ?? realFetch;
+  const notes: string[] = [];
+  const findings: Finding[] = [];
+  // Named on the command line: ask the registry about each (a lockfile can list a thousand; those get OSV only).
+  const named = p.wants.length <= 25 ? p.wants : p.wants.filter((w) => w.outside);
+  const facts = new Map<Want, Facts>();
+  if (!opt.offline) {
+    let failed = "";
+    await Promise.all(named.filter((w) => w.eco !== "brew" && !w.outside).map(async (w) => {
+      try {
+        facts.set(w, await (w.eco === "npm" ? npmFacts : pipFacts)(w.name, w.version, get));
+      } catch (e: any) {
+        failed = e.message ?? String(e);
+      }
+    }));
+    if (failed) notes.push(`could not ask the registry (${failed}); checked names offline only`);
+  }
+  for (const w of p.wants.length <= 25 ? p.wants : p.wants.filter((x) => x.outside || lookAlike(x.eco, x.name))) findings.push(...judge(w, facts.get(w)));
+  // Known-malicious: every exact version we know, from the command line, the registry answer, or the lockfile.
+  const items: Item[] = p.wants
+    .filter((w) => w.eco !== "brew" && !w.outside)
+    .map((w) => ({ kind: w.eco, id: w.name, name: w.name, version: w.version ?? facts.get(w)?.version }))
+    .filter((i) => i.version);
+  if (items.length) {
+    const osv = await osvMalicious(items, opt.osvCache ?? files.osv(), { offline: opt.offline });
+    if (osv.error) notes.push(osv.error);
+    for (const h of osv.hits)
+      findings.push({ id: `pkg:malicious:${h.item.kind}:${h.item.name}@${h.item.version}`, rule: "pkg-malicious", severity: "critical", title: `${h.item.name}@${h.item.version}: known malicious`,
+        detail: [`OSV ${h.ids.join(", ")}`], fix: "do not install it; if it was installed before on this machine: vswarm respond" });
+  }
+  findings.sort((a, b) => RANK[b.severity] - RANK[a.severity]);
+  return { plan: p, findings, verdict: verdictOf(findings), notes, ms: Date.now() - t0 };
+}
+
+// ── The shell wrapper
+
+export const GUARD_START = "# >>> vswarm guard >>>";
+export const GUARD_END = "# <<< vswarm guard <<<";
+
+/** Subcommands that install, per tool, so other commands (npm run, pip list) do not even start vswarm. */
+const INSTALLS: Record<string, string> = {
+  npm: "install|i|in|ins|inst|insta|instal|isntall|add|ci|update|up|upgrade|exec|x",
+  pnpm: "install|i|add|update|up|upgrade|dlx|exec",
+  yarn: '""|install|add|upgrade|up|dlx',
+  bun: "install|i|add|a|update|x",
+  pip: "install", pip3: "install", uv: "pip|add|tool", pipx: "install|inject|run",
+  brew: "install|reinstall|upgrade|tap",
+};
+
+/** Functions for ~/.zshrc and ~/.bashrc. `function name {` keeps zsh from expanding an alias of the same name. */
+export function guardBlock(launcher: string): string {
+  const q = /\s/.test(launcher) ? `'${launcher}'` : launcher;
+  const fn = (tool: string, subs?: string) => subs === undefined
+    ? `function ${tool} { ${q} pkg ${tool} -- "$@" && command ${tool} "$@"; }`
+    : `function ${tool} { case "$1" in ${subs}) ${q} pkg ${tool} -- "$@" || return $?;; esac; command ${tool} "$@"; }`;
+  return [
+    GUARD_START,
+    "# Package installs are checked by vswarm first. Skip once: command npm …   Turn off: vswarm guard off",
+    ...Object.entries(INSTALLS).map(([t, s]) => fn(t, s)),
+    fn("npx"),
+    fn("bunx"),
+    fn("uvx"),
+    GUARD_END,
+  ].join("\n");
+}

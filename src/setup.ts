@@ -7,6 +7,7 @@ import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { ensureHome, HOME, paths, VERSION } from "./home";
 import { files, loadBaseline, loadLock } from "./sec/store";
+import { GUARD_END, GUARD_START, guardBlock } from "./sec/pkg";
 
 export const CLI = resolve(import.meta.dir, "cli.ts");
 
@@ -135,11 +136,12 @@ function rcFiles(): { file: string; body: string }[] {
   return out;
 }
 
-function setBlock(file: string, body: string | null) {
+function setBlock(file: string, body: string | null, start = BLOCK_START, end = BLOCK_END) {
   const old = existsSync(file) ? readFileSync(file, "utf8") : "";
-  const block = `${BLOCK_START}\n${body}\n${BLOCK_END}\n`;
+  // body may carry its own markers (guardBlock does); the managed block is always start…end.
+  const block = body?.startsWith(start) ? `${body}\n` : `${start}\n${body}\n${end}\n`;
   if (body !== null && old.includes(block)) return false;
-  const re = new RegExp(`\\n?${BLOCK_START}[\\s\\S]*?${BLOCK_END}\\n?`, "g");
+  const re = new RegExp(`\\n?${start}[\\s\\S]*?${end}\\n?`, "g");
   const rest = old.replace(re, "\n").replace(/\n{3,}/g, "\n\n");
   const next = body === null ? rest : rest.trimEnd() + (rest.trim() ? "\n\n" : "") + block;
   if (next === old) return false;
@@ -168,6 +170,8 @@ export const COMMANDS: [string, string][] = [
   ["report", "write the incident report again"],
   ["unlock", "close an incident once the machine is clean"],
   ["gate", "add the preflight gate to ssh"],
+  ["guard", "check npm, pip and brew packages before they install"],
+  ["pkg", "check what a package-manager command would install"],
   ["try", "run untrusted code in a sandbox and see what it tried"],
   ["ca", "certificate authority for short-lived SSH certificates"],
   ["cert", "issue a short-lived SSH certificate after preflight"],
@@ -193,6 +197,7 @@ _vswarm() {
     preflight) COMPREPLY=( $(compgen -W "--quiet --strict --fresh --then --json --offline" -- "$cur") ) ;;
     accept) COMPREPLY=( $(compgen -W "--all --list --remove" -- "$cur") ) ;;
     gate) COMPREPLY=( $(compgen -W "ssh status remove" -- "$cur") ) ;;
+    guard) COMPREPLY=( $(compgen -W "on off status" -- "$cur") ) ;;
   esac
 }
 complete -F _vswarm vswarm
@@ -212,6 +217,7 @@ ${lines}
     preflight) _arguments '--quiet[print only on problems]' '--strict[WARN also blocks]' '--fresh[ignore the cached verdict]' '--then[run a command when allowed]:command:_command_names' ;;
     accept) _arguments '--all[accept every current finding]' '--list[show accepted]' '--remove[un-accept]:id:' ;;
     gate) _values 'action' ssh status remove ;;
+    guard) _values 'action' on off status ;;
   esac
 }
 _vswarm "$@"
@@ -272,6 +278,8 @@ export async function doctor(): Promise<boolean> {
   const sshCfg = existsSync(sshCfgPath) ? readFileSync(sshCfgPath, "utf8") : "";
   if (sshCfg.includes(GATE_START)) ok("ssh gate installed", "~/.ssh/config");
   else console.log(`  ${c.dim("·")} ssh gate not installed  ${c.dim('vswarm gate ssh "prod-*"')}`);
+  if (guardOn()) ok("install guard on", "npm, pip, brew … are checked before installing");
+  else console.log(`  ${c.dim("·")} install guard off  ${c.dim("vswarm guard on")}`);
   console.log();
   return good;
 }
@@ -325,6 +333,36 @@ export async function gate(args: string[]) {
   if (action === "ssh") console.log(`  ${c.dim("test it: ssh -G <a matching host> | grep -i proxycommand  (empty while preflight passes)")}`);
 }
 
+// ── Install guard: npm, pip, brew … ask vswarm before they install
+function guardFiles(): string[] {
+  return rcFiles().map((r) => r.file).filter((f) => /\.(zsh|bash)rc$/.test(f));
+}
+
+export function guardOn(): boolean {
+  return guardFiles().some((f) => existsSync(f) && readFileSync(f, "utf8").includes(GUARD_START));
+}
+
+export async function guard(args: string[]) {
+  const action = args.shift() ?? "status";
+  if (action === "status") {
+    if (guardOn()) ok("install guard is on", guardFiles().join(", "));
+    else console.log(`  ${c.dim("·")} install guard is off  ${c.dim("vswarm guard on")}`);
+    return;
+  }
+  if (action !== "on" && action !== "off") throw new Error("usage: vswarm guard on | off | status");
+  const launcher = existsSync(launcherPath()) ? launcherPath() : undefined;
+  if (action === "on" && !launcher) throw new Error("install the launcher first: vswarm install");
+  for (const f of guardFiles()) {
+    const changed = setBlock(f, action === "on" ? guardBlock(launcher!) : null, GUARD_START, GUARD_END);
+    ok(changed ? `${action === "on" ? "added to" : "removed from"} ${f}` : `already ${action} in ${f}`);
+  }
+  if (action === "on") {
+    console.log(`  ${c.dim("npm, npx, pnpm, yarn, bun, bunx, pip, pip3, uv, uvx, pipx and brew now ask vswarm before installing")}`);
+    console.log(`  ${c.dim("new terminals have it; this one: source " + guardFiles()[0])}`);
+    console.log(`  ${c.dim("try it: npm install axois   (a look-alike of axios; nothing is installed unless you say so)")}`);
+  } else console.log(`  ${c.dim("open a new terminal, or: unset -f npm npx pnpm yarn bun bunx pip pip3 uv uvx pipx brew")}`);
+}
+
 // ── Commands
 export async function install(args: string[]) {
   const auto = args.includes("--yes") || args.includes("-y") || !canAsk();
@@ -371,6 +409,7 @@ export async function uninstall(args: string[]) {
   rmSync(paths.completions(), { recursive: true, force: true });
   const sshCfg = join(homedir(), ".ssh/config");
   if (existsSync(sshCfg) && readFileSync(sshCfg, "utf8").includes(GATE_START)) await gate(["remove"]);
+  if (guardOn()) await guard(["off"]);
   if (args.includes("--purge")) {
     rmSync(HOME, { recursive: true, force: true });
     ok("data removed", HOME);

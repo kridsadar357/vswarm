@@ -266,3 +266,87 @@ describe("canary tokens", () => {
     }
   });
 });
+
+describe("install guard", () => {
+  const { plan, judge, checkInstall, guardBlock, npmSpec, pipSpec } = require("../src/sec/pkg");
+  const DAY = 86_400_000;
+
+  test("reads package names from package-manager command lines", () => {
+    const n = (tool: string, line: string) => plan(tool, line.split(" ").filter(Boolean), "/nonexistent").wants.map((w: any) => w.name + (w.version ? "@" + w.version : ""));
+    expect(n("npm", "install -D axois lodash@4.17.21 --registry https://r.example")).toEqual(["axois", "lodash@4.17.21"]);
+    expect(n("pnpm", "add @types/node@20.1.0")).toEqual(["@types/node@20.1.0"]);
+    expect(n("npx", "-y create-vite@latest my-app")).toEqual(["create-vite"]);
+    expect(n("pip", "install -r missing.txt reqeusts==2.0.0 'flask[async]'")).toEqual(["reqeusts@2.0.0"]);
+    expect(n("pip", "install flask[async] -e .")).toEqual(["flask"]);
+    expect(n("uv", "pip install httpx")).toEqual(["httpx"]);
+    expect(n("brew", "install jq someone/tools/thing")).toEqual(["jq", "someone/tools/thing"]);
+    expect(plan("npm", ["run", "dev"]).skip).toBe(true);
+    expect(plan("pip", ["list"]).skip).toBe(true);
+    expect(plan("brew", ["upgrade"]).skip).toBe(true);
+    expect(npmSpec("github:a/b").outside).toBe("github:a/b");
+    expect(npmSpec("alias@npm:real@1.2.3")).toMatchObject({ name: "real", version: "1.2.3" });
+    expect(pipSpec("git+https://x/y.git")?.outside).toBeDefined();
+  });
+
+  test("a bare npm install reads the lockfile", () => {
+    const d = mkdtempSync(join(tmpdir(), "vswarm-lock-"));
+    writeFileSync(join(d, "package-lock.json"), JSON.stringify({ packages: { "": { name: "app" }, "node_modules/is-number": { version: "7.0.0", resolved: "https://registry.npmjs.org/is-number/-/is-number-7.0.0.tgz" }, "node_modules/x": { version: "1.0.0", resolved: "https://evil.example/x.tgz" } } }));
+    const p = plan("npm", ["install"], d);
+    expect(p.wants.map((w: any) => `${w.name}@${w.version}${w.outside ? " outside" : ""}`)).toEqual(["is-number@7.0.0", "x@1.0.0 outside"]);
+  });
+
+  test("judging registry facts", () => {
+    const now = Date.now();
+    const rules = (w: any, f: any) => judge(w, f, now).map((x: any) => `${x.rule}:${x.severity}`);
+    const old = { exists: true, version: "1.0.0", versionAt: now - 400 * DAY, createdAt: now - 900 * DAY, weeklyDownloads: 1e6 };
+    expect(rules({ eco: "npm", name: "chalk" }, old)).toEqual([]);
+    expect(rules({ eco: "npm", name: "esbuild" }, { ...old, scripts: ["postinstall: node install.js"] })).toEqual(["pkg-scripts:low"]);
+    expect(rules({ eco: "npm", name: "chalk" }, { ...old, versionAt: now - 3 * 3_600_000 })).toEqual(["pkg-fresh:medium"]);
+    expect(rules({ eco: "npm", name: "tiny-helper-x" }, { ...old, createdAt: now - 5 * DAY, weeklyDownloads: 12 })).toEqual(["pkg-new:medium"]);
+    expect(rules({ eco: "npm", name: "tiny-helper-x" }, { ...old, createdAt: now - 5 * DAY, weeklyDownloads: 12, scripts: ["postinstall: node x.js"] })).toEqual(["pkg-new:high"]);
+    expect(rules({ eco: "pip", name: "reqeusts" }, { exists: false })).toEqual(["pkg-missing:high"]);
+    expect(rules({ eco: "pip", name: "made-up-zzq" }, { exists: false })).toEqual(["pkg-missing:low"]);
+    expect(rules({ eco: "npm", name: "axois" }, old)).toEqual(["pkg-lookalike:high"]);
+    expect(rules({ eco: "brew", name: "a/b/c", tap: "a/b" }, undefined)).toEqual(["pkg-tap:medium"]);
+    expect(rules({ eco: "brew", name: "jq" }, undefined)).toEqual([]);
+  });
+
+  test("checkInstall asks the registry and OSV, blocks malicious, and goes ahead when offline", async () => {
+    const d = mkdtempSync(join(tmpdir(), "vswarm-pkg-"));
+    const cache = join(d, "osv.json");
+    writeFileSync(cache, JSON.stringify({ "npm:evil-pkg@1.0.0": { at: Date.now(), mal: ["MAL-2099-1"] }, "npm:good@2.0.0": { at: Date.now(), mal: [] } }));
+    const seen: string[] = [];
+    const get = async (url: string) => {
+      seen.push(new URL(url).host);
+      const man = /registry\.npmjs\.org\/([^/]+)\//.exec(url)?.[1];
+      const body = man === "evil-pkg" ? { version: "1.0.0" } : man === "good" ? { version: "2.0.0" } : url.includes("downloads") ? { downloads: 1e6 } : { versions: [{ versionKey: { version: "2.0.0" }, publishedAt: "2020-01-01T00:00:00Z" }, { versionKey: { version: "1.0.0" }, publishedAt: "2019-01-01T00:00:00Z" }] };
+      return { status: 200, json: async () => body };
+    };
+    const r = await checkInstall(plan("npm", ["install", "evil-pkg", "good"], d), { get, osvCache: cache, offline: false });
+    expect(r.verdict).toBe("block");
+    expect(r.findings.map((f: any) => f.rule)).toEqual(["pkg-malicious"]);
+    expect(new Set(seen)).toEqual(new Set(["registry.npmjs.org", "api.npmjs.org", "api.deps.dev"]));
+    const down = await checkInstall(plan("npm", ["install", "good"], d), { get: async () => { throw new Error("offline"); }, osvCache: cache });
+    expect(down.verdict).toBe("pass");
+    expect(down.notes.join()).toContain("could not ask the registry");
+  });
+
+  test("the shell wrapper checks installs only, and stops when vswarm says no", async () => {
+    const d = mkdtempSync(join(tmpdir(), "vswarm-guard-"));
+    const log = join(d, "log");
+    // A stand-in vswarm that refuses "evil", and a stand-in npm that records what ran.
+    writeFileSync(join(d, "vswarm"), `#!/bin/sh\necho "vswarm $*" >> ${log}\ncase "$*" in *evil*) exit 3;; esac\n`, { mode: 0o755 });
+    writeFileSync(join(d, "npm"), `#!/bin/sh\necho "npm $*" >> ${log}\n`, { mode: 0o755 });
+    const rc = join(d, "rc");
+    writeFileSync(rc, guardBlock(join(d, "vswarm")));
+    // No start-up files (-f, --norc): a user's .zshenv can put the real npm back on PATH. Run inside the temp folder
+    // with a temp HOME, so even an escape could not touch this repository.
+    for (const sh of [["zsh", "-f"], ["bash", "--norc", "--noprofile"]]) {
+      if (!Bun.which(sh[0])) continue;
+      writeFileSync(log, "");
+      const p = Bun.spawn([...sh, "-c", `. ${rc}; npm run dev; npm install good; npm i evil; echo "status $?" >> ${log}`], { cwd: d, env: { PATH: `${d}:/usr/bin:/bin`, HOME: d }, stdout: "pipe", stderr: "pipe" });
+      expect(await p.exited).toBe(0);
+      expect(readFileSync(log, "utf8").trim().split("\n")).toEqual(["npm run dev", "vswarm pkg npm -- install good", "npm install good", "vswarm pkg npm -- i evil", "status 3"]);
+    }
+  });
+});
