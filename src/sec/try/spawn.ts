@@ -8,7 +8,7 @@ import { dirname, join } from "node:path";
 import { TRY_DIR, type Net } from "./index";
 import { bwrapArgs, FORWARDER, freshProc, inner, INNER_PORT } from "./linux";
 import { allowedBy, startProxy, type ProxyHit } from "./proxy";
-import { cleanEnv, profile, toolchains, type Box } from "./sandbox";
+import { cleanEnv, listeningPorts, profile, toolchains, type Box } from "./sandbox";
 
 export interface Sandboxed {
   proc: ReturnType<typeof Bun.spawn<"pipe", "pipe", "pipe">>;
@@ -56,7 +56,8 @@ export async function sandboxSpawn(cmd: string[], opt: { net: Net; env?: Record<
     argv = [Bun.which("bwrap")!, ...bwrapArgs(homedir(), box, { tools: [...toolchains(homedir()), ...own], bun: process.execPath, interactive: false, hostProc }), "--", ...inner(box, process.execPath, cmd)];
   } else {
     const sb = join(dir, "sandbox.sb");
-    writeFileSync(sb, profile(homedir(), box, proxy.port, own));
+    // An MCP server under inspection gets no local databases or Docker API either (Linux: its own network namespace).
+    writeFileSync(sb, profile(homedir(), box, proxy.port, own, await listeningPorts()));
     argv = ["/usr/bin/sandbox-exec", "-f", sb, ...cmd];
   }
   const env = { ...cleanEnv(box, linux ? INNER_PORT : proxy.port, homedir()), ...opt.env };

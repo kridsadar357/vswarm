@@ -88,6 +88,33 @@ export function reEscape(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
+// ── secrets in text that gets printed
+
+const MASK = "•••";
+/** A credential flag, as a whole dash-separated word (--token, --api-key, --auth-token, --key=…), and its value. */
+const FLAG_VALUE = /(--(?:[\w-]*-)?(?:token|api-?key|key|secret|password|passwd|auth)(?:-[\w-]*)?)(=|\s+)(?!-)(\S+)/gi;
+const URL_PASSWORD = /(\w[\w+.-]*:\/\/[^\s/@:]+:)([^\s/@]+)@/g;
+const QUERY_SECRET = /([?&#](?:access_token|refresh_token|id_token|token|api[_-]?key|apikey|key|secret|password|auth)=)([^&\s"'#]+)/gi;
+const KNOWN_TOKEN = /\b(?:sk-[A-Za-z0-9_-]{12,}|gh[pousr]_[A-Za-z0-9]{16,}|github_pat_[A-Za-z0-9_]{16,}|xox[abpr]-[A-Za-z0-9-]{8,}|AKIA[A-Z0-9]{16}|eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}(?:\.[A-Za-z0-9_-]+)?)/g;
+const HEX_RUN = /(?<!\w)[0-9a-f]{32,}(?!\w)/gi;
+const BASE64_RUN = /(?<![\w+/=])[A-Za-z0-9+/]{32,}={0,2}(?![\w+/=])/g;
+
+/**
+ * Masks what looks like a credential in a command line or URL about to be printed: values of --token-style flags,
+ * passwords in URLs, token= query values, and bare strings shaped like known tokens or long hex/base64. For display
+ * only; what vswarm stores and hashes is never passed through this.
+ */
+export function redact(s: string): string {
+  return s
+    .replace(FLAG_VALUE, `$1$2${MASK}`)
+    .replace(URL_PASSWORD, `$1${MASK}@`)
+    .replace(QUERY_SECRET, `$1${MASK}`)
+    .replace(KNOWN_TOKEN, MASK)
+    .replace(HEX_RUN, MASK)
+    // A path is a long run of the same characters; a secret mixes cases and digits and does not start with a slash.
+    .replace(BASE64_RUN, (m) => (m.startsWith("/") || !/[A-Z]/.test(m) || !/[a-z]/.test(m) || !/\d/.test(m) ? m : MASK));
+}
+
 export function realCtx(): Ctx {
   const home = homedir();
   const brew = ["/opt/homebrew", "/usr/local/Homebrew", "/home/linuxbrew/.linuxbrew"].find((p) => existsSync(join(p, "bin", "brew")) || existsSync(join(p, "Library")))

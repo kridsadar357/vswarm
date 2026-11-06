@@ -5,9 +5,9 @@
 //   4 contain   unload and quarantine login jobs and programs, strip added startup lines (each one asked)
 //   5 report    a report for your team and drafts for the package registries (you send them; nothing is sent)
 
-import { copyFileSync, existsSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, copyFileSync, existsSync, mkdirSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { basename, join } from "node:path";
-import { dq, fileHash, run, shq, type Ctx } from "./ctx";
+import { dq, fileHash, redact, run, shq, type Ctx } from "./ctx";
 import type { Check } from "./engine";
 import { writeReport } from "./report";
 import { files, setLock, writePrivate } from "./store";
@@ -95,6 +95,22 @@ async function collectEvidence(inc: Incident) {
 type Ask = (q: string) => Promise<boolean>;
 
 /**
+ * Moves a file into quarantine. rename fails across filesystems (EXDEV: the file sits on an external volume or a
+ * container mount, quarantine on the system disk); then copy, keep the mode, and remove the original.
+ */
+export function moveFile(from: string, to: string, rename: (from: string, to: string) => void = renameSync) {
+  try {
+    rename(from, to);
+  } catch (e: any) {
+    if (e?.code !== "EXDEV") throw e;
+    const { mode } = statSync(from);
+    copyFileSync(from, to);
+    chmodSync(to, mode);
+    unlinkSync(from);
+  }
+}
+
+/**
  * Containment steps for one finding, as (description, action) pairs. Nothing runs unless the user says yes. Names
  * and paths in the `manual` commands come from the thing being contained, so they are quoted for the shell the user
  * will paste them into.
@@ -105,7 +121,7 @@ function containment(f: Finding, ctx: Ctx, inc: Incident): { what: string; act?:
   const moveAway = async (p: string) => {
     mkdirSync(quarantine, { recursive: true, mode: 0o700 });
     const dest = join(quarantine, `${Date.now()}-${basename(p)}`);
-    renameSync(p, dest);
+    moveFile(p, dest);
     return `moved ${p} → ${dest}`;
   };
   if (!i) return [];
@@ -187,7 +203,7 @@ function containment(f: Finding, ctx: Ctx, inc: Incident): { what: string; act?:
       }];
     }
     case "agent-hook":
-      return [{ what: `remove the hook ${i.name}`, manual: `edit ${i.path} and delete: ${String(i.meta?.command ?? "").slice(0, 80)}` }];
+      return [{ what: `remove the hook ${i.name}`, manual: `edit ${i.path} and delete: ${redact(String(i.meta?.command ?? "")).slice(0, 80)}` }];
     case "browser-ext":
     case "editor-ext":
       return [{ what: `remove ${i.name} from ${i.source}`, manual: `remove it in ${i.source}'s extension settings` }];

@@ -27,10 +27,10 @@ export function allowedBy(mode: "none" | "registries" | "all") {
 /** Listens on 127.0.0.1, or on a unix socket (Linux: the sandbox has its own network and reaches it through a file). */
 export function startProxy(allow: (host: string) => boolean, opt: { unix?: string } = {}): Proxy {
   const hits: ProxyHit[] = [];
-  type State = { buf: Buffer; up?: any; open: boolean; pending: Buffer[] };
+  type State = { buf: Buffer; up?: any; open: boolean; closed: boolean; pending: Buffer[] };
   const handlers = {
       open(s: import("bun").Socket<State>) {
-        s.data = { buf: Buffer.alloc(0), open: false, pending: [] };
+        s.data = { buf: Buffer.alloc(0), open: false, closed: false, pending: [] };
       },
       data(s: import("bun").Socket<State>, chunk: Buffer) {
         const st = s.data;
@@ -81,6 +81,11 @@ export function startProxy(allow: (host: string) => boolean, opt: { unix?: strin
               up.data = { client: s };
               st.up = up;
               st.open = true;
+              // The client gave up while this connection was being opened; do not leave it hanging.
+              if (st.closed) {
+                up.end();
+                return;
+              }
               if (tunnel) s.write("HTTP/1.1 200 Connection Established\r\n\r\n");
               else {
                 // Plain HTTP: forward the request as it came (origin servers accept absolute-form).
@@ -103,7 +108,9 @@ export function startProxy(allow: (host: string) => boolean, opt: { unix?: strin
         }).catch(() => s.end("HTTP/1.1 502 Bad Gateway\r\n\r\n"));
       },
       close(s: import("bun").Socket<State>) {
-        if (s.data?.up && s.data.open) s.data.up.end();
+        if (!s.data) return;
+        s.data.closed = true;
+        if (s.data.up && s.data.open) s.data.up.end();
       },
       error() {},
   } satisfies import("bun").SocketHandler<State>;

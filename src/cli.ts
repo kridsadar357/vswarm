@@ -4,7 +4,7 @@
 import { existsSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { VERSION } from "./home";
-import { readJson, realCtx } from "./sec/ctx";
+import { readJson, realCtx, redact } from "./sec/ctx";
 import { check } from "./sec/engine";
 import { c, finding as printFinding, line, summary } from "./sec/print";
 import { writeReport } from "./sec/report";
@@ -72,7 +72,7 @@ function usage() {
   row("vswarm watch on", "check every hour in the background, notify on anything new");
   row("vswarm secrets", "long-lived credentials on this machine (never prints values)");
   row("vswarm agents", "MCP servers, hooks and permissions of AI coding agents");
-  row("vswarm agents --inspect [--show]", "start each MCP server sandboxed, read its tools for hidden instructions");
+  row("vswarm agents --inspect [--show] [--timeout s]", "start each MCP server sandboxed, read its tools for hidden instructions");
   console.log(`\n  ${c.bold("gate production access")}`);
   row("vswarm preflight [--quiet] [--strict]", "PASS / WARN / BLOCK; exit 3 on BLOCK");
   row("vswarm preflight --then <command…>", "run the command only if this machine passes");
@@ -87,6 +87,7 @@ function usage() {
   console.log(`\n  ${c.bold("run code you do not trust")}`);
   row("vswarm try <folder|git URL|zip> [-- cmd]", "in a sandbox: no secrets, no network; reports what it tried");
   row("vswarm try … --net registries", "allow package registries only (npm install, pip install)");
+  row("vswarm try … --localhost", "let it reach services on your own localhost (a dev server, a database)");
   row("vswarm try --list · --clean", "earlier tries");
   console.log(`\n  ${c.bold("when something is wrong")}`);
   row("vswarm respond", "lock, evidence, credential checklist, quarantine, report");
@@ -148,7 +149,9 @@ async function main() {
     case "agents": {
       // What AI agents on this machine may start or run on their own.
       const { agents } = await import("./sec/collect/agents");
-      const inspectOpt = { sandbox: !has(args, "--no-sandbox"), show: has(args, "--show") };
+      const timeout = Number(flag(args, "--timeout") ?? 90);
+      if (!(timeout > 0)) throw new Error("--timeout takes a number of seconds");
+      const inspectOpt = { sandbox: !has(args, "--no-sandbox"), show: has(args, "--show"), timeoutMs: timeout * 1000 };
       const doInspect = has(args, "--inspect");
       noMoreOptions(cmd, args);
       const list = await agents(realCtx());
@@ -167,7 +170,7 @@ async function main() {
         for (const i of xs) {
           if (kind === "agent-perm") line(`    ${i.meta?.bypass ? c.amber("bypass") : c.green("asks  ")}  ${i.name}${i.meta?.wide ? c.dim(`  allows ${i.meta.wide}`) : ""}`);
           else if (kind === "agent-plugin") line(`    ${i.name} ${c.dim(String(i.source))}`);
-          else line(`    ${c.cyan(String(i.source).padEnd(26))} ${i.name.replace(`${i.source} `, "")}\n      ${c.dim(String(i.meta?.command ?? i.meta?.url ?? short(i.path)).slice(0, 140))}${i.meta?.secrets ? c.amber(`  token in plain text: ${i.meta.secrets}`) : ""}`);
+          else line(`    ${c.cyan(String(i.source).padEnd(26))} ${i.name.replace(`${i.source} `, "")}\n      ${c.dim(redact(String(i.meta?.command ?? i.meta?.url ?? short(i.path))).slice(0, 140))}${i.meta?.secrets ? c.amber(`  token in plain text: ${i.meta.secrets}`) : ""}`);
         }
       }
       line(c.dim("\n  Changes from your baseline show up in vswarm diff and block or warn in preflight."));
@@ -329,6 +332,7 @@ async function main() {
       const clean = cleanAt >= 0 && cleanAt < own(args) ? { id: args.splice(cleanAt, 2)[1] } : undefined;
       const net = (flag(args, "--net") ?? "none") as Net;
       const auto = has(args, "--yes", "-y");
+      const localhost = has(args, "--localhost");
       noMoreOptions(cmd, args);
       if (list) {
         const all = listTries();
@@ -341,8 +345,8 @@ async function main() {
       const dash = args.indexOf("--");
       const command = dash >= 0 ? tail : [];
       const source = (dash >= 0 ? args.slice(0, dash) : args)[0];
-      if (!source) throw new Error('usage: vswarm try <folder | git URL | archive | file> [--net none|registries|all] [-- command …]');
-      const r = await tryIt(source, command, { net, ask: (q) => yes(q, true), yes: auto });
+      if (!source) throw new Error('usage: vswarm try <folder | git URL | archive | file> [--net none|registries|all] [--localhost] [-- command …]');
+      const r = await tryIt(source, command, { net, ask: (q) => yes(q, true), yes: auto, localhost });
       process.exitCode = r.verdict === "block" ? 3 : 0;
       return;
     }

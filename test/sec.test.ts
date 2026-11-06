@@ -529,8 +529,8 @@ describe("AI agents and MCP", () => {
 });
 
 describe("signed updates", () => {
-  test("updates only to tags signed by the pinned key; unsigned, other-key and older tags are refused", async () => {
-    const { secureUpdate } = require("../src/sec/update");
+  test("updates only to tags signed by the pinned key; unsigned and other-key tags are ignored, older ones refused, pre-releases skipped", async () => {
+    const { secureUpdate, compareVersions } = require("../src/sec/update");
     const root = mkdtempSync(join(tmpdir(), "vs-upd-"));
     const sh = async (cwd: string, ...cmd: string[]) => {
       const p = Bun.spawn(cmd, { cwd, stdout: "pipe", stderr: "pipe", env: { ...process.env, GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_SYSTEM: "/dev/null" } });
@@ -554,19 +554,25 @@ describe("signed updates", () => {
     };
     await release("v1.0.0", "a");
     await sh(root, "git", "clone", "-q", origin, app);
+    await release("v1.0.5");                                   // unsigned, newer than the signed one
     const pin = join(root, "pin", "allowed_signers");
     const up = (cur: string) => secureUpdate(app, cur, pin);
 
-    // The fresh clone already sits on v1.0.0; the first check pins the key that release lists.
-    expect((await up("0.9.0")).status).toBe("current");
+    // The fresh clone already sits on v1.0.0; the first check pins the key that release lists, skipping the unsigned tag.
+    expect(await up("0.9.0")).toMatchObject({ status: "current", at: "v1.0.0", ignored: ["v1.0.5"] });
     expect(readFileSync(pin, "utf8")).toContain("a@test");
-    await release("v1.1.0");                                   // unsigned
-    expect((await up("1.0.0")).status).toBe("refused");
+    await release("v1.1.0");                                   // unsigned: ignored, not a reason to stop updating
+    expect(await up("1.0.0")).toMatchObject({ status: "current", at: "v1.0.0", ignored: ["v1.1.0", "v1.0.5"] });
     await release("v1.2.0", "b", signer("b"));                 // a takeover: new key, and the repo's list swapped to it
-    expect((await up("1.0.0")).status).toBe("refused");
+    expect(await up("1.0.0")).toMatchObject({ status: "current", at: "v1.0.0", ignored: ["v1.2.0", "v1.1.0", "v1.0.5"] });
     await release("v1.3.0", "a");
-    expect(await up("1.0.0")).toMatchObject({ status: "updated", to: "v1.3.0" });
+    expect(await up("1.0.0")).toMatchObject({ status: "updated", to: "v1.3.0", ignored: [] });
     expect((await up("2.0.0")).status).toBe("refused");       // never go back
+    // A signed pre-release is only for those already running one, and ranks below its release.
+    await release("v1.4.0-rc1", "a");
+    expect(await up("1.3.0")).toMatchObject({ status: "current", at: "v1.3.0" });
+    expect(await up("1.4.0-rc0")).toMatchObject({ status: "updated", to: "v1.4.0-rc1" });
+    expect(compareVersions("v1.4.0-rc1", "v1.4.0")).toBe(-1);
   }, 60_000);
 });
 

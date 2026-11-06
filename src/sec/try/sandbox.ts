@@ -1,11 +1,13 @@
 // The macOS sandbox (Seatbelt) that `vswarm try` runs untrusted code in.
 //   files    reads: the system and your toolchains, nothing else in your home; writes: only its own work, home and tmp
 //   secrets  no keychain, no clipboard, no Apple Events (scripting other apps)
-//   network  localhost only; the outside world only through the vswarm proxy, which records and filters by host
+//   network  localhost only, minus the ports this machine already listens on (databases, the Docker API, dev
+//            servers); the outside world only through the vswarm proxy, which records and filters by host
 // The code also gets a fake HOME and a clean environment, so tokens in your shell are not handed over.
 
 import { existsSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
+import { run } from "../ctx";
 
 /** Toolchain folders in the real home that code may read (to run node, bun, python …), never write. */
 const TOOLCHAINS = [
@@ -28,7 +30,23 @@ export interface Box {
   netlog: string;
 }
 
-export function profile(realHome: string, box: Box, proxyPort: number, extraRead: string[] = []): string {
+/** Port numbers in `lsof -nP -iTCP -sTCP:LISTEN` output, each once. */
+export function parseListening(lsof: string): number[] {
+  const ports = new Set<number>();
+  for (const m of lsof.matchAll(/:(\d+) \(LISTEN\)/g)) ports.add(Number(m[1]));
+  return [...ports].sort((a, b) => a - b);
+}
+
+/**
+ * TCP ports something on this machine listens on: local databases, the Docker API, your dev servers. Sandboxed code may
+ * not connect to them (macOS; on Linux bubblewrap gives the sandbox its own network namespace, so there is nothing to
+ * deny). Best effort: without lsof the list is empty and localhost stays open as before.
+ */
+export async function listeningPorts(): Promise<number[]> {
+  return parseListening((await run(["lsof", "-nP", "-iTCP", "-sTCP:LISTEN"], 10_000)) ?? "");
+}
+
+export function profile(realHome: string, box: Box, proxyPort: number, extraRead: string[] = [], denyPorts: number[] = []): string {
   const tools = [...toolchains(realHome), ...extraRead];
   const mine = [box.work, box.home, box.tmp];
   // The box and the folders above it (~/.vswarm/try, ~/.vswarm) as listings only: runtimes walk up from their working folder
@@ -42,14 +60,18 @@ export function profile(realHome: string, box: Box, proxyPort: number, extraRead
 (allow sysctl-read)
 (allow ipc-posix-shm ipc-posix-sem)
 (allow mach-lookup)
-; secrets and other apps: keychain, clipboard, scripting other apps, privacy database
+; secrets and other apps: keychain, clipboard, scripting other apps, privacy database, launching apps (open https://…),
+; the screen
 (deny mach-lookup
   (global-name "com.apple.SecurityServer")
   (global-name "com.apple.securityd.xpc")
   (global-name "com.apple.security.agent")
   (global-name-prefix "com.apple.pasteboard")
   (global-name "com.apple.coreservices.appleevents")
-  (global-name-prefix "com.apple.tccd"))
+  (global-name-prefix "com.apple.tccd")
+  (global-name "com.apple.coreservices.launchservicesd")
+  (global-name "com.apple.screencapture.interactive")
+  (global-name-prefix "com.apple.ScreenCaptureKit"))
 ; files: read the system, not your home (except toolchains) and not other apps' temp files
 (allow file-read*)
 (deny file-read* (subpath ${q(realHome)}) (subpath "/private/var/folders") (subpath "/Volumes"))
@@ -57,11 +79,23 @@ export function profile(realHome: string, box: Box, proxyPort: number, extraRead
 (allow file-read-metadata)
 (allow file-write*${mine.map((m) => ` (subpath ${q(m)})`).join("")} (literal "/dev/null") (literal "/dev/zero") (literal "/dev/dtracehelper") (regex #"^/dev/tty") (regex #"^/dev/fd/"))
 (allow file-ioctl (regex #"^/dev/tty"))
-; network: localhost (dev servers, the vswarm proxy on port ${proxyPort}); nothing else, not even DNS
+; network: localhost (servers the code starts itself, the vswarm proxy on port ${proxyPort}); nothing else, not even DNS
 (allow network-bind (local ip "localhost:*"))
 (allow network-inbound (local ip "localhost:*"))
 (allow network-outbound (remote ip "localhost:*"))
-`;
+(allow network-outbound (remote tcp "localhost:*"))
+${portDenies(denyPorts.filter((p) => p !== proxyPort))}`;
+}
+
+/**
+ * One deny per port the machine listens on. Measured on macOS 27: a `remote ip` deny alone, or a `remote tcp` deny
+ * alone, after the `remote ip "localhost:*"` allow is honoured for some port numbers and not others (on IPv4 and IPv6
+ * alike). With both allows above and both filters in each deny, every listed port is refused and every other one open.
+ */
+function portDenies(ports: number[]): string {
+  if (!ports.length) return "";
+  return "; what this machine already listens on (databases, Docker, dev servers) is not the code's business\n" +
+    ports.map((p) => `(deny network-outbound (remote ip "localhost:${p}") (remote tcp "localhost:${p}"))\n`).join("");
 }
 
 /** Records every outside hostname Node code looks up or connects to, even code that ignores proxy settings. */
