@@ -57,6 +57,7 @@ function usage() {
   row("vswarm diff", "only what changed since the baseline");
   row("vswarm secrets", "long-lived credentials on this machine (never prints values)");
   row("vswarm agents", "MCP servers, hooks and permissions of AI coding agents");
+  row("vswarm agents --inspect [--show]", "start each MCP server sandboxed, read its tools for hidden instructions");
   console.log(`\n  ${c.bold("gate production access")}`);
   row("vswarm preflight [--quiet] [--strict]", "PASS / WARN / BLOCK; exit 3 on BLOCK");
   row("vswarm preflight --then <command…>", "run the command only if this machine passes");
@@ -125,6 +126,47 @@ async function main() {
       // What AI agents on this machine may start or run on their own.
       const { agents } = await import("./sec/collect/agents");
       const list = await agents(realCtx());
+      if (has(args, "--inspect")) {
+        const { inspect, judgeTools, loadPins, pinTools, savePins } = await import("./sec/mcp");
+        const sandbox = !has(args, "--no-sandbox");
+        const show = has(args, "--show");
+        const servers = list.filter((i) => i.kind === "mcp");
+        line(`${c.violet("▼ vswarm agents --inspect")} ${c.dim(`· ${servers.length} MCP servers · ${sandbox ? "stdio servers run in the sandbox (no home, registries only)" : "stdio servers run directly (--no-sandbox)"}`)}`);
+        // The same server is often configured in several agents; start it once.
+        const byDef = new Map<string, Promise<Awaited<ReturnType<typeof inspect>>>>();
+        const results = await Promise.all(servers.map((i) => {
+          const k = String(i.meta?.url ?? i.meta?.command ?? i.id);
+          if (!byDef.has(k)) byDef.set(k, inspect(i, { sandbox }));
+          return byDef.get(k)!.then((r) => ({ ...r, item: i }));
+        }));
+        const allTools = new Map<string, string>();
+        for (const r of results) for (const t of r.tools ?? []) allTools.set(t.name, r.item.id);
+        const pins = loadPins();
+        const findings: Finding[] = [];
+        for (const r of results) {
+          const label = `${r.item.name} ${c.dim(`(${r.item.source})`)}`;
+          if (!r.tools) {
+            line(`  ${c.dim("·")} ${label}  ${c.dim(`not inspected: ${r.error}`)}`);
+            continue;
+          }
+          const others = new Set([...allTools].filter(([, id]) => id !== r.item.id).map(([n]) => n));
+          const fs = [...judgeTools(r.item, r.tools, others), ...pinTools(r.item, r.tools, pins)];
+          findings.push(...fs);
+          line(`  ${fs.some((f) => RANK[f.severity] >= RANK.high) ? c.red("✖") : fs.length ? c.amber("!") : c.green("✔")} ${label}  ${c.dim(`${r.tools.length} tool${r.tools.length === 1 ? "" : "s"}${r.sandboxed ? " · sandboxed" : ""}${r.hosts?.length ? ` · reached ${r.hosts.join(", ")}` : ""}`)}`);
+          if (show) for (const t of r.tools) line(`      ${c.cyan(t.name)}  ${c.dim((t.description ?? "").replace(/\s+/g, " ").slice(0, 300))}`);
+        }
+        savePins(pins);
+        const failed = results.filter((r) => !r.tools && /exited|no answer/.test(r.error ?? "")).length;
+        if (sandbox && failed) line(c.dim(`  ${failed} could not start in the sandbox (they need files in your home or a local service). --no-sandbox starts them as your agent does, with your access.`));
+        line("");
+        const shown = findings.filter((f) => RANK[f.severity] >= RANK.medium);
+        if (!shown.length) line(`  ${c.green("✔")} no hidden instructions, secret lookups or changed tools in what the agents will read`);
+        for (const f of shown.sort((a, b) => RANK[b.severity] - RANK[a.severity])) printFinding({ ...f, id: "" });
+        if (findings.length > shown.length) line(c.dim(`  … ${findings.length - shown.length} low finding${findings.length - shown.length > 1 ? "s" : ""} (a URL in a description and the like) · --show prints every description`));
+        line(c.dim("\n  Tool definitions are pinned now; the next --inspect reports any change (rug pulls). --show prints every description."));
+        process.exitCode = findings.some((f) => RANK[f.severity] >= RANK.high) ? 3 : 0;
+        return;
+      }
       line(`${c.violet("▼ vswarm agents")} ${c.dim("· MCP servers, hooks and permissions of AI coding agents on this machine")}`);
       if (!list.length) line(`  ${c.green("✔")} no agent settings found`);
       const short = (p?: string) => (p ?? "").replace(homedir(), "~");
@@ -249,10 +291,10 @@ async function main() {
       const r = await checkInstall(p, { offline });
       const quietPass = !r.findings.some((f) => f.severity !== "info") && !r.notes.length;
       if (quietPass) {
-        if (process.stderr.isTTY) line(c.dim(`vswarm ✔ ${p.wants.length > 1 ? `${p.wants.length} packages` : p.from} checked · ${r.ms} ms`));
+        if (process.stderr.isTTY) line(c.dim(`vswarm ✔ ${p.wants.length > 1 ? `${p.wants.length} packages` : p.from}${r.deps ? ` and ${r.deps} dependencies` : ""} checked · ${r.ms} ms`));
         return;
       }
-      line(`${c.violet("▼ vswarm")} checked ${p.from.startsWith(tool) ? p.from : `${tool} ${p.from}`} ${c.dim(`· ${r.ms} ms`)}`);
+      line(`${c.violet("▼ vswarm")} checked ${p.from.startsWith(tool) ? p.from : `${tool} ${p.from}`} ${c.dim(`${r.deps ? `and ${r.deps} dependencies ` : ""}· ${r.ms} ms`)}`);
       for (const f of r.findings.filter((x) => x.severity !== "info")) printFinding({ ...f, id: "" }, f.severity !== "low");
       for (const n of r.notes) line(c.dim(`  · ${n}`));
       if (r.verdict !== "block") {

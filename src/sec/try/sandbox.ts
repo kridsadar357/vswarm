@@ -5,7 +5,7 @@
 // The code also gets a fake HOME and a clean environment, so tokens in your shell are not handed over.
 
 import { existsSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 
 /** Toolchain folders in the real home that code may read (to run node, bun, python …), never write. */
 const TOOLCHAINS = [
@@ -28,9 +28,13 @@ export interface Box {
   netlog: string;
 }
 
-export function profile(realHome: string, box: Box, proxyPort: number): string {
-  const tools = toolchains(realHome);
+export function profile(realHome: string, box: Box, proxyPort: number, extraRead: string[] = []): string {
+  const tools = [...toolchains(realHome), ...extraRead];
   const mine = [box.work, box.home, box.tmp];
+  // The box and the folders above it (~/.vswarm/try, ~/.vswarm) as listings only: runtimes walk up from their working folder
+  // at start-up (bun drops its whole environment when it cannot), and a listing shows names, not contents.
+  const above: string[] = [];
+  for (let a = box.dir; a !== "/" && a !== "."; a = dirname(a)) if (a.startsWith(realHome + "/") || a.startsWith("/private/var/folders")) above.push(a);
   return `(version 1)
 (deny default)
 (allow process-exec process-fork)
@@ -49,7 +53,7 @@ export function profile(realHome: string, box: Box, proxyPort: number): string {
 ; files: read the system, not your home (except toolchains) and not other apps' temp files
 (allow file-read*)
 (deny file-read* (subpath ${q(realHome)}) (subpath "/private/var/folders") (subpath "/Volumes"))
-(allow file-read* (literal ${q(realHome)})${tools.map((t) => ` (subpath ${q(t)})`).join("")}${mine.map((m) => ` (subpath ${q(m)})`).join("")})
+(allow file-read* (literal ${q(realHome)})${above.map((a) => ` (literal ${q(a)})`).join("")}${tools.map((t) => ` (subpath ${q(t)})`).join("")}${mine.map((m) => ` (subpath ${q(m)})`).join("")})
 (allow file-read-metadata)
 (allow file-write*${mine.map((m) => ` (subpath ${q(m)})`).join("")} (literal "/dev/null") (literal "/dev/zero") (literal "/dev/dtracehelper") (regex #"^/dev/tty") (regex #"^/dev/fd/"))
 (allow file-ioctl (regex #"^/dev/tty"))

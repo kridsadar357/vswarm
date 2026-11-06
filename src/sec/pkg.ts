@@ -303,6 +303,25 @@ export interface PkgCheck {
   verdict: Verdict;
   notes: string[];
   ms: number;
+  /** Dependencies checked beyond the named packages (the whole tree, from deps.dev). */
+  deps: number;
+}
+
+/** Every package a version pulls in, resolved the way the registry would (api.deps.dev), with the one that brings it. */
+export async function depTree(eco: "npm" | "pip", name: string, version: string, get: Fetcher = realFetch): Promise<{ name: string; version: string; via: string }[]> {
+  const sys = eco === "npm" ? "npm" : "pypi";
+  const r = await get(`https://api.deps.dev/v3/systems/${sys}/packages/${encodeURIComponent(name)}/versions/${encodeURIComponent(version)}:dependencies`);
+  if (r.status !== 200) return [];
+  const g = await r.json();
+  const nodes: { versionKey: { name: string; version: string } }[] = g.nodes ?? [];
+  const parent = new Map<number, number>();
+  for (const e of g.edges ?? []) if (!parent.has(e.toNode)) parent.set(e.toNode, e.fromNode);
+  return nodes.slice(1).map((n, i) => {
+    // The direct dependency this one hangs under, so a finding can say which package brought it in.
+    let at = i + 1;
+    while (parent.has(at) && parent.get(at) !== 0) at = parent.get(at)!;
+    return { name: n.versionKey.name, version: n.versionKey.version, via: nodes[at]?.versionKey.name ?? name };
+  });
 }
 
 /** Checks everything a command would install. Lockfiles are checked against OSV only; named packages also against the registry. */
@@ -331,15 +350,38 @@ export async function checkInstall(p: Plan, opt: { get?: Fetcher; offline?: bool
     .filter((w) => w.eco !== "brew" && !w.outside)
     .map((w) => ({ kind: w.eco, id: w.name, name: w.name, version: w.version ?? facts.get(w)?.version }))
     .filter((i) => i.version);
+  // And everything those named packages pull in: most malware arrives as a dependency of something harmless.
+  const via = new Map<string, string>();
+  if (!opt.offline && named.length === p.wants.length) {
+    const trees = await Promise.all(items.map((i) => depTree(i.kind as "npm" | "pip", i.name, i.version!, get).catch(() => [])));
+    const seen = new Set(items.map((i) => `${i.kind}:${i.name}@${i.version}`));
+    trees.forEach((tree, k) => {
+      for (const d of tree) {
+        const key = `${items[k].kind}:${d.name}@${d.version}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        via.set(key, d.via === d.name ? items[k].name : `${items[k].name} → ${d.via}`);
+        items.push({ kind: items[k].kind, id: d.name, name: d.name, version: d.version, meta: { dep: true } });
+        const like = lookAlike(items[k].kind, d.name);
+        if (like)
+          findings.push({ id: `pkg:dep-lookalike:${items[k].kind}:${d.name}`, rule: "pkg-lookalike", severity: "high", title: `${items[k].name} pulls in ${d.name}, which looks like ${like}`,
+            detail: [`via ${via.get(key)}`], fix: `check why ${items[k].name} depends on it; a typo-squat in the tree runs its install scripts too` });
+      }
+    });
+  }
+  const deps = items.filter((i) => i.meta?.dep).length;
   if (items.length) {
     const osv = await osvMalicious(items, opt.osvCache ?? files.osv(), { offline: opt.offline });
     if (osv.error) notes.push(osv.error);
-    for (const h of osv.hits)
-      findings.push({ id: `pkg:malicious:${h.item.kind}:${h.item.name}@${h.item.version}`, rule: "pkg-malicious", severity: "critical", title: `${h.item.name}@${h.item.version}: known malicious`,
-        detail: [`OSV ${h.ids.join(", ")}`], fix: "do not install it; if it was installed before on this machine: vswarm respond" });
+    for (const h of osv.hits) {
+      const path = via.get(`${h.item.kind}:${h.item.name}@${h.item.version}`);
+      findings.push({ id: `pkg:malicious:${h.item.kind}:${h.item.name}@${h.item.version}`, rule: "pkg-malicious", severity: "critical",
+        title: path ? `${h.item.name}@${h.item.version} (a dependency): known malicious` : `${h.item.name}@${h.item.version}: known malicious`,
+        detail: [`OSV ${h.ids.join(", ")}`, ...(path ? [`pulled in by ${path}`] : [])], fix: "do not install it; if it was installed before on this machine: vswarm respond" });
+    }
   }
   findings.sort((a, b) => RANK[b.severity] - RANK[a.severity]);
-  return { plan: p, findings, verdict: verdictOf(findings), notes, ms: Date.now() - t0 };
+  return { plan: p, findings, verdict: verdictOf(findings), notes, ms: Date.now() - t0, deps };
 }
 
 // ── The shell wrapper
@@ -358,14 +400,20 @@ const INSTALLS: Record<string, string> = {
 };
 
 /** Functions for ~/.zshrc and ~/.bashrc. `function name {` keeps zsh from expanding an alias of the same name. */
+/** Package managers Socket Firewall (sfw) can proxy; with sfw installed, approved installs run through it as well. */
+const SFW = new Set(["npm", "pnpm", "yarn", "pip", "pip3", "uv"]);
+
 export function guardBlock(launcher: string): string {
   const q = /\s/.test(launcher) ? `'${launcher}'` : launcher;
+  const run = (tool: string) => (SFW.has(tool) ? `__vswarm_run ${tool} "$@"` : `command ${tool} "$@"`);
   const fn = (tool: string, subs?: string) => subs === undefined
     ? `function ${tool} { ${q} pkg ${tool} -- "$@" && command ${tool} "$@"; }`
-    : `function ${tool} { case "$1" in ${subs}) ${q} pkg ${tool} -- "$@" || return $?;; esac; command ${tool} "$@"; }`;
+    : `function ${tool} { case "$1" in ${subs}) ${q} pkg ${tool} -- "$@" || return $?; ${run(tool)}; return $?;; esac; command ${tool} "$@"; }`;
   return [
     GUARD_START,
     "# Package installs are checked by vswarm first. Skip once: command npm …   Turn off: vswarm guard off",
+    // Socket Firewall, when present, checks every download of the install too (VSWARM_SFW=off to skip it).
+    `function __vswarm_run { if [ "\${VSWARM_SFW:-}" != off ] && command -v sfw >/dev/null 2>&1; then sfw "$@"; else command "$@"; fi; }`,
     ...Object.entries(INSTALLS).map(([t, s]) => fn(t, s)),
     fn("npx"),
     fn("bunx"),

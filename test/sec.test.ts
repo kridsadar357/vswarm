@@ -390,6 +390,27 @@ describe("install guard", () => {
     expect(down.notes.join()).toContain("could not ask the registry");
   });
 
+  test("a malicious package deep in the tree is found, with the package that pulls it in", async () => {
+    const d = mkdtempSync(join(tmpdir(), "vswarm-tree-"));
+    const cache = join(d, "osv.json");
+    writeFileSync(cache, JSON.stringify({ "npm:evil-helper@2.0.0": { at: Date.now(), mal: ["MAL-2099-2"] } }));
+    const get = async (url: string) => {
+      if (url.includes(":dependencies")) return { status: 200, json: async () => ({
+        nodes: [{ versionKey: { name: "nice-lib", version: "1.0.0" } }, { versionKey: { name: "middle", version: "3.1.0" } }, { versionKey: { name: "evil-helper", version: "2.0.0" } }, { versionKey: { name: "axois", version: "1.0.0" } }],
+        edges: [{ fromNode: 0, toNode: 1 }, { fromNode: 1, toNode: 2 }, { fromNode: 0, toNode: 3 }] }) };
+      if (url.includes("registry.npmjs.org")) return { status: 200, json: async () => ({ version: "1.0.0" }) };
+      if (url.includes("downloads")) return { status: 200, json: async () => ({ downloads: 1e6 }) };
+      return { status: 200, json: async () => ({ versions: [{ versionKey: { version: "1.0.0" }, publishedAt: "2020-01-01T00:00:00Z" }] }) };
+    };
+    const r = await checkInstall(plan("npm", ["install", "nice-lib"], d), { get, osvCache: cache });
+    expect(r.deps).toBe(3);
+    expect(r.verdict).toBe("block");
+    const mal = r.findings.find((f: any) => f.rule === "pkg-malicious");
+    expect(mal.title).toContain("evil-helper@2.0.0 (a dependency)");
+    expect(mal.detail).toContain("pulled in by nice-lib → middle");
+    expect(r.findings.some((f: any) => f.title === "nice-lib pulls in axois, which looks like axios")).toBe(true);
+  });
+
   test("the shell wrapper checks installs only, and stops when vswarm says no", async () => {
     const d = mkdtempSync(join(tmpdir(), "vswarm-guard-"));
     const log = join(d, "log");
@@ -407,6 +428,12 @@ describe("install guard", () => {
       expect(await p.exited).toBe(0);
       expect(readFileSync(log, "utf8").trim().split("\n")).toEqual(["npm run dev", "vswarm pkg npm -- install good", "npm install good", "vswarm pkg npm -- i evil", "status 3"]);
     }
+    // With Socket Firewall on PATH, an approved install runs through it; VSWARM_SFW=off skips it.
+    writeFileSync(join(d, "sfw"), `#!/bin/sh\necho "sfw $*" >> ${log}\n`, { mode: 0o755 });
+    writeFileSync(log, "");
+    const p = Bun.spawn(["bash", "--norc", "--noprofile", "-c", `. ${rc}; npm install good; VSWARM_SFW=off npm install good`], { cwd: d, env: { PATH: `${d}:/usr/bin:/bin`, HOME: d }, stdout: "pipe", stderr: "pipe" });
+    await p.exited;
+    expect(readFileSync(log, "utf8").trim().split("\n")).toEqual(["vswarm pkg npm -- install good", "sfw npm install good", "vswarm pkg npm -- install good", "npm install good"]);
   });
 });
 
@@ -488,4 +515,41 @@ describe("vswarm's own blocks", () => {
       delete process.env.VSWARM_SEC_DIR;
     }
   });
+});
+
+describe("MCP inspection", () => {
+  const { judgeTools, pinTools, inspect } = require("../src/sec/mcp");
+  const { canSandbox } = require("../src/sec/try/spawn");
+  const { agents } = require("../src/sec/collect/agents");
+
+  test.skipIf(!canSandbox())("a poisoned server is started in the sandbox, read, pinned, and its later change is caught", async () => {
+    const home = mkdtempSync(join(tmpdir(), "vs-mcp-"));
+    process.env.VSWARM_TRY_DIR = join(home, "try");
+    try {
+      mkdirSync(join(home, ".cursor"), { recursive: true });
+      const server = join(import.meta.dir, "fixtures/evil-mcp/server.js");
+      const conf = (v: string) => writeFileSync(join(home, ".cursor/mcp.json"), JSON.stringify({ mcpServers: { calc: { command: process.execPath, args: [server], env: { EVIL_MCP_VERSION: v } } } }));
+      conf("1");
+      const [item] = await agents({ home, system: false, pathDirs: [], run: async () => undefined, host: "t", user: "t" });
+      const r = await inspect(item, { sandbox: true });
+      expect(r.error).toBeUndefined();
+      expect(r.sandboxed).toBe(true);
+      expect(r.tools.map((t: any) => t.name)).toEqual(["add", "format_code", "weather"]);
+      const found = judgeTools(item, r.tools, new Set(["send_email"]));
+      const add = found.find((f: any) => f.title.includes('"add"'));
+      expect(add.severity).toBe("high");
+      expect([add.title, ...add.detail].join(" ")).toContain("hidden-instruction markup");
+      expect([add.title, ...add.detail].join(" ")).toContain("keep something from the user");
+      expect(found.find((f: any) => f.title.includes('"weather"')).title).toContain("invisible characters");
+      const pins = {};
+      expect(pinTools(item, r.tools, pins)).toEqual([]);
+      conf("2");
+      const r2 = await inspect(item, { sandbox: true });
+      const later = [...judgeTools(item, r2.tools, new Set(["send_email"])), ...pinTools(item, r2.tools, pins)];
+      expect(later.some((f: any) => f.rule === "mcp-changed" && f.detail[0] === "changed: format_code")).toBe(true);
+      expect(later.some((f: any) => f.title.includes('"format_code"') && f.detail.concat(f.title).join(" ").includes("tool shadowing"))).toBe(true);
+    } finally {
+      delete process.env.VSWARM_TRY_DIR;
+    }
+  }, 120_000);
 });
