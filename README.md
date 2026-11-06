@@ -286,6 +286,8 @@ are vswarm's steps in that direction, see [docs/server-side.md](docs/server-side
 - With `vswarm guard on`, the names you install also go to the registry they come from (registry.npmjs.org,
   api.npmjs.org, api.deps.dev, pypi.org): the same names your package manager is about to send anyway.
 - Credential checks report where and what kind, never the value.
+- `vswarm team join` / `sync` run `git clone` / `git fetch` of the team repository you name; `report --json` is written
+  locally (to stdout or `--out`) and sent nowhere by vswarm.
 
 ## Linux
 

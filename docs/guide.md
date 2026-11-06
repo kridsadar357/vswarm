@@ -595,6 +595,8 @@ Environment: `VSWARM_HOME` (moves `~/.vswarm`), `VSWARM_GUARD=off`, `VSWARM_SEC_
   `preflight --quiet` asks only about versions it has never seen)
 - with `guard` on, the names you install go to the registry they come from (registry.npmjs.org, api.npmjs.org,
   api.deps.dev, pypi.org): the same names your package manager is about to send
+- with a team policy, `vswarm team join` / `sync` fetch the git repository you named; reports (`report --json`) stay
+  local unless you move them
 - nothing else: no telemetry, and credential values are never read
 
 

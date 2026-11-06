@@ -516,6 +516,7 @@ vswarm trust           # กุญแจที่เครื่องนี้�
 **ข้อมูลที่ออกจากเครื่อง:**
 - ชื่อและเวอร์ชันของ package ไปที่ `api.osv.dev` เพื่อเช็คกับรายการ package อันตราย (cache 1 วัน, `--offline` เพื่อปิด ส่วน `preflight --quiet` จะถามเฉพาะเวอร์ชันที่ยังไม่เคยถาม)
 - ถ้าเปิด `guard` ชื่อ package ที่กำลังจะติดตั้งจะถูกส่งไปถาม registry ต้นทาง (registry.npmjs.org, api.npmjs.org, api.deps.dev, pypi.org) ซึ่งเป็นชื่อเดียวกับที่ package manager กำลังจะส่งอยู่แล้ว
+- ถ้าใช้นโยบายของทีม `vswarm team join` / `sync` จะดึง git repository ที่เราระบุ ส่วนรายงาน (`report --json`) อยู่ในเครื่องจนกว่าเราจะย้ายไปเอง
 - ไม่มีอย่างอื่น ไม่มี telemetry และไม่อ่านค่าของ credential ออกมา
 
 
