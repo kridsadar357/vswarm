@@ -185,8 +185,19 @@ or change them after you approved it. `--inspect` starts each server the way the
 - **stdio servers run inside the vswarm sandbox**: no home (except the server's own project folder, read-only), no
   keychain or clipboard, network only to package registries. `--no-sandbox` starts them as your agent would.
 - remote servers are asked over HTTP; servers that need an OAuth sign-in are listed as not inspected.
-- every tool definition is **pinned** (hashed); the next `--inspect` reports changed or added tools (rug pulls).
+- **prompts and resources** are read too when the server offers them (`prompts/list`, `resources/list`): they reach
+  the model as text just like tool descriptions, and get the same checks and pins.
+- every tool, prompt and resource definition is **pinned** (hashed), together with the server's definition in the
+  agent's config; the next `--inspect` reports changed or added tools (rug pulls).
 - `--show` prints every description; exit code 3 when something is high.
+
+Between inspections, `scan`, `preflight` and `watch` compare the servers with the pins **without starting any**:
+
+| | |
+| --- | --- |
+| a server the last `--inspect` saw change its tools | HIGH, until you accept it (`vswarm accept <id>`) |
+| a server whose command, arguments, URL or environment changed since it was inspected | MED; `watch` notifies "run vswarm agents --inspect" |
+| a server never inspected | one line under the summary |
 
 | In a tool's description or parameters | Severity |
 | --- | --- |

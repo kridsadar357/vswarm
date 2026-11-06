@@ -119,6 +119,8 @@ Windsurf, VS Code, Gemini CLI and Codex, Claude Code hooks and `statusLine` comm
 | MCP server started through npx/uvx with a look-alike package name | high |
 | new or changed MCP server, new or changed hook, agent given more freedom (bypass, `Bash(*)`) since the baseline | medium |
 | remote MCP server over plain http; token pasted into an MCP config | medium |
+| a server `agents --inspect` saw change its tools (rug pull), until accepted | high |
+| a server defined differently than when it was inspected (checked without starting it) | medium |
 
 A baseline taken before vswarm checked agents does not report every existing server as new; it says the baseline
 is older than the check, and `vswarm baseline` brings it up to date.

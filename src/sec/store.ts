@@ -92,7 +92,8 @@ export function stateKey(): Promise<KeyState> {
 }
 
 const sealPath = (f: string) => `${f}.seal`;
-const SEALED = () => [files.baseline(), files.accepted(), files.last(), files.lock()];
+// Sealed files, adopted once when a machine that never had seals gets its key (the MCP pins are written by mcp.ts).
+const SEALED = () => [files.baseline(), files.accepted(), files.last(), files.lock(), join(SEC(), "mcp-tools.json")];
 
 async function loadKey(store: KeyStore): Promise<KeyState> {
   let hex: string | undefined;

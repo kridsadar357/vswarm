@@ -14,7 +14,7 @@ import { VERSION } from "../home";
 import { readJson, redact, reEscape, sha256 } from "./ctx";
 import { c, finding as printFinding, line } from "./print";
 import { canSandbox, sandboxSpawn } from "./try/spawn";
-import { SEC, writePrivate } from "./store";
+import { readSealed, SEC, writeSealed } from "./store";
 import { RANK, type Finding, type Item, type Severity } from "./types";
 
 export interface Tool {
@@ -34,7 +34,12 @@ export interface Inspection {
 }
 
 const pinFile = () => join(SEC(), "mcp-tools.json");
-type Pins = Record<string, { at: number; tools: Record<string, string> }>;
+/**
+ * Per server (the scan item's id): when it was inspected, a hash per tool, prompt and resource, the hash of its
+ * definition in the agent's config at that moment (`def`, the scan item's hash), and a rug pull the last inspection
+ * saw (`changed`), which scans keep reporting until you accept it.
+ */
+export type Pins = Record<string, { at: number; tools: Record<string, string>; def?: string; changed?: { id: string; at: number; names: string[] } }>;
 
 const hash = (t: Tool) => createHash("sha256").update(JSON.stringify({ d: t.description ?? "", s: t.inputSchema ?? null })).digest("hex").slice(0, 16);
 
@@ -79,7 +84,7 @@ export function judgeTools(i: Item, tools: Tool[], others: Set<string>): Finding
     const sev: Severity = hits.some(([, s]) => s === "high") || shadow.length ? "high" : hits.some(([, s]) => s === "medium") || text.length >= 4000 ? "medium" : "low";
     const reasons = [...hits.map(([, , why]) => why), ...(shadow.length ? [`mentions tools of other servers: ${shadow.slice(0, 4).join(", ")} (tool shadowing)`] : []), ...(text.length >= 4000 ? [`is unusually long (${text.length} characters)`] : [])];
     const excerpt = (t.description ?? "").replace(/\s+/g, " ").slice(0, 160);
-    out.push({ id: `mcp-tool:${i.id}:${t.name}:${hash(t)}`, rule: "mcp-tool", severity: sev, title: `${what}: tool "${t.name}" ${reasons[0]}`,
+    out.push({ id: `mcp-tool:${i.id}:${t.name}:${hash(t)}`, rule: "mcp-tool", severity: sev, title: `${what}: ${t.name.startsWith("prompt:") ? `prompt "${t.name.slice(7)}"` : t.name.startsWith("resource:") ? `resource "${t.name.slice(9)}"` : `tool "${t.name}"`} ${reasons[0]}`,
       detail: [...reasons.slice(1).map((r) => `also ${r}`), excerpt ? `“${excerpt}${(t.description ?? "").length > 160 ? "…" : ""}”` : ""].filter(Boolean),
       fix: sev === "high" ? "Remove this server from the agent's config unless you can explain this text; then vswarm respond" : "Read the full description before trusting it", item: i });
   }
@@ -90,45 +95,116 @@ export function judgeTools(i: Item, tools: Tool[], others: Set<string>): Finding
 export function pinTools(i: Item, tools: Tool[], pins: Pins): Finding[] {
   const out: Finding[] = [];
   const now: Record<string, string> = Object.fromEntries(tools.map((t) => [t.name, hash(t)]));
-  const old = pins[i.id]?.tools;
+  const prev = pins[i.id];
+  const old = prev?.tools;
+  let changedNow: { id: string; at: number; names: string[] } | undefined;
   if (old) {
     // Own keys only: a tool called "constructor" or "__proto__" must not read the prototype.
     const changed = tools.filter((t) => Object.hasOwn(old, t.name) && old[t.name] !== now[t.name]).map((t) => t.name);
     const added = tools.filter((t) => !Object.hasOwn(old, t.name)).map((t) => t.name);
     const gone = Object.keys(old).filter((n) => !Object.hasOwn(now, n));
-    if (changed.length)
-      out.push({ id: `mcp-changed:${i.id}:${changed.map((n) => now[n]).join(",")}`, rule: "mcp-changed", severity: "high", title: `MCP server ${i.name} (${i.source}) changed ${changed.length} tool definition${changed.length > 1 ? "s" : ""} since you last inspected it`,
+    if (changed.length) {
+      changedNow = { id: `mcp-changed:${i.id}:${changed.map((n) => now[n]).join(",")}`, at: Date.now(), names: changed };
+      out.push({ id: changedNow.id, rule: "mcp-changed", severity: "high", title: `MCP server ${i.name} (${i.source}) changed ${changed.length} tool definition${changed.length > 1 ? "s" : ""} since you last inspected it`,
         detail: [`changed: ${changed.join(", ")}`, "A server can show harmless tools when you add it and change them later (rug pull)."], fix: "Read the new descriptions (vswarm agents --inspect --show); accept them only if you expected an update", item: i });
+    }
     if (added.length)
       out.push({ id: `mcp-added:${i.id}:${added.join(",")}`, rule: "mcp-changed", severity: "medium", title: `MCP server ${i.name} (${i.source}) added tools: ${added.slice(0, 6).join(", ")}`, detail: gone.length ? [`removed: ${gone.join(", ")}`] : [], item: i });
   }
-  pins[i.id] = { at: Date.now(), tools: now };
+  // A rug pull seen before stays on record (scans report it) until a newer one replaces it or you accept it.
+  pins[i.id] = { at: Date.now(), tools: now, def: i.hash, changed: changedNow ?? prev?.changed };
   return out;
 }
 
-export const loadPins = (): Pins => readJson<Pins>(pinFile()) ?? {};
-export const savePins = (p: Pins) => writePrivate(pinFile(), p);
+/** The pins, only as vswarm wrote them: a pin file edited by hand could hide a rug pull, so it counts as none. */
+export async function loadPins(): Promise<{ pins: Pins; untrusted?: string }> {
+  const r = await readSealed<Pins>(pinFile());
+  return r.untrusted && !r.nokey ? { pins: {}, untrusted: r.untrusted } : { pins: r.value ?? {} };
+}
+export const savePins = (p: Pins) => writeSealed(pinFile(), p);
+
+/**
+ * What a scan can say about MCP servers without starting any: never inspected, defined differently in the agent's
+ * config since the last inspection (a new command or URL is a new server), or a rug pull the last inspection saw.
+ */
+export function mcpDrift(items: Item[], pins: Pins): { findings: Finding[]; never: Item[] } {
+  const findings: Finding[] = [];
+  const never: Item[] = [];
+  for (const i of items.filter((x) => x.kind === "mcp")) {
+    const p = Object.hasOwn(pins, i.id) ? pins[i.id] : undefined;
+    if (!p) {
+      never.push(i);
+      continue;
+    }
+    // Pins from before definitions were recorded say nothing about the definition; the next inspection records it.
+    if (p.def && i.hash && p.def !== i.hash)
+      findings.push({ id: `mcp-drift:${i.id}:${i.hash.slice(0, 12)}`, rule: "mcp-drift", severity: "medium", title: `MCP server ${i.name} (${i.source}) is defined differently than when you inspected it`,
+        detail: [`inspected ${new Date(p.at).toLocaleDateString()}; its command, arguments, URL or environment changed since`, i.path ?? ""].filter(Boolean),
+        fix: "A changed command can be a different program under the same name. Look at it again: vswarm agents --inspect", item: i });
+    if (p.changed)
+      findings.push({ id: p.changed.id, rule: "mcp-changed", severity: "high", title: `MCP server ${i.name} (${i.source}) changed its tool definitions (seen by vswarm agents --inspect on ${new Date(p.changed.at).toLocaleDateString()})`,
+        detail: [`changed: ${p.changed.names.join(", ")}`, "A server can show harmless tools when you add it and change them later (rug pull)."],
+        fix: "Read the new descriptions (vswarm agents --inspect --show); if you expected the update, vswarm accept this finding", item: i });
+  }
+  return { findings, never };
+}
 
 // ── talking MCP
 
 const INIT = { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "vswarm", version: VERSION } };
 
+const str = (v: unknown) => (typeof v === "string" ? v : undefined);
+
+/**
+ * Prompts and resources reach the model as text too, so they are read like tools: as Tool entries named
+ * `prompt:<name>` and `resource:<name>`, their arguments as parameters, so the same checks and pins apply.
+ */
+export function promptAsTool(p: any): Tool | undefined {
+  if (!p || typeof p.name !== "string") return;
+  const properties: Record<string, { description?: string }> = {};
+  for (const a of Array.isArray(p.arguments) ? p.arguments : []) if (a && typeof a.name === "string") properties[a.name] = { description: str(a.description) };
+  return { name: `prompt:${p.name}`, description: [str(p.title), str(p.description)].filter(Boolean).join(" · ") || undefined, inputSchema: { properties } };
+}
+
+export function resourceAsTool(r: any, template = false): Tool | undefined {
+  const uri = str(template ? r?.uriTemplate : r?.uri);
+  if (!r || (!uri && typeof r.name !== "string")) return;
+  return { name: `resource:${str(r.name) ?? uri}`, description: [str(r.title), str(r.description), uri].filter(Boolean).join(" · ") || undefined, inputSchema: { properties: {} } };
+}
+
 async function listOver(send: (msg: any) => Promise<any>): Promise<Tool[]> {
   const init = await send({ jsonrpc: "2.0", id: 1, method: "initialize", params: INIT });
   if (init?.error) throw new Error(`initialize: ${init.error.message ?? "refused"}`);
   await send({ jsonrpc: "2.0", method: "notifications/initialized" });
-  const tools: Tool[] = [];
-  let cursor: string | undefined;
-  for (let page = 0; page < 20; page++) {
-    const r = await send({ jsonrpc: "2.0", id: 2 + page, method: "tools/list", params: cursor ? { cursor } : {} });
-    if (r?.error) throw new Error(`tools/list: ${r.error.message ?? "refused"}`);
-    // Only the shape of a tool definition: a broken or hostile server must not crash the inspection.
-    for (const t of Array.isArray(r?.result?.tools) ? r.result.tools : []) {
-      if (!t || typeof t.name !== "string") continue;
-      tools.push({ name: t.name, description: typeof t.description === "string" ? t.description : undefined, inputSchema: t.inputSchema && typeof t.inputSchema === "object" ? t.inputSchema : undefined });
+  const caps = init?.result?.capabilities ?? {};
+  let id = 2;
+  /** Every page of one list method; `need` is whether a failure stops the inspection (tools) or is skipped. */
+  const all = async (method: string, key: string, need: boolean): Promise<any[]> => {
+    const out: any[] = [];
+    let cursor: string | undefined;
+    for (let page = 0; page < 20; page++) {
+      const r = await send({ jsonrpc: "2.0", id: id++, method, params: cursor ? { cursor } : {} });
+      if (r?.error) {
+        if (need) throw new Error(`${method}: ${r.error.message ?? "refused"}`);
+        return out;
+      }
+      out.push(...(Array.isArray(r?.result?.[key]) ? r.result[key] : []));
+      cursor = typeof r?.result?.nextCursor === "string" ? r.result.nextCursor : undefined;
+      if (!cursor) break;
     }
-    cursor = typeof r?.result?.nextCursor === "string" ? r.result.nextCursor : undefined;
-    if (!cursor) break;
+    return out;
+  };
+  const tools: Tool[] = [];
+  // Only the shape of a tool definition: a broken or hostile server must not crash the inspection.
+  for (const t of await all("tools/list", "tools", true)) {
+    if (!t || typeof t.name !== "string") continue;
+    tools.push({ name: t.name, description: str(t.description), inputSchema: t.inputSchema && typeof t.inputSchema === "object" ? t.inputSchema : undefined });
+  }
+  // Asked only when the server says it has them; one that errors on these keeps its tools inspected.
+  if (caps.prompts) for (const p of await all("prompts/list", "prompts", false)) tools.push(...[promptAsTool(p)].filter((x): x is Tool => !!x));
+  if (caps.resources) {
+    for (const r of await all("resources/list", "resources", false)) tools.push(...[resourceAsTool(r)].filter((x): x is Tool => !!x));
+    for (const r of await all("resources/templates/list", "resourceTemplates", false)) tools.push(...[resourceAsTool(r, true)].filter((x): x is Tool => !!x));
   }
   return tools;
 }
@@ -283,7 +359,8 @@ export async function inspectAll(servers: Item[], opt: InspectOpt & { show: bool
   }));
   const allTools = new Map<string, string>();
   for (const r of results) for (const t of r.tools ?? []) allTools.set(t.name, r.item.id);
-  const pins = loadPins();
+  const { pins, untrusted } = await loadPins();
+  if (untrusted) line(c.amber(`  the pinned tool definitions ${untrusted}; every server is compared as if inspected for the first time`));
   const findings: Finding[] = [];
   for (const r of results) {
     const label = `${r.item.name} ${c.dim(`(${r.item.source})`)}`;
@@ -295,10 +372,12 @@ export async function inspectAll(servers: Item[], opt: InspectOpt & { show: bool
     const others = new Set([...allTools].filter(([, id]) => id !== r.item.id).map(([n]) => n));
     const fs = [...judgeTools(r.item, r.tools, others), ...pinTools(r.item, r.tools, pins)];
     findings.push(...fs);
-    line(`  ${fs.some((f) => RANK[f.severity] >= RANK.high) ? c.red("✖") : fs.length ? c.amber("!") : c.green("✔")} ${label}  ${c.dim(`${r.tools.length} tool${r.tools.length === 1 ? "" : "s"}${r.sandboxed ? " · sandboxed" : ""}${r.hosts?.length ? ` · reached ${r.hosts.join(", ")}` : ""}`)}`);
+    const n = (p: string) => r.tools!.filter((t) => (p ? t.name.startsWith(p) : !/^(prompt|resource):/.test(t.name))).length;
+    const counts = [[n(""), "tool"], [n("prompt:"), "prompt"], [n("resource:"), "resource"]].filter(([k], j) => j === 0 || k).map(([k, w]) => `${k} ${w}${k === 1 ? "" : "s"}`).join(", ");
+    line(`  ${fs.some((f) => RANK[f.severity] >= RANK.high) ? c.red("✖") : fs.length ? c.amber("!") : c.green("✔")} ${label}  ${c.dim(`${counts}${r.sandboxed ? " · sandboxed" : ""}${r.hosts?.length ? ` · reached ${r.hosts.join(", ")}` : ""}`)}`);
     if (show) for (const t of r.tools) line(`      ${c.cyan(t.name)}  ${c.dim((t.description ?? "").replace(/\s+/g, " ").slice(0, 300))}`);
   }
-  savePins(pins);
+  await savePins(pins);
   const failed = results.filter((r) => !r.tools && /exited|no answer/.test(r.error ?? "")).length;
   if (sandbox && failed) line(c.dim(`  ${failed} could not start in the sandbox (they need files in your home or a local service). --no-sandbox starts them as your agent does, with your access.`));
   line("");

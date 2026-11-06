@@ -42,6 +42,14 @@ export async function check(ctx: Ctx, opt: { offline?: boolean; osvNewOnly?: boo
   // minute ago is checked before production access while a slow network still cannot hold up a login.
   const osv = await osvMalicious(scanned.items, files.osv(), { offline: opt.offline, onlyNew: opt.osvNewOnly, timeoutMs: opt.osvNewOnly ? 3000 : undefined });
   const all = await evaluate({ scan: scanned, baseline, malicious: osv.hits, secrets: secretFindings, sign: opt.sign });
+  // MCP servers against what `agents --inspect` saw last, without starting any of them.
+  const { loadPins, mcpDrift } = await import("./mcp");
+  const pinned = await loadPins();
+  const drift = mcpDrift(scanned.items, pinned.pins);
+  all.push(...drift.findings);
+  if (pinned.untrusted)
+    state("mcp-pins", "medium", "vswarm's record of MCP tool definitions was changed outside vswarm; it is ignored", [`mcp-tools.json ${pinned.untrusted}`],
+      "A changed record could hide a server that changed its tools. Inspect them again: vswarm agents --inspect");
   const a = await readAccepted();
   // An accepted list that does not verify accepts nothing.
   const acceptedIds = a.untrusted ? {} : a.value ?? {};
@@ -59,6 +67,10 @@ export async function check(ctx: Ctx, opt: { offline?: boolean; osvNewOnly?: boo
   if (!baseline) notes.push("No baseline yet: only always-wrong things are checked. Run `vswarm baseline` on a machine you trust.");
   const fresh = uncovered(scanned, baseline);
   if (fresh.length) notes.push(`Your baseline is older than these checks: ${fresh.join(", ")}. Review them (vswarm agents), then vswarm baseline.`);
+  if (drift.never.length) {
+    const names = [...new Set(drift.never.map((i) => i.name))];
+    notes.push(`${names.length} MCP server${names.length > 1 ? "s were" : " was"} never inspected (${names.slice(0, 4).join(", ")}${names.length > 4 ? " …" : ""}): vswarm agents --inspect starts each in the sandbox and reads what the model will read.`);
+  }
   if (osv.error) notes.push(osv.error);
   if (opt.offline) notes.push("Offline: known-malicious check used the cache only.");
   // Places skipped for the same reason are listed together.

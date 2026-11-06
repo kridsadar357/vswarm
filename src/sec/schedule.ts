@@ -185,7 +185,7 @@ export async function watchRun(): Promise<{ fresh: Finding[]; verdict: string }>
     const top = fresh.sort((a, b) => RANK[b.severity] - RANK[a.severity])[0];
     await notify(
       r.verdict === "block" ? "vswarm: production access blocked" : "vswarm: something changed",
-      `${top.title}${fresh.length > 1 ? ` (+${fresh.length - 1} more)` : ""}. Run: vswarm diff`,
+      `${top.title}${fresh.length > 1 ? ` (+${fresh.length - 1} more)` : ""}. Run: ${top.rule === "mcp-drift" || top.rule === "mcp-changed" ? "vswarm agents --inspect" : "vswarm diff"}`,
     );
   }
   const state: State = { at: Date.now(), verdict: r.verdict, told: [...new Set([...told, ...fresh.map((f) => f.id)])].slice(-500), last: fresh[0]?.title ?? prev?.last };
