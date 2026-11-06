@@ -112,6 +112,8 @@ export async function startupFiles(ctx: Ctx): Promise<{ items: Item[]; texts: Re
     }
     // vswarm's own blocks (PATH, gate, guard, canaries) are left out, exactly as vswarm wrote them.
     const t = stripManaged(raw);
+    // A file that holds nothing but vswarm's own blocks (a ~/.ssh/config vswarm created for the gate) is not a new file.
+    if (t !== raw && !t.trim()) continue;
     // Credentials in .npmrc are never stored; only the fact that the file changed.
     const keep = rel !== ".npmrc";
     items.push({ kind: rel.startsWith(".ssh/") ? "ssh" : "rc", id: rel, name: rel, path, hash: sha256(t), meta: { lines: t.split("\n").length } });

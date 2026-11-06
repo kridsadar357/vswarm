@@ -303,8 +303,13 @@ export async function windows(ctx: Ctx): Promise<{ items: Item[]; texts: Record<
   for (const [k, v] of Object.entries(r.gaps)) ctx.gap?.(k, v);
   // vswarm's own blocks in a PowerShell profile (the install guard) are left out, as in ~/.zshrc.
   const texts: Record<string, string> = {};
-  for (const [p, t] of Object.entries(r.texts)) texts[p] = stripManaged(t);
-  const items = r.items.filter((i) => !ownWatchTask(i)).map((i) => (i.kind === "rc" && texts[i.id] !== undefined ? { ...i, hash: sha256(texts[i.id]) } : i));
+  const onlyOurs = new Set<string>();
+  for (const [p, t] of Object.entries(r.texts)) {
+    texts[p] = stripManaged(t);
+    // A profile vswarm created for the guard, with nothing else in it, is not a new profile.
+    if (texts[p] !== t && !texts[p].trim()) (onlyOurs.add(p), delete texts[p]);
+  }
+  const items = r.items.filter((i) => !ownWatchTask(i) && !(i.kind === "rc" && onlyOurs.has(i.id))).map((i) => (i.kind === "rc" && texts[i.id] !== undefined ? { ...i, hash: sha256(texts[i.id]) } : i));
   return { items, texts };
 }
 

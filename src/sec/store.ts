@@ -7,7 +7,7 @@
 //   osv-cache.json  answers from the known-malicious database
 
 import { createHash } from "node:crypto";
-import { chmodSync, existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { HOME } from "../home";
 import { readJson, reEscape } from "./ctx";
@@ -54,6 +54,15 @@ export interface Last {
 }
 export const loadLast = () => read<Last>(files.last());
 export const saveLast = (l: Last) => writePrivate(files.last(), l);
+/** Whether accepted findings or the baseline changed after a moment (the last scan's time). */
+export const decisionsSince = (at: number) =>
+  [files.accepted(), files.baseline()].some((f) => {
+    try {
+      return statSync(f).mtimeMs > at;
+    } catch {
+      return false;
+    }
+  });
 
 export interface Accepted {
   [findingId: string]: { at: number; title: string };

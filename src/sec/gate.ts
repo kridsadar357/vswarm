@@ -3,7 +3,7 @@
 import { realCtx } from "./ctx";
 import { check } from "./engine";
 import { c, line, summary, VERDICT } from "./print";
-import { loadLast, loadLock } from "./store";
+import { decisionsSince, loadLast, loadLock } from "./store";
 import { RANK, type Verdict } from "./types";
 
 export async function verdictNow(opt: { fresh?: boolean; quiet?: boolean; offline?: boolean; maxAge?: number } = {}): Promise<Verdict> {
@@ -12,7 +12,8 @@ export async function verdictNow(opt: { fresh?: boolean; quiet?: boolean; offlin
   const lock = loadLock();
   let verdict: Verdict;
   // ssh and kubectl call gates on every connection, so a verdict from the last couple of minutes is reused.
-  if (!opt.fresh && !lock && last && Date.now() - last.at < maxAge) {
+  // A verdict from before you accepted findings or took a baseline would answer for decisions it never saw.
+  if (!opt.fresh && !lock && last && Date.now() - last.at < maxAge && !decisionsSince(last.at)) {
     verdict = last.verdict;
     if (verdict !== "pass") {
       const n = last.findings.filter((f) => RANK[f.severity] >= RANK.medium).length;
