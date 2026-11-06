@@ -28,10 +28,16 @@ export interface CaConfig {
 }
 
 export function loadCaConfig(): CaConfig {
+  const def: CaConfig = { principals: [whoami()], ttl: "15m" };
   try {
-    return { principals: [whoami()], ttl: "15m", ...JSON.parse(readFileSync(caFiles.config(), "utf8")) };
+    // Hand-edited files: only a non-empty list of names and a non-empty ttl are taken over.
+    const j = JSON.parse(readFileSync(caFiles.config(), "utf8"));
+    return {
+      principals: Array.isArray(j?.principals) && j.principals.length ? j.principals.map(String) : def.principals,
+      ttl: typeof j?.ttl === "string" && j.ttl.trim() ? j.ttl.trim() : def.ttl,
+    };
   } catch {
-    return { principals: [whoami()], ttl: "15m" };
+    return def;
   }
 }
 

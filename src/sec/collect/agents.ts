@@ -21,16 +21,23 @@ interface Server {
 /** Names of env vars and headers that carry a literal secret (not a ${VAR} reference). Never the values. */
 export function literalSecrets(s: Server): string[] {
   const out: string[] = [];
-  for (const [k, v] of [...Object.entries(s.env ?? {}), ...Object.entries(s.headers ?? {})]) {
-    if (typeof v !== "string" || v.length < 12 || /^\$\{?[A-Z_]+\}?$|^\$\{env:/.test(v)) continue;
+  const entries = (o: unknown) => (o && typeof o === "object" ? Object.entries(o as Record<string, unknown>) : []);
+  for (const [k, v] of [...entries(s.env), ...entries(s.headers)]) {
+    // "Bearer ${GITHUB_TOKEN}" is a reference too; the value is filled in from the environment.
+    if (typeof v !== "string" || v.length < 12 || /\$\{[^}]*\}|^\$[A-Za-z_][A-Za-z0-9_]*$/.test(v)) continue;
     if (/token|secret|key|password|auth|bearer|credential/i.test(k) || /^(Bearer\s+)?(sk-|ghp_|gho_|github_pat_|xox[bp]-|AKIA|eyJ)/.test(v)) out.push(k);
   }
   return out;
 }
 
+/** Agent configs are JSON; ~/.claude.json also holds session history and outgrows the usual 2 MB cap. */
+const cfg = (file: string) => readJson(file, 64_000_000);
+
 function serverItem(app: string, file: string, name: string, s: Server): Item {
-  const command = [s.command, ...(s.args ?? [])].filter(Boolean).join(" ");
-  const def = JSON.stringify({ command: s.command, args: s.args, url: s.url ?? (s as any).httpUrl ?? (s as any).serverUrl, env: Object.keys(s.env ?? {}).sort() });
+  // One malformed entry (args that is not a list) must not take the whole collector down.
+  const args = Array.isArray(s.args) ? s.args.map(String) : [];
+  const command = [s.command, ...args].filter(Boolean).join(" ");
+  const def = JSON.stringify({ command: s.command, args, url: s.url ?? (s as any).httpUrl ?? (s as any).serverUrl, env: Object.keys(s.env && typeof s.env === "object" ? s.env : {}).sort() });
   return {
     kind: "mcp", id: `${app}:${name}`, name, source: app, path: file, hash: sha256(def),
     meta: { command: command.slice(0, 300) || undefined, url: s.url ?? (s as any).httpUrl ?? (s as any).serverUrl, secrets: literalSecrets(s).join(",") || undefined },
@@ -51,7 +58,7 @@ function claude(home: string): Item[] {
   const out: Item[] = [];
   const configs = [join(home, ".claude.json"), ...claudeDirs(home).map((d) => join(d, ".claude.json"))];
   for (const f of configs) {
-    const j = readJson(f);
+    const j = cfg(f);
     if (!j) continue;
     const app = f === join(home, ".claude.json") ? "claude-code" : `claude-code:${f.split("/").at(-2)}`;
     out.push(...servers(app, f, j.mcpServers));
@@ -60,7 +67,7 @@ function claude(home: string): Item[] {
   for (const dir of claudeDirs(home)) {
     for (const name of ["settings.json", "settings.local.json"]) {
       const f = join(dir, name);
-      const j = readJson(f);
+      const j = cfg(f);
       if (!j) continue;
       const app = `claude-code:${dir.split("/").pop()}`;
       for (const [event, matchers] of Object.entries<any>(j.hooks ?? {})) {
@@ -98,7 +105,7 @@ export async function agents(ctx: Ctx): Promise<Item[]> {
     ["vscode", join(h, ".config/Code/User/settings.json"), "mcp.servers"],
   ];
   for (const [app, f, key] of plain) {
-    const j = readJson(f);
+    const j = cfg(f);
     if (j) out.push(...servers(app, f, key === "mcp.servers" ? j["mcp"]?.servers ?? j["mcp.servers"] : j[key]));
   }
   // Codex: TOML, [mcp_servers.<name>] tables with command / args / url.

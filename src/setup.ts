@@ -316,9 +316,9 @@ export function sshGate(patterns: string[], launcher: string[], opt: { cert?: { 
   ].join("\n");
 }
 
-export async function gate(args: string[]) {
+export async function gate(args: string[], home = homedir()) {
   const action = args.shift() ?? "status";
-  const cfgPath = join(homedir(), ".ssh", "config");
+  const cfgPath = join(home, ".ssh", "config");
   const old = existsSync(cfgPath) ? readFileSync(cfgPath, "utf8") : "";
   const re = new RegExp(`\\n?${GATE_START}[\\s\\S]*?${GATE_END}\\n?`, "g");
   if (action === "status") {
@@ -337,10 +337,12 @@ export async function gate(args: string[]) {
   if (withCert) args.splice(certAt, 1);
   if (withCert && !existsSync(join(HOME, "ca", "ca_key"))) throw new Error("no CA yet: vswarm ca init");
   const cert = withCert ? { key: join(HOME, "ca", "session"), cert: join(HOME, "ca", "session-cert.pub") } : undefined;
-  const next = action === "ssh" ? `${sshGate(args, existsSync(launcherPath()) ? [launcherPath()] : [process.execPath, CLI], { cert })}\n\n${rest}\n` : `${rest}\n`;
+  const block = action === "ssh" ? sshGate(args, existsSync(launcherPath()) ? [launcherPath()] : [process.execPath, CLI], { cert }) : undefined;
+  const next = block ? `${block}\n\n${rest}\n` : `${rest}\n`;
   mkdirSync(dirname(cfgPath), { recursive: true, mode: 0o700 });
   writeFileSync(cfgPath, next, { mode: 0o600 });
-  recordManaged(next);
+  // Only the block vswarm wrote is its own; a look-alike block someone else put in the file stays visible to scans.
+  if (block) recordManaged(block + "\n");
   ok(action === "ssh" ? `ssh gate added for ${args.join(", ")}` : "ssh gate removed", cfgPath);
   if (old) console.log(`  ${c.dim(`backup ${backup}`)}`);
   if (action === "ssh") console.log(`  ${c.dim("test it: ssh -G <a matching host> | grep -i proxycommand  (empty while preflight passes)")}`);

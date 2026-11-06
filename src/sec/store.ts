@@ -71,7 +71,8 @@ export interface Lock {
   at: number;
   reason: string;
 }
-export const loadLock = () => read<Lock>(files.lock());
+// A lock file that cannot be read still means an incident is open: the gate must not fail open.
+export const loadLock = () => read<Lock>(files.lock()) ?? (existsSync(files.lock()) ? { incident: "unknown", at: 0, reason: "the lock file is unreadable" } : undefined);
 export const setLock = (l: Lock) => writePrivate(files.lock(), l);
 export const clearLock = () => rmSync(files.lock(), { force: true });
 

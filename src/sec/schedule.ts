@@ -30,6 +30,9 @@ interface State {
 const xml = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;");
 
 export function jobFiles(launcher: string, everyMinutes = 60, home = homedir()): Record<string, string> {
+  if (!Number.isInteger(everyMinutes) || everyMinutes < 1) throw new Error("--every needs a whole number of minutes");
+  // systemd splits ExecStart on spaces; a path with one needs quotes.
+  const exec = /\s/.test(launcher) ? `"${launcher}"` : launcher;
   if (mac())
     return {
       [plistPath(home)]: `<?xml version="1.0" encoding="UTF-8"?>
@@ -46,7 +49,7 @@ export function jobFiles(launcher: string, everyMinutes = 60, home = homedir()):
 `,
     };
   return {
-    [join(unitDir(home), "vswarm-watch.service")]: `[Unit]\nDescription=vswarm: check this machine\n\n[Service]\nType=oneshot\nNice=10\nExecStart=${launcher} watch run\n`,
+    [join(unitDir(home), "vswarm-watch.service")]: `[Unit]\nDescription=vswarm: check this machine\n\n[Service]\nType=oneshot\nNice=10\nExecStart=${exec} watch run\n`,
     [join(unitDir(home), "vswarm-watch.timer")]: `[Unit]\nDescription=vswarm: check this machine every ${everyMinutes} minutes\n\n[Timer]\nOnBootSec=5min\nOnUnitActiveSec=${everyMinutes}min\n\n[Install]\nWantedBy=timers.target\n`,
   };
 }

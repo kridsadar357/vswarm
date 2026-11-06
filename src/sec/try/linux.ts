@@ -78,6 +78,16 @@ export function inner(box: Box, bun: string, command: string[], strace?: string)
 /** In the fake home, only what nothing but a thief reads. */
 const FAKE_HOME_LOOT = /^\/\.ssh\/id_|^\/\.ssh\/.*\.pem$|^\/\.aws\/credentials$|^\/\.config\/(google-chrome|chromium|BraveSoftware|microsoft-edge)\/|^\/\.mozilla\/|^\/\.config\/(Exodus|Electrum|atomic)\/|^\/\.electrum\/|^\/\.local\/share\/keyrings\/|^\/\.gnupg\/private|^\/\.(bash|zsh)_history$|^\/Library\/(Keychains|Application Support\/(Google|BraveSoftware|Exodus))/;
 
+/** A string as strace prints it: non-ASCII bytes as \ooo, quotes and backslashes escaped. Decoded, so paths compare equal. */
+const STR = /"((?:[^"\\]|\\.)*)"/;
+const cstr = (s: string) =>
+  Buffer.from(s.replace(/\\([0-7]{1,3}|x[0-9a-fA-F]{2}|.)/g, (_, e: string) =>
+    String.fromCharCode(e[0] === "x" ? parseInt(e.slice(1), 16) : /^[0-7]/.test(e) ? parseInt(e, 8) : e === "n" ? 10 : e === "t" ? 9 : e === "r" ? 13 : e.charCodeAt(0))), "latin1").toString("utf8");
+const quoted = (args: string) => {
+  const q = STR.exec(args)?.[1];
+  return q === undefined ? undefined : cstr(q);
+};
+
 /** What the run tried, from strace's log, in the same shape as the macOS sandbox log. */
 export function traceDenials(log: string, realHome: string, box: Box): Denial[] {
   let text = "";
@@ -87,20 +97,34 @@ export function traceDenials(log: string, realHome: string, box: Box): Denial[] 
     return [];
   }
   const names = new Map<number, string>();
+  const pending = new Map<number, string>();
   const out: Denial[] = [];
   const seen = new Set<string>();
   const add = (d: Denial) => {
     const k = `${d.op} ${d.target}`;
     if (!seen.has(k)) (seen.add(k), out.push(d));
   };
-  for (const l of text.split("\n")) {
+  for (let l of text.split("\n")) {
+    // With -f, a call interrupted by another process's event is printed in two halves; join them.
+    const unfinished = /^(\d+)\s+(.*) <unfinished \.\.\.>$/.exec(l);
+    if (unfinished) {
+      pending.set(Number(unfinished[1]), unfinished[2]);
+      continue;
+    }
+    const resumed = /^(\d+)\s+<\.\.\. \w+ resumed>(.*)$/.exec(l);
+    if (resumed) {
+      const head = pending.get(Number(resumed[1]));
+      pending.delete(Number(resumed[1]));
+      if (head === undefined) continue;
+      l = `${resumed[1]} ${head}${resumed[2]}`;
+    }
     const m = /^(\d+)\s+(\w+)\((.*)\)\s+=\s+(-?\d+|\?)(?:\s+(\w+))?/.exec(l);
     if (!m) continue;
     const [, pidS, call, args, ret, errno] = m;
     const pid = Number(pidS);
     const proc = names.get(pid) ?? "?";
     if (call === "execve" || call === "execveat") {
-      const p = /"([^"]+)"/.exec(args)?.[1];
+      const p = quoted(args);
       if (p && ret === "0") names.set(pid, basename(p));
       continue;
     }
@@ -111,13 +135,14 @@ export function traceDenials(log: string, realHome: string, box: Box): Denial[] 
     if (call === "connect") {
       const ip = /sin6?_addr=inet_(?:addr|pton)\((?:AF_INET6, )?"([^"]+)"/.exec(args)?.[1];
       const port = /sin6?_port=htons\((\d+)\)/.exec(args)?.[1];
-      const unix = /sun_path=@?"([^"]+)"/.exec(args)?.[1];
+      const unixRaw = /sun_path=@?("(?:[^"\\]|\\.)*")/.exec(args)?.[1];
+      const unix = unixRaw ? quoted(unixRaw) : undefined;
       if (ip && !/^(127\.|::1$|::ffff:127\.)/.test(ip)) add({ proc, pid, op: "network-outbound", target: `${ip}:${port}` });
       else if (unix && !unix.startsWith(box.dir)) add({ proc, pid, op: "unix-connect", target: unix });
       continue;
     }
     // The first quoted argument is the path for every %file call strace prints.
-    const path = /"([^"]*)"/.exec(args)?.[1];
+    const path = quoted(args);
     if (!path || !path.startsWith("/")) continue;
     if (path.startsWith(box.home + "/")) {
       // The code cannot tell the home is fake: going for keys, cloud credentials, browser or wallet data there is the

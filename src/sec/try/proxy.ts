@@ -50,9 +50,11 @@ export function startProxy(allow: (host: string) => boolean, opt: { unix?: strin
         const [method, target] = head.split(/\s+/);
         let host = "", port = 80, tunnel = false;
         if (method === "CONNECT") {
+          // host:port, [v6]:port, or a bare host (no port): the colon inside [v6] is not the separator.
           const i = target.lastIndexOf(":");
-          host = target.slice(0, i).replace(/^\[|\]$/g, "");
-          port = Number(target.slice(i + 1)) || 443;
+          const withPort = i > target.lastIndexOf("]");
+          host = (withPort ? target.slice(0, i) : target).replace(/^\[|\]$/g, "");
+          port = (withPort ? Number(target.slice(i + 1)) : 0) || 443;
           tunnel = true;
         } else {
           try {

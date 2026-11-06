@@ -53,8 +53,10 @@ function append(path: string, id: string, body: string, opt: { top?: boolean } =
 function strip(path: string, id: string) {
   if (!existsSync(path)) return;
   const re = new RegExp(`\\n?${START(id).replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}[\\s\\S]*?${END(id).replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\n?`, "g");
-  writeFileSync(path, readFileSync(path, "utf8").replace(re, "\n").replace(/\n{3,}/g, "\n\n"));
+  writeFileSync(path, readFileSync(path, "utf8").replace(re, "\n").replace(/\n{3,}/g, "\n\n").replace(/^\n+/, ""));
 }
+
+const reEscape = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
 const newId = () => Math.random().toString(36).slice(2, 8);
 
@@ -65,7 +67,7 @@ export function plantAws(keyId: string, secret: string, opt: { profile?: string;
   const path = join(home, ".aws", "credentials");
   const profile = opt.profile ?? "prod-backup-admin";
   const existing = existsSync(path) ? readFileSync(path, "utf8") : "";
-  if (new RegExp(`^\\s*\\[${profile}\\]`, "m").test(existing)) throw new Error(`profile [${profile}] already exists in ${path}`);
+  if (new RegExp(`^\\s*\\[${reEscape(profile)}\\]`, "m").test(existing)) throw new Error(`profile [${profile}] already exists in ${path}`);
   const id = newId();
   append(path, id, `[${profile}]\naws_access_key_id = ${keyId}\naws_secret_access_key = ${secret}\nregion = ap-southeast-1`);
   const c: Canary = { id, kind: "aws", where: path, label: `[${profile}]`, token: keyId, at: Date.now() };

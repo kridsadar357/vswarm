@@ -98,7 +98,8 @@ export async function tryIt(source: string, command: string[], opt: { net: Net; 
   const strace = linux ? Bun.which("strace") ?? undefined : undefined;
   if (linux && !bwrap) throw new Error("vswarm try on Linux needs bubblewrap: sudo apt install bubblewrap strace  (dnf/pacman: bubblewrap strace)");
   if (!linux && (process.platform !== "darwin" || !existsSync("/usr/bin/sandbox-exec"))) throw new Error("vswarm try needs macOS (sandbox-exec) or Linux (bubblewrap)");
-  const name = basename(source.replace(/\.git$/, "").replace(/\/+$/, "")) || "code";
+  // `vswarm try .` names the folder after the project, not after the dot.
+  const name = basename(isGitUrl(source) ? source.replace(/\.git$/, "").replace(/\/+$/, "") : resolve(source)) || "code";
   const want = join(TRY_DIR(), `${stamp()}-${name.replace(/[^A-Za-z0-9._-]/g, "_").slice(0, 40)}`);
   mkdirSync(want, { recursive: true, mode: 0o700 });
   // The sandbox matches real paths (/var → /private/var); a symlinked path would lock the code out of its own folder.

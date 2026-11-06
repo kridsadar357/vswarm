@@ -118,13 +118,17 @@ export interface NetAttempt {
 export function network(hits: ProxyHit[], netlog: string): NetAttempt[] {
   const map = new Map<string, NetAttempt>();
   for (const h of hits) map.set(`${h.host}`, { host: h.host, port: h.port, allowed: h.allowed || map.get(h.host)?.allowed === true, via: "proxy" });
+  let lines: string[] = [];
   try {
-    for (const l of readFileSync(netlog, "utf8").split("\n")) {
-      if (!l.trim()) continue;
-      const e = JSON.parse(l);
-      if (!map.has(e.host)) map.set(e.host, { host: e.host, port: e.port, allowed: false, via: "node (ignored the proxy)" });
-    }
+    lines = readFileSync(netlog, "utf8").split("\n");
   } catch {}
+  for (const l of lines) {
+    // Several processes append at once; one torn line must not hide the ones after it.
+    try {
+      const e = JSON.parse(l);
+      if (typeof e?.host === "string" && !map.has(e.host)) map.set(e.host, { host: e.host, port: e.port, allowed: false, via: "node (ignored the proxy)" });
+    } catch {}
+  }
   return [...map.values()];
 }
 

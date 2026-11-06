@@ -90,6 +90,9 @@ function usage() {
 
 async function main() {
   const [cmd = "help", ...args] = process.argv.slice(2);
+  // What follows --then (preflight) or -- (try) belongs to the other command; vswarm's own flags stop there.
+  const tailAt = args.indexOf(cmd === "preflight" ? "--then" : cmd === "try" ? "--" : "\0");
+  const tail = tailAt >= 0 ? args.splice(tailAt + 1) : [];
   const offline = has(args, "--offline");
   const json = has(args, "--json");
 
@@ -199,8 +202,7 @@ async function main() {
       const fresh = has(args, "--fresh");
       const maxAge = Number(flag(args, "--max-age") ?? 120) * 1000;
       flag(args, "--host"); // accepted for ssh's %h; the check is about this machine, whatever the host
-      const thenAt = args.indexOf("--then");
-      const then = thenAt >= 0 ? args.slice(thenAt + 1) : [];
+      const then = args.includes("--then") ? tail : [];
       const verdict = await verdictNow({ fresh, quiet, offline, maxAge });
       if (verdict === "block" || (strict && verdict === "warn")) {
         process.exitCode = verdict === "block" ? 3 : 2;
@@ -429,7 +431,7 @@ async function main() {
       if (!["none", "registries", "all"].includes(net)) throw new Error("--net is none, registries or all");
       const auto = has(args, "--yes", "-y");
       const dash = args.indexOf("--");
-      const command = dash >= 0 ? args.slice(dash + 1) : [];
+      const command = dash >= 0 ? tail : [];
       const source = (dash >= 0 ? args.slice(0, dash) : args)[0];
       if (!source) throw new Error('usage: vswarm try <folder | git URL | archive | file> [--net none|registries|all] [-- command …]');
       const r = await tryIt(source, command, { net, ask: (q) => yes(q, true), yes: auto });

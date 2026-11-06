@@ -105,8 +105,9 @@ export async function evaluate(input: RuleInput): Promise<Finding[]> {
           detail: [cmd.slice(0, 200), i.path ?? ""], fix: "An agent runs this with your access. Remove it unless you set it up yourself; then vswarm respond", item: i });
       }
       const url = String(i.meta?.url ?? "");
+      // Read the host with a regex: a URL that does not parse ("http://") must not stop the whole check.
       if (/^http:\/\//.test(url) && !/^http:\/\/(localhost|127\.|\[::1\])/.test(url))
-        add({ id: `agent-http:${i.id}`, rule: "agent-http", severity: "medium", title: `${what} talks to ${new URL(url).host} without TLS`, detail: [url], fix: "Anyone on the network path can read or change what the agent sends and gets; use https", item: i });
+        add({ id: `agent-http:${i.id}`, rule: "agent-http", severity: "medium", title: `${what} talks to ${/^http:\/\/([^/?#]+)/.exec(url)?.[1] ?? url} without TLS`, detail: [url], fix: "Anyone on the network path can read or change what the agent sends and gets; use https", item: i });
       if (i.meta?.secrets)
         add({ id: `agent-secret:${i.id}`, rule: "secret", severity: "medium", title: `${what} keeps a token in plain text: ${i.meta.secrets}`, detail: [i.path ?? ""],
           fix: "Reference an environment variable or the OS keychain instead of pasting the value into the config", item: i });
