@@ -218,6 +218,21 @@ a technique you have seen is the most useful contribution you can make.
 never an older version. If the repository or the maintainer's account is taken over, installed copies refuse the
 attacker's release and keep running what they have. `vswarm trust` shows the pinned key; see [SECURITY.md](SECURITY.md).
 
+## How it relates to other tools
+
+| | vswarm | also look at |
+| --- | --- | --- |
+| scan a developer machine (packages, extensions, MCP, AI agents) | local, no account | StepSecurity Dev Machine Guard (reports to its platform) |
+| check installs before scripts run | names, whole dependency tree, brand-new versions; hands off to `sfw` | Socket Firewall (`sfw`) |
+| MCP tool poisoning and rug pulls | servers started **in a sandbox**, tools read and pinned | mcp-scan (Snyk) |
+| gate production access on the machine's state | ssh, AWS, kubectl from the local verdict; short-lived SSH certificates | 1Password Device Trust (Kolide), Teleport Device Trust |
+| run an untrusted repo and see what it tries | Seatbelt / bubblewrap with a behaviour report | a disposable VM |
+| persistence and binaries | baseline diff, signatures, background watch | osquery, Objective-See BlockBlock, Santa |
+
+vswarm puts these in one local tool for people and small teams without an endpoint platform, and uses the others
+when they are there (`sfw`). Enforcement on the server side (device trust in your identity provider, Teleport) is
+stronger than any check on the laptop; short-lived certificates are vswarm's step in that direction.
+
 ## Privacy
 
 - Everything stays on your machine, under `~/.vswarm/sec` with owner-only permissions. No telemetry.

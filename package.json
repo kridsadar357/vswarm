@@ -1,6 +1,6 @@
 {
   "name": "vswarm",
-  "version": "2.4.0",
+  "version": "2.5.0",
   "description": "Check your own machine before it touches production: find foreign packages, persistence and long-lived credentials, gate ssh/aws/kubectl, and respond when something is wrong.",
   "type": "module",
   "bin": {

