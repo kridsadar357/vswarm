@@ -22,8 +22,9 @@ const ROOT = join(import.meta.dir, "..");
 const WIN = process.platform === "win32";
 
 describe("installers: Bun is pinned, not piped", () => {
-  const sh = readFileSync(join(ROOT, "install.sh"), "utf8");
-  const ps = readFileSync(join(ROOT, "install.ps1"), "utf8");
+  // A Windows checkout may turn line ends into CRLF.
+  const sh = readFileSync(join(ROOT, "install.sh"), "utf8").replace(/\r\n/g, "\n");
+  const ps = readFileSync(join(ROOT, "install.ps1"), "utf8").replace(/\r\n/g, "\n");
 
   test("one Bun version in both scripts, and a SHA-256 for every platform the scripts pick", () => {
     const shVersion = /^BUN_VERSION=(\S+)$/m.exec(sh)?.[1];

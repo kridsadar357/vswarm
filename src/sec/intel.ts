@@ -157,13 +157,15 @@ export function lookAlike(kind: string, name: string): string | undefined {
   if (!l) return;
   const n = normName(kind, name);
   // Three letters or fewer: too many real packages sit one edit from each other (ms, ws, ip, npm).
-  if (n.length < 4 || l.set.has(n) || allowed(kind, n)) return;
+  // Past 214 characters it is no npm name, and no popular one of any kind.
+  if (n.length < 4 || n.length > 214 || l.set.has(n) || allowed(kind, n)) return;
+  const fn = flat(n);
   for (const p of l.list) {
     if (p.length < 4) continue;
-    if (flat(p) === flat(n)) return p;
+    if (flat(p) === fn) return p;
     // @scope/name written without the scope's slash: solana-web3.js, solanaweb3.js.
     const scoped = /^@([^/]+)\/(.+)$/.exec(p);
-    if (scoped && !n.startsWith("@") && flat(n) === flat(scoped[1] + scoped[2])) return p;
+    if (scoped && !n.startsWith("@") && fn === flat(scoped[1] + scoped[2])) return p;
     // Short names have many real neighbours (color, colord; util, utila): only the most-used ones are matched there.
     const long = Math.min(p.length, n.length) >= 8;
     if (long || l.rank.get(p)! < (kind === "pip" ? 500 : 1000)) {
