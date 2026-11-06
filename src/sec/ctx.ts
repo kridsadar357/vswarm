@@ -56,12 +56,18 @@ export interface Exec {
  * Runs a command and waits for it. `tty` hands the terminal to the command (ssh-keygen asking for a passphrase);
  * its stderr is then not captured. Throws when the program cannot be started at all.
  */
-export async function exec(cmd: string[], opt: { cwd?: string; env?: Record<string, string | undefined>; timeoutMs?: number; tty?: boolean } = {}): Promise<Exec> {
-  const p = Bun.spawn(cmd, { cwd: opt.cwd, env: opt.env, stdin: opt.tty ? "inherit" : "ignore", stdout: "pipe", stderr: opt.tty ? "inherit" : "pipe" });
+export async function exec(cmd: string[], opt: { cwd?: string; env?: Record<string, string | undefined>; timeoutMs?: number; tty?: boolean; stdin?: string } = {}): Promise<Exec> {
+  const p = Bun.spawn(cmd, { cwd: opt.cwd, env: opt.env, stdin: opt.tty ? "inherit" : opt.stdin !== undefined ? new Blob([opt.stdin]) : "ignore", stdout: "pipe", stderr: opt.tty ? "inherit" : "pipe" });
   const timer = opt.timeoutMs ? setTimeout(() => p.kill(), opt.timeoutMs) : undefined;
   const [out, err, code] = await Promise.all([new Response(p.stdout).text(), opt.tty ? Promise.resolve("") : new Response(p.stderr as ReadableStream).text(), p.exited]);
   clearTimeout(timer);
   return { code, out, err };
+}
+
+/** Windows PowerShell by full path, so a powershell.exe planted earlier on PATH is not the one that runs. */
+export function powershell(): string {
+  const full = join(process.env.SystemRoot ?? "C:\\Windows", "System32", "WindowsPowerShell", "v1.0", "powershell.exe");
+  return existsSync(full) ? full : "powershell.exe";
 }
 
 /** stdout of a command that exits 0; undefined when it is missing, fails or times out. */

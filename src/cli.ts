@@ -5,14 +5,14 @@ import { existsSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { VERSION } from "./home";
 import { readJson, realCtx, redact } from "./sec/ctx";
-import { check } from "./sec/engine";
+import { check, STATE_RULE } from "./sec/engine";
 import { c, finding as printFinding, line, summary } from "./sec/print";
 import { writeReport } from "./sec/report";
 import { respond } from "./sec/respond";
 import { forBaseline } from "./sec/scan";
 import { secrets as findSecrets } from "./sec/secrets";
 import { selftest } from "./sec/selftest";
-import { clearLock, files, loadAccepted, loadBaseline, loadLast, loadLock, saveAccepted, saveBaseline } from "./sec/store";
+import { clearLock, files, loadAccepted, loadBaseline, loadLast, lockState, readLog, saveAccepted, saveBaseline } from "./sec/store";
 import { RANK } from "./sec/types";
 import { ask, banner, COMMANDS, completion, doctor, gate, guard, install, trust, uninstall, update, yes } from "./setup";
 import { pkgCommand } from "./sec/pkg";
@@ -22,6 +22,9 @@ import { homedir } from "node:os";
 import { verdictNow } from "./sec/gate";
 import { caCommand, certCommand } from "./sec/cert";
 import { cleanTries, listTries, tryIt, type Net } from "./sec/try";
+
+/** The team policy this machine follows, for reports (none until vswarm team join). */
+const teamLabel = async (): Promise<{ name: string; serial: number } | undefined> => undefined;
 
 /** Where vswarm's own options end: what follows `--` or `--then` belongs to the command being wrapped. */
 function own(args: string[]): number {
@@ -95,6 +98,7 @@ function usage() {
   console.log(`\n  ${c.bold("when something is wrong")}`);
   row("vswarm respond", "lock, evidence, credential checklist, quarantine, report");
   row("vswarm report [incident]", "write the incident report again");
+  row("vswarm report --json [--sign key] [--out dir]", "this machine's state for a server that decides (signed with an SSH key)");
   row("vswarm unlock", "close the incident once the machine is clean");
   console.log(`\n  ${c.bold("trust, but verify")}`);
   row("vswarm selftest", "plant fake threats in a sandbox home, print the detection rate");
@@ -145,7 +149,7 @@ async function main() {
       if (!auto) line("");
       const ok = auto || (await yes(`Record this machine (${count} items) as the clean baseline?`, !serious.length));
       if (!ok) return line(c.dim("  not recorded"));
-      saveBaseline(forBaseline(r.scan));
+      await saveBaseline(forBaseline(r.scan));
       line(`  ${c.green("✔")} baseline recorded ${c.dim(files.baseline())}`);
       line(c.dim("  From now on, scan and preflight report what changes from this point."));
       return;
@@ -213,7 +217,7 @@ async function main() {
     }
 
     case "accept": {
-      const acc = loadAccepted();
+      const acc = await loadAccepted();
       const list = has(args, "--list");
       const rm = flag(args, "--remove");
       const all = has(args, "--all");
@@ -227,10 +231,11 @@ async function main() {
       if (rm) {
         if (!acc[rm]) throw new Error(`${rm} is not an accepted finding · vswarm accept --list`);
         delete acc[rm];
-        saveAccepted(acc);
+        await saveAccepted(acc);
         return line(`${c.green("✔")} no longer accepted: ${rm}`);
       }
-      const last = loadLast();
+      // Only ids from a check vswarm itself wrote: a forged last.json must not name what gets accepted.
+      const last = await loadLast();
       if (!last) throw new Error("run vswarm scan first");
       const pick = all ? last.findings : last.findings.filter((f) => args.includes(f.id));
       if (!pick.length) throw new Error("name finding ids (shown under each finding), or --all");
@@ -239,10 +244,14 @@ async function main() {
           line(`  ${c.red("✖")} a known-malicious package cannot be accepted: ${f.title}`);
           continue;
         }
+        if (f.rule === STATE_RULE) {
+          line(`  ${c.red("✖")} cannot be accepted, it is about vswarm's own files: ${f.title} · ${f.fix ?? ""}`);
+          continue;
+        }
         acc[f.id] = { at: Date.now(), title: f.title };
         line(`  ${c.green("✔")} accepted: ${f.title}`);
       }
-      saveAccepted(acc);
+      await saveAccepted(acc);
       return;
     }
 
@@ -260,7 +269,21 @@ async function main() {
     }
 
     case "report": {
+      const out = flag(args, "--out");
+      const key = flag(args, "--sign");
       noMoreOptions(cmd, args);
+      if (json || out || key) {
+        // This machine's state for a server that decides (docs/server-side.md); a fresh check, never the cached one.
+        const { posture, signReport, writePosture } = await import("./sec/report");
+        const r = await check(realCtx(), { offline });
+        const text = JSON.stringify(posture(r, await teamLabel()), null, 2) + "\n";
+        const sig = key ? await signReport(text, key) : undefined;
+        if (out) for (const w of writePosture(out, text, sig)) line(`${c.green("✔")} ${w}`);
+        // Signed on stdout: the exact bytes that were signed, and the signature, in one envelope.
+        else process.stdout.write(sig ? JSON.stringify({ report: text, signature: sig }, null, 2) + "\n" : text);
+        process.exitCode = r.verdict === "block" ? 3 : 0;
+        return;
+      }
       const dir = files.incidents();
       const id = args[0] ?? (existsSync(dir) ? readdirSync(dir).sort().at(-1) : undefined);
       if (!id) throw new Error("no incidents yet");
@@ -273,13 +296,21 @@ async function main() {
     case "unlock": {
       const force = has(args, "--force");
       noMoreOptions(cmd, args);
-      const lock = loadLock();
+      const { lock, why } = await lockState();
       if (!lock) return line("no incident is open");
-      const base = loadBaseline();
+      if (why) line(c.amber(`  ${why}`));
+      const base = await loadBaseline();
       if ((!base || base.at < lock.at) && !force) {
         return line(c.amber(`The baseline is older than incident ${lock.incident}. On the cleaned machine run vswarm baseline first (or unlock --force).`));
       }
-      clearLock();
+      const log = await readLog();
+      if (log.why && !force) {
+        process.exitCode = 3;
+        return line(c.amber(`vswarm's incident log ${log.why}. If you did not touch ~/.vswarm, treat this machine as compromised (vswarm respond).\n` +
+          `If you know why (you restored a backup, or removed files by hand): vswarm unlock --force starts a new log and keeps the old one.`));
+      }
+      const r = await clearLock(lock.incident, { reset: !!log.why });
+      if (r.kept) line(c.dim(`  the old log is kept as ${r.kept}`));
       return line(`${c.green("✔")} incident ${lock.incident} closed · preflight allows production access again`);
     }
 

@@ -1,6 +1,10 @@
 # Security policy
 
-vswarm sits in the path to production access, so a weakness in it matters. Thank you for reporting one.
+vswarm keeps a developer from becoming the way in: it pauses the risky moments (installing a package, running a
+stranger's code, adding an MCP server, reaching production) and checks the machine before credentials leave it. It is
+a local tool, not an EDR and not a hard access control; the section
+[What vswarm can and cannot protect against](#what-vswarm-can-and-cannot-protect-against) draws the line. People rely
+on it at those moments, so a weakness in it matters. Thank you for reporting one.
 
 ## Reporting a vulnerability
 
@@ -50,9 +54,30 @@ Bun release from GitHub and unpack it only when its SHA-256 matches the value wr
    `trust/allowed_signers` in a release signed by the old key; users who pinned the old key see `vswarm update`
    refuse anything else.
 
+## What vswarm can and cannot protect against
+
+vswarm runs as you, on the machine it checks. Malware that already runs as your user can do anything you can: stop
+the background watch, remove the ssh gate from `~/.ssh/config`, edit or delete the files under `~/.vswarm`, read the
+key vswarm uses to seal them, or simply run `vswarm unlock --force`. vswarm cannot stop that, and does not claim to.
+What it does:
+
+- **Finds** what such malware typically leaves behind (login jobs, shell lines, packages, MCP servers, binaries,
+  connections) on the next scan, before you use the machine for production, and refuses to hand out access when it
+  sees it.
+- **Seals its own state.** The last verdict, the lock, the baseline and the accepted findings carry an HMAC whose key
+  is kept outside `~/.vswarm` (macOS Keychain, the Linux Secret Service when there is one, Windows DPAPI). A file
+  edited or forged by hand is not trusted: a cached verdict without a valid seal is never reused, a lock with a bad
+  seal still blocks, and an append-only incident log with chained seals keeps an incident open even when the lock
+  file is deleted. This catches naive tampering and generic "set verdict to pass" tricks. It does **not** stop
+  malware that reads the key the way vswarm does: any program running as you can.
+- **Is not the enforcement point** for production. The decision that cannot be bypassed from the laptop belongs on
+  the server: short-lived certificates, a bastion or SSH CA that asks for a fresh signed report, device trust in your
+  identity provider. See [docs/server-side.md](docs/server-side.md).
+
 ## In scope
 
-- Ways to make `vswarm preflight` pass on a machine that should be blocked (bypasses of a rule or of the lock).
+- Ways to make `vswarm preflight` pass on a machine that should be blocked (bypasses of a rule or of the lock), short
+  of reading the sealing key the way vswarm itself does.
 - Ways to make `vswarm update` or the installer accept a release that is not signed by a pinned key, or an older one.
 - Ways to make vswarm run code, change files, or send data it should not (it should only send package names and
   versions to api.osv.dev).
@@ -64,3 +89,5 @@ Bun release from GitHub and unpack it only when its SHA-256 matches the value wr
 - An attack technique vswarm does not detect yet. Please open an issue or, better, a pull request that adds it to
   `src/sec/selftest.ts` with a rule that catches it.
 - Malware that already has root, or hides below the operating system. vswarm says so in its README.
+- A program running as you that reads the sealing key, stops the watch, edits `~/.ssh/config` or runs
+  `vswarm unlock --force`: same-user code can do what you can (see above).

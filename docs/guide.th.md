@@ -1,8 +1,19 @@
 # คู่มือการใช้งาน vswarm
 
-**ตรวจเครื่องตัวเองก่อนเข้า production** · ภาษาไทย · [English](guide.md)
+**อย่าให้เครื่องเราเป็นทางเข้าของผู้โจมตี** · ภาษาไทย · [English](guide.md)
 
-vswarm เป็นเครื่องมือ command line แบบ open source (Apache-2.0) สำหรับคนที่ถือกุญแจเข้า production มันตรวจหาร่องรอยที่ผู้โจมตีทิ้งไว้บนเครื่อง developer แล้วใช้ผลนั้นเป็นด่านก่อนเข้า ssh, AWS และ Kubernetes นอกจากนี้ยังรันโค้ดที่ไม่ไว้ใจใน sandbox ตรวจ package ก่อนติดตั้ง และพาคุณผ่านขั้นตอนรับมือเมื่อเกิดเหตุ ทุกอย่างทำงานในเครื่องคุณ ไม่มี telemetry
+ทุกวันนี้ server แน่นหนาขึ้นมาก แต่สุดท้ายมันก็ยังเชื่อใครก็ตามที่ถือกุญแจถูกต้อง จุดอ่อนจึงย้ายมาอยู่ที่ตัว developer กับโน้ตบุ๊กของเรา vswarm เป็นเครื่องมือ command line แบบ open source (Apache-2.0) ที่ช่วยไม่ให้เราเผลอพาของอันตรายเข้าไปเอง มันจะเตือนและหยุดให้คิดก่อน ในจังหวะที่เสี่ยงจริงๆ ก่อนที่เรื่องจะใหญ่:
+
+| จังหวะเสี่ยง | คำสั่ง | ช่วยอะไร |
+| --- | --- | --- |
+| กำลังจะลง package | `guard` | เช็คชื่อและเวอร์ชันก่อนติดตั้ง: package อันตรายที่มีรายงานแล้ว, ชื่อเลียนแบบ, เวอร์ชันที่เพิ่งออก, สคริปต์ติดตั้ง |
+| กำลังจะรันโค้ดของคนที่ไม่รู้จัก | `try` | รันบนสำเนาใน sandbox แล้วรายงานว่ามันพยายามทำอะไร |
+| กำลังจะเพิ่ม AI agent หรือ MCP server | `agents --inspect` | เปิด server ใน sandbox แล้วอ่านสิ่งที่โมเดลจะได้อ่าน |
+| กำลังจะเข้า production | `preflight`, `gate` | ตรวจเครื่องก่อนที่ ssh, AWS หรือ kubectl จะได้ credential ไป |
+
+ทุกคำเตือนจะบอกว่าเสี่ยงเพราะอะไร และควรทำอะไรแทน นอกจังหวะเหล่านี้มันจะเงียบ เพราะเครื่องมือที่เตือนพร่ำเพรื่อสุดท้ายก็โดนถอนทิ้ง ใช้แค่คำสั่งเดียวในเครื่อง ไม่ต้องมี server ไม่ต้องมี MDM ไม่มีค่า license ต่อหัว และไม่มี telemetry นักพัฒนาคนเดียวหรือทีมเล็กๆ ก็ใช้ได้จริง
+
+vswarm **ไม่ใช่** EDR และไม่ใช่ระบบควบคุมสิทธิ์ที่ปิดตายได้ ถ้ามี malware รันในนามของเราอยู่แล้ว มันปิด vswarm ได้ ([ข้อ 16](#vswarm-ป้องกันอะไรได้-และอะไรไม่ได้)) vswarm ทำงานเสริมกับ Socket, osquery, EDR และระบบ device trust อย่าง Teleport หรือ Kolide ไม่ได้มาแทน และการตัดสินใจที่ข้ามจากฝั่งเครื่องไม่ได้ควรอยู่ที่ server ([server-side.md](server-side.md))
 
 > ภาพในคู่มือนี้ถ่ายจากเครื่องสาธิต (`dev@laptop` บน Linux) ข้อมูลทุกอย่างในภาพเป็นของปลอม สร้างใหม่ได้ด้วย [scripts/docs](../scripts/docs/README.md)
 
@@ -181,7 +192,7 @@ config บอกแค่ว่ารัน server อะไร ส่วนค�
 
 ### vswarm preflight
 
-ตรวจแล้วตอบว่า PASS, WARN หรือ BLOCK ผ่าน exit code จึงใช้เป็นด่านให้เครื่องมืออื่นได้ ผลจะถูกจำไว้ 2 นาที ครั้งต่อไปจึงใช้เวลาประมาณ 20 ms
+ตรวจแล้วตอบว่า PASS, WARN หรือ BLOCK ผ่าน exit code จึงใช้เป็นด่านให้เครื่องมืออื่นได้ ผลจะถูกจำไว้ 2 นาที ครั้งต่อไปจึงใช้เวลาประมาณ 20 ms แต่จะใช้ผลเดิมก็ต่อเมื่อตราประทับของมันยังตรง ถ้ามีคนไปแก้หรือเขียน `last.json` เอง vswarm จะไม่เชื่อและตรวจเครื่องใหม่ทันที ในโหมด `--quiet` package ที่เพิ่งลงหลังการตรวจเต็มครั้งล่าสุดจะถูกเช็คกับฐานข้อมูล package อันตรายด้วย (รอไม่เกิน 3 วินาที) ถ้าเช็คไม่ได้จะมีบรรทัดบอกว่ามีกี่ตัวที่ยังไม่ได้เช็ค
 
 ![vswarm preflight ตอนผ่าน](img/preflight-pass.png)
 
@@ -358,7 +369,10 @@ vswarm unlock        # ปิดเหตุการณ์ preflight ให้�
 
 ![vswarm unlock](img/unlock.png)
 
+ทุกครั้งที่ล็อกหรือปลดล็อก vswarm จะจดลง `~/.vswarm/sec/incidents.log` ด้วย แต่ละบรรทัดมีตราประทับและผูกกับบรรทัดก่อนหน้าเป็นสาย ดังนั้นลบไฟล์ `lock` ทิ้งเหตุการณ์ก็ยังไม่ปิด preflight จะยังกันไว้ตราบที่บันทึกบอกว่ายังเปิดอยู่ ถ้าบันทึกถูกแก้ ถูกตัดให้สั้นลง หรือถูกลบ เครื่องก็ยังล็อกอยู่เหมือนกัน `vswarm unlock` จะบอกเหตุผล และเมื่อรู้แล้วว่าเกิดจากอะไร ใช้ `vswarm unlock --force` เพื่อเริ่มบันทึกใหม่ (ไฟล์เก่าเก็บไว้ข้างๆ)
+
 เขียนรายงานใหม่ได้ด้วย `vswarm report [incident]` ไฟล์อยู่ใน `~/.vswarm/sec/incidents/<id>/`
+ส่วน `vswarm report --json [--sign key] [--out dir]` เป็นคนละเรื่อง: มันสรุปสภาพเครื่องตอนนี้เป็น JSON จะเซ็นด้วยกุญแจ SSH ด้วยก็ได้ เอาไว้ให้ server หรือทีมเป็นคนตัดสิน ([server-side.md](server-side.md), [team.md](team.md))
 
 ![vswarm report](img/report.png)
 
@@ -438,6 +452,7 @@ vswarm trust           # กุญแจที่เครื่องนี้�
 | `vswarm try <target> [--net none\|registries\|all] [--localhost] [--yes] [-- cmd…]` · `--list` · `--clean [id]` | รันโค้ดใน sandbox |
 | `vswarm respond [--yes] [--force]` | รับมือเหตุการณ์ |
 | `vswarm report [incident]` | เขียนรายงานใหม่ |
+| `vswarm report --json [--sign key] [--out dir]` | สถานะเครื่องนี้เป็น JSON ให้ server หรือทีมใช้ตัดสิน เซ็นด้วยกุญแจ SSH ได้ |
 | `vswarm unlock [--force]` | ปิดเหตุการณ์ |
 | `vswarm accept <id…>` · `--all` · `--list` · `--remove <id>` | ยอมรับสิ่งที่ตรวจแล้ว |
 | `vswarm canary plant aws\|dns\|env` · `list` · `remove <id\|all>` | credential ล่อ |
@@ -457,6 +472,8 @@ vswarm trust           # กุญแจที่เครื่องนี้�
 | `sec/last.json` | ผลล่าสุดที่ preflight ใช้ซ้ำ |
 | `sec/accepted.json` | สิ่งที่ยอมรับแล้ว |
 | `sec/lock` | มีไฟล์นี้ = มีเหตุการณ์ที่ยังเปิดอยู่ |
+| `sec/incidents.log` | บันทึกการล็อกและปลดล็อกทุกครั้ง แต่ละบรรทัดมีตราประทับต่อกันเป็นสาย ลบไฟล์ `lock` ทิ้งเหตุการณ์ก็ยังไม่ปิด |
+| `sec/*.seal`, `sec/keystore.json` | ตราประทับของไฟล์ข้างบน และที่เก็บกุญแจที่ใช้ประทับ |
 | `sec/incidents/<id>/` | หลักฐาน, ไฟล์ที่กักกัน, รายงาน |
 | `sec/osv-cache.json`, `sec/managed.json`, `sec/canaries.json` | cache ของ OSV, บล็อกที่ vswarm เขียน, canary ที่วางไว้ |
 | `try/<id>/` | สำเนาโค้ด, home ปลอม, รายงานของ `try` |
@@ -466,9 +483,22 @@ vswarm trust           # กุญแจที่เครื่องนี้�
 ตัวแปร environment: `VSWARM_HOME` (ย้าย `~/.vswarm`), `VSWARM_GUARD=off`, `VSWARM_SEC_DIR`, `VSWARM_TRY_DIR`, `VSWARM_CA_DIR`, `VSWARM_TRUST_FILE`, `NO_COLOR`, `FORCE_COLOR` · ตอนติดตั้ง: `VSWARM_REPO`, `VSWARM_REF`
 
 **ข้อมูลที่ออกจากเครื่อง:**
-- ชื่อและเวอร์ชันของ package ไปที่ `api.osv.dev` เพื่อเช็คกับรายการ package อันตราย (cache 1 วัน, `--offline` เพื่อปิด)
+- ชื่อและเวอร์ชันของ package ไปที่ `api.osv.dev` เพื่อเช็คกับรายการ package อันตราย (cache 1 วัน, `--offline` เพื่อปิด ส่วน `preflight --quiet` จะถามเฉพาะเวอร์ชันที่ยังไม่เคยถาม)
 - ถ้าเปิด `guard` ชื่อ package ที่กำลังจะติดตั้งจะถูกส่งไปถาม registry ต้นทาง (registry.npmjs.org, api.npmjs.org, api.deps.dev, pypi.org) ซึ่งเป็นชื่อเดียวกับที่ package manager กำลังจะส่งอยู่แล้ว
 - ไม่มีอย่างอื่น ไม่มี telemetry และไม่อ่านค่าของ credential ออกมา
+
+
+### vswarm ป้องกันอะไรได้ และอะไรไม่ได้
+
+vswarm รันด้วยสิทธิ์ของเรา บนเครื่องที่มันตรวจเอง ต้องเข้าใจให้ตรงกันว่าแปลว่าอะไร:
+
+- **ถ้า malware รันในนามของเราอยู่แล้ว มันปิด vswarm ได้** จะลบด่าน ssh ออกจาก `~/.ssh/config` หยุด watch แก้ไฟล์ใน `~/.vswarm` หรือสั่ง `vswarm unlock --force` เองก็ได้ ไม่มีโปรแกรมไหนที่รันด้วยสิทธิ์เดียวกับเราห้ามเรื่องนี้ได้
+- **สิ่งที่ vswarm ทำเพื่อลดความเสี่ยงนี้:** มันประทับตราไฟล์ของตัวเอง `last.json`, `lock`, `baseline.json` และ `accepted.json` มี HMAC กำกับ โดยกุญแจเก็บไว้นอก `~/.vswarm`: บน macOS อยู่ใน login Keychain บน Linux ที่มีหน้าจอเดสก์ท็อปอยู่ใน Secret Service (`secret-tool`) บน Windows ใช้ DPAPI ถ้าไม่มีที่ไหนตอบเลยจะเก็บเป็นไฟล์ที่เจ้าของอ่านได้คนเดียวใน `~/.config/vswarm` และ `vswarm doctor` จะเตือน ผลตรวจที่ตราไม่ตรงจะไม่ถูกใช้ซ้ำ lock ที่ตราไม่ตรงยังกันอยู่ baseline ที่ถูกแก้จะถูกพักไว้และ BLOCK รายการ accept ที่ถูกแก้จะไม่มีผล และบันทึกเหตุการณ์จะยังถือว่าเหตุการณ์เปิดอยู่แม้ไฟล์ lock จะหายไป
+- **สิ่งที่ตรานี้กันไม่ได้:** โปรแกรมที่รันในนามเราขอกุญแจจาก Keychain ได้แบบเดียวกับที่ vswarm ขอ ตรานี้จับได้แค่การแก้ไฟล์ด้วยมือ หรือลูกเล่นง่ายๆ อย่างเปลี่ยนผลเป็น "pass" ไม่ใช่ malware ที่เขียนมาเพื่อหลบ vswarm โดยเฉพาะ
+- **จุดที่ vswarm เก่ง:** จับร่องรอยที่ malware แบบนั้นทิ้งไว้ (login job, บรรทัดใน shell, package, MCP server, โปรแกรม, การเชื่อมต่อ) ก่อนเราจะเข้า production และหยุดให้คิดในจังหวะที่มันจะเข้ามาได้
+- **การตัดสินใจที่ปิดตายจริงควรอยู่ที่ไหน:** ที่ server ที่โน้ตบุ๊กแก้ไม่ได้ เช่น SSH CA หรือ bastion ที่ขอรายงานที่เซ็นและยังสดอยู่ หรือ device trust ของระบบ login องค์กร ดู[server-side.md](server-side.md)
+
+ถ้าที่เก็บกุญแจไม่ตอบ (เช่น keychain ล็อกอยู่ตอนเข้าเครื่องผ่าน ssh หรือ cron ไม่มี D-Bus) vswarm จะบอกเป็น WARN ไม่ใช้ผลเก่าซ้ำ และยังเคารพไฟล์ lock อยู่ ปลดล็อก keychain หรือ keyring แล้วตรวจใหม่
 
 ## 17. แก้ปัญหา
 
@@ -483,6 +513,9 @@ vswarm trust           # กุญแจที่เครื่องนี้�
 | `Your baseline is older than these checks` | vswarm เพิ่มการตรวจใหม่ ดูรายการ (เช่น `vswarm agents`) แล้ว `vswarm baseline` |
 | `not updating to vX: … not signed` | อย่าเพิ่งอัปเดต เทียบ fingerprint กับที่ประกาศไว้ (ดู[ข้อ 14](#14-อัปเดตอย่างปลอดภัย-update-และ-trust)) |
 | `the incident is open` / preflight BLOCK ตลอด | ทำความสะอาดเครื่อง → `vswarm baseline` → `vswarm unlock` |
+| `vswarm's incident log … was changed outside vswarm` / `was deleted` | ถ้าเราไม่ได้ไปยุ่งกับ `~/.vswarm` ให้ถือว่าเครื่องอาจโดนแล้ว (`vswarm respond`) ถ้ารู้ว่าเกิดจากการกู้ backup หรือลบไฟล์เอง ใช้ `vswarm unlock --force` |
+| `vswarm's baseline was changed outside vswarm` | ดู `vswarm diff` ให้แน่ใจก่อน แล้ว `vswarm baseline` เพื่อบันทึกและประทับตราใหม่ |
+| `vswarm could not check its own files: its sealing key is not readable` | ปลดล็อก login keychain (`security unlock-keychain`) หรือ keyring ของเดสก์ท็อป `vswarm doctor` บอกว่ากุญแจอยู่ที่ไหน |
 
 ### Windows (รุ่นทดลอง)
 
@@ -526,6 +559,7 @@ exit 4 ถ้าจะใช้ให้ใช้ใน WSL ส่วนที�
 
 ### ข้อจำกัด
 
+- malware ที่รันในนามเราอยู่แล้วปิด vswarm ได้ ดู[vswarm ป้องกันอะไรได้ และอะไรไม่ได้](#vswarm-ป้องกันอะไรได้-และอะไรไม่ได้)
 - จับ malware ที่ซ่อนตัวเก่ง (rootkit, firmware) หรือโค้ดที่รันครั้งเดียวแล้วไม่เหลือร่องรอยไม่ได้
 - ถ้า credential ถูกขโมยไปแล้วและถูกใช้จากเครื่องผู้โจมตี vswarm มองไม่เห็น สิ่งที่ป้องกันได้คือฝั่ง server: ใบรับรองอายุสั้น ([ข้อ 7](#7-ใบรับรอง-ssh-อายุสั้น-ca-และ-cert)), กุญแจฮาร์ดแวร์, canary ([ข้อ 12](#12-credential-ล่อ-canary))
 - baseline ที่บันทึกตอนเครื่องโดนไปแล้วจะถือว่าสิ่งที่โดนเป็นเรื่องปกติ

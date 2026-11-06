@@ -245,7 +245,7 @@ export async function selftest(): Promise<SelftestResult> {
       // what the baseline kept is not changed by the plants.
       win: async () => structuredClone(win),
     };
-    saveBaseline(forBaseline(await scan(ctx, { live: false })));
+    await saveBaseline(forBaseline(await scan(ctx, { live: false })));
     // The known-malicious database is stubbed so the test runs offline and never reports a real package.
     writePrivate(files.osv(), { "npm:event-stream-helper@3.3.6": { at: Date.now(), mal: ["MAL-0000-SELFTEST"] } });
     for (const c of CASES) c.plant(home, brew, win);

@@ -103,3 +103,64 @@ export function writeReport(inc: Incident): string[] {
   }
   return out;
 }
+
+// ── The machine's state for a server that decides (vswarm report --json)
+//
+// A small JSON document a bastion, an SSH CA or a team script can check before it grants access: who, which machine,
+// when, the verdict and the findings that led to it. Signed with an SSH key (`ssh-keygen -Y sign`, namespace
+// vswarm-report) when asked; the server verifies it against the device keys it knows and refuses a stale one.
+// Values of credentials never appear, only finding titles.
+
+export const REPORT_NAMESPACE = "vswarm-report";
+
+export interface Posture {
+  schema: "vswarm-report/1";
+  host: string;
+  user: string;
+  at: string;
+  vswarm: string;
+  verdict: "pass" | "warn" | "block";
+  locked?: { incident: string; reason: string };
+  baselineAt?: string;
+  findings: { id: string; rule: string; severity: string; title: string }[];
+  notes: string[];
+  team?: { name: string; serial: number };
+}
+
+export function posture(r: import("./engine").Check, team?: { name: string; serial: number }): Posture {
+  return {
+    schema: "vswarm-report/1",
+    host: r.scan.host,
+    user: r.scan.user,
+    at: new Date().toISOString(),
+    vswarm: VERSION,
+    verdict: r.verdict,
+    ...(r.lock ? { locked: { incident: r.lock.incident, reason: r.lock.reason } } : {}),
+    ...(r.baseline ? { baselineAt: new Date(r.baseline.at).toISOString() } : {}),
+    findings: r.findings.filter((f) => f.severity !== "info").map((f) => ({ id: f.id, rule: f.rule, severity: f.severity, title: f.title })),
+    notes: r.notes,
+    ...(team ? { team } : {}),
+  };
+}
+
+/** An SSH signature over the exact bytes (the key may be a file, or a public key whose private half is in ssh-agent). */
+export async function signReport(text: string, key: string): Promise<string> {
+  const p = Bun.spawn(["ssh-keygen", "-q", "-Y", "sign", "-f", key, "-n", REPORT_NAMESPACE], { stdin: new Blob([text]), stdout: "pipe", stderr: "pipe" });
+  const [out, err, code] = await Promise.all([new Response(p.stdout).text(), new Response(p.stderr).text(), p.exited]);
+  if (code !== 0 || !out.includes("BEGIN SSH SIGNATURE")) throw new Error(`could not sign the report with ${key}: ${err.trim().split("\n")[0] || `ssh-keygen exit ${code}`}`);
+  return out;
+}
+
+/** Writes report.json (and .sig) into a folder a team collects, named by host and time so reports never overwrite each other. */
+export function writePosture(dir: string, text: string, sig?: string): string[] {
+  mkdirSync(dir, { recursive: true, mode: 0o700 });
+  const p = JSON.parse(text) as Posture;
+  const name = `vswarm-report-${p.host.replace(/[^A-Za-z0-9._-]/g, "_")}-${p.at.replace(/[:.]/g, "-")}.json`;
+  writeFileSync(join(dir, name), text, { mode: 0o600 });
+  const out = [join(dir, name)];
+  if (sig) {
+    writeFileSync(join(dir, `${name}.sig`), sig, { mode: 0o600 });
+    out.push(join(dir, `${name}.sig`));
+  }
+  return out;
+}

@@ -1,11 +1,26 @@
 # vswarm user guide
 
-**Check your own machine before it touches production** · English · [ภาษาไทย](guide.th.md)
+**Don't be the one who carries it in** · English · [ภาษาไทย](guide.th.md)
 
-vswarm is an open-source (Apache-2.0) command-line tool for people who hold the keys to production. It looks for
-what an attacker leaves on a developer machine and gates ssh, AWS and Kubernetes access on it. It also runs untrusted
-code in a sandbox, checks packages before they install, and walks you through an incident. Everything runs on your
-machine; there is no telemetry.
+Servers get hardened, but they still trust whoever holds valid keys, so the developer and the laptop are the weak
+point. vswarm is an open-source (Apache-2.0) command-line tool that keeps you from becoming the carrier. It warns and
+pauses at the risky moments, before anything big happens:
+
+| Moment | Command | What it does |
+| --- | --- | --- |
+| installing a package | `guard` | checks the name and version before the install runs: known malware, look-alikes, brand-new releases, install scripts |
+| running a stranger's code | `try` | runs it on a copy in a sandbox and reports what it tried |
+| adding an AI agent or MCP server | `agents --inspect` | starts the server sandboxed and reads what the model will read |
+| reaching production | `preflight`, `gate` | checks the machine before ssh, AWS or kubectl get your credentials |
+
+Every warning says why it is risky and what to do instead. Between those moments it stays quiet, because a tool that
+cries wolf gets uninstalled. It is one local command, with no server, MDM or per-seat licence, and no telemetry, so a
+solo developer or a small team can use it.
+
+It is **not** an EDR and not a hard access control: malware already running as you can switch it off
+([§16](#what-vswarm-protects-and-what-it-does-not)). It complements Socket, osquery, EDR and device trust (Teleport,
+Kolide) rather than replacing them, and the decision that cannot be bypassed belongs on a server
+([server-side.md](server-side.md)).
 
 > The screenshots come from a demo machine (`dev@laptop`, Linux); every name, key and token in them is made up.
 > They are regenerated with [scripts/docs](../scripts/docs/README.md).
@@ -188,7 +203,9 @@ or change them after you approved it. `--inspect` starts each server the way the
 ### vswarm preflight
 
 Answers PASS, WARN or BLOCK through its exit code, so other tools can use it as a gate. The verdict is reused for two
-minutes (about 20 ms).
+minutes (about 20 ms), but only while its seal matches: a `last.json` edited or written by hand is never reused, the
+machine is checked again instead. With `--quiet`, packages installed since the last full check are looked up in the
+known-malicious database (at most 3 seconds); when that is not possible, one line says how many went unchecked.
 
 ![vswarm preflight passing](img/preflight-pass.png)
 
@@ -378,7 +395,14 @@ vswarm unlock        # close the incident; preflight passes again
 
 ![vswarm unlock](img/unlock.png)
 
+Every lock and unlock is also written to `~/.vswarm/sec/incidents.log`, each entry sealed and chained to the one
+before. Deleting the `lock` file does not close an incident: preflight keeps blocking while the log says it is open.
+A log that was edited, cut short or deleted keeps the machine locked too; `vswarm unlock` then says so, and
+`vswarm unlock --force` starts a new log once you know why (the old one is kept next to it).
+
 `vswarm report [incident]` writes the report again; everything is in `~/.vswarm/sec/incidents/<id>/`.
+`vswarm report --json [--sign key] [--out dir]` is something else: this machine's current state as JSON, optionally
+signed with an SSH key, for a server or a team that decides ([server-side.md](server-side.md), [team.md](team.md)).
 
 ![vswarm report](img/report.png)
 
@@ -472,6 +496,7 @@ Maintainers: the steps that switch signing on are in [SECURITY.md](../SECURITY.m
 | `vswarm try <target> [--net none\|registries\|all] [--localhost] [--yes] [-- cmd…]` · `--list` · `--clean [id]` | run code in a sandbox |
 | `vswarm respond [--yes] [--force]` | incident response |
 | `vswarm report [incident]` | write the report again |
+| `vswarm report --json [--sign key] [--out dir]` | this machine's state for a server or team, optionally signed |
 | `vswarm unlock [--force]` | close the incident |
 | `vswarm accept <id…>` · `--all` · `--list` · `--remove <id>` | accept reviewed findings |
 | `vswarm canary plant aws\|dns\|env` · `list` · `remove <id\|all>` | decoy credentials |
@@ -491,6 +516,8 @@ Everything lives in `~/.vswarm`, readable by you only:
 | `sec/last.json` | the last check, reused by preflight |
 | `sec/accepted.json` | accepted findings |
 | `sec/lock` | present while an incident is open |
+| `sec/incidents.log` | every lock and unlock, sealed and chained; keeps an incident open when `lock` is deleted |
+| `sec/*.seal`, `sec/keystore.json` | seals of the files above, and which key store holds their key |
 | `sec/incidents/<id>/` | evidence, quarantine, reports |
 | `sec/osv-cache.json`, `sec/managed.json`, `sec/canaries.json` | OSV answers, vswarm's own blocks, planted canaries |
 | `try/<id>/` | copies, fake homes and reports of `try` |
@@ -501,10 +528,34 @@ Environment: `VSWARM_HOME` (moves `~/.vswarm`), `VSWARM_GUARD=off`, `VSWARM_SEC_
 `VSWARM_CA_DIR`, `VSWARM_TRUST_FILE`, `NO_COLOR`, `FORCE_COLOR`; for the installer `VSWARM_REPO`, `VSWARM_REF`.
 
 **What leaves the machine:**
-- package names and versions to `api.osv.dev` for the known-malicious check (cached a day; `--offline` skips it)
+- package names and versions to `api.osv.dev` for the known-malicious check (cached a day; `--offline` skips it;
+  `preflight --quiet` asks only about versions it has never seen)
 - with `guard` on, the names you install go to the registry they come from (registry.npmjs.org, api.npmjs.org,
   api.deps.dev, pypi.org): the same names your package manager is about to send
 - nothing else: no telemetry, and credential values are never read
+
+
+### What vswarm protects, and what it does not
+
+vswarm runs as you, on the machine it checks. Be clear about what that means:
+
+- **Malware already running as you can disable vswarm.** It can delete the ssh gate from `~/.ssh/config`, stop the
+  watch, edit `~/.vswarm`, or run `vswarm unlock --force`. Nothing that runs as you can prevent that.
+- **What vswarm does about it:** it seals its own state. `last.json`, `lock`, `baseline.json` and `accepted.json`
+  carry an HMAC whose key lives outside `~/.vswarm`: the login Keychain on macOS, the Secret Service (`secret-tool`)
+  on a Linux desktop, DPAPI on Windows, or an owner-only file under `~/.config/vswarm` when none of those answers
+  (`vswarm doctor` warns then). A verdict without a valid seal is never reused, a lock with a bad seal still blocks,
+  an edited baseline is set aside and blocks, an edited accepted list accepts nothing, and the incident log keeps an
+  incident open when the lock file is deleted.
+- **What that does not stop:** a program running as you can read the key the same way vswarm does. The seals catch
+  hand-edited files and generic "set the verdict to pass" tricks, not malware written against vswarm.
+- **Where it is strong:** catching what such malware leaves behind (login jobs, shell lines, packages, MCP servers,
+  binaries, connections) before you reach production, and pausing the moments that let it in.
+- **Where the hard decision belongs:** on a server the laptop cannot change: an SSH CA or bastion that asks for a
+  fresh signed report, or device trust in your identity provider. See [server-side.md](server-side.md).
+
+If the key store does not answer (a locked keychain over ssh, no D-Bus in a cron job), vswarm says so with a WARN,
+reuses no cached verdict and still honours a lock file; unlock the keychain or keyring and check again.
 
 ## 17. Troubleshooting
 
@@ -519,6 +570,9 @@ Environment: `VSWARM_HOME` (moves `~/.vswarm`), `VSWARM_GUARD=off`, `VSWARM_SEC_
 | `Your baseline is older than these checks` | vswarm added checks; review them (e.g. `vswarm agents`), then `vswarm baseline` |
 | `not updating to vX: … not signed` | do not force it; compare the fingerprint (see [§14](#14-safe-updates-update-and-trust)) |
 | preflight keeps blocking after an incident | clean the machine → `vswarm baseline` → `vswarm unlock` |
+| `vswarm's incident log … was changed outside vswarm` / `was deleted` | if you did not touch `~/.vswarm`, treat the machine as compromised (`vswarm respond`); if you restored a backup or deleted files yourself, `vswarm unlock --force` |
+| `vswarm's baseline was changed outside vswarm` | review `vswarm diff`, then `vswarm baseline` records and seals a new one |
+| `vswarm could not check its own files: its sealing key is not readable` | unlock the login keychain (`security unlock-keychain`) or the desktop keyring; `vswarm doctor` shows where the key is |
 
 ### Windows (preview)
 
@@ -564,6 +618,8 @@ stop with exit 4; use those inside WSL. What differs from macOS and Linux:
 
 ### Limits
 
+- Malware already running as you can switch vswarm off; see
+  [What vswarm protects, and what it does not](#what-vswarm-protects-and-what-it-does-not).
 - It cannot see malware that hides well (rootkits, firmware) or code that ran once and left nothing.
 - A credential already stolen and used from the attacker's machine is invisible here; what stops that is on the
   server side: short-lived certificates ([§7](#7-short-lived-ssh-certificates-ca-and-cert)), hardware keys,

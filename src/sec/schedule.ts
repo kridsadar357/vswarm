@@ -9,7 +9,7 @@ import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { paths } from "../home";
-import { exec, readJson, realCtx, run } from "./ctx";
+import { exec, powershell, readJson, realCtx, run } from "./ctx";
 import { check } from "./engine";
 import { c, line, VERDICT } from "./print";
 import { recordManagedFile, SEC, writePrivate } from "./store";
@@ -74,11 +74,7 @@ export function winTaskXml(launcher: string, everyMinutes: number): string {
 `;
 }
 
-/** Windows PowerShell by full path, so a powershell.exe planted earlier on PATH is not the one that runs. */
-export function powershell(): string {
-  const full = join(process.env.SystemRoot ?? "C:\\Windows", "System32", "WindowsPowerShell", "v1.0", "powershell.exe");
-  return existsSync(full) ? full : "powershell.exe";
-}
+export { powershell };
 
 /** PowerShell with its inputs in environment variables: nothing from a path or a message is parsed as code. */
 async function ps(script: string, env: Record<string, string>) {

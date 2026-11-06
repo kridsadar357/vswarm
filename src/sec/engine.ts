@@ -5,7 +5,7 @@ import { osvMalicious } from "./intel";
 import { evaluate, uncovered } from "./rules";
 import { forBaseline, scan as runScan } from "./scan";
 import { secrets as findSecrets } from "./secrets";
-import { ensureSec, files, loadAccepted, loadBaseline, loadLock, saveLast, type Lock } from "./store";
+import { ensureSec, files, lockState, readAccepted, readBaseline, saveLast, type Lock } from "./store";
 import { RANK, verdictOf, type Finding, type Scan, type Verdict } from "./types";
 
 export interface Check {
@@ -18,20 +18,43 @@ export interface Check {
   lock?: Lock;
   notes: string[];
   ms: number;
+  /** Packages the known-malicious check could not ask about (offline, or OSV did not answer in time). */
+  osvUnchecked?: number;
 }
 
-export async function check(ctx: Ctx, opt: { offline?: boolean; sign?: Parameters<typeof evaluate>[0]["sign"] } = {}): Promise<Check> {
+/** Findings about vswarm's own files. They can never be accepted away: accepting them would need the files they doubt. */
+export const STATE_RULE = "vswarm-state";
+
+export async function check(ctx: Ctx, opt: { offline?: boolean; osvNewOnly?: boolean; sign?: Parameters<typeof evaluate>[0]["sign"] } = {}): Promise<Check> {
   const t0 = Date.now();
   ensureSec();
-  const baseline = loadBaseline();
+  const own: Finding[] = [];
+  const state = (id: string, severity: Finding["severity"], title: string, detail: string[], fix: string) =>
+    own.push({ id: `${STATE_RULE}:${id}`, rule: STATE_RULE, severity, title, detail, fix });
+  const b = await readBaseline();
+  // A baseline that does not verify could hide anything that was added to it; it is set aside, and that blocks.
+  let baseline = b.untrusted && !b.nokey ? undefined : b.value;
+  if (b.untrusted && !b.nokey)
+    state("baseline", "high", "vswarm's baseline was changed outside vswarm", [`${files.baseline()} ${b.untrusted}`, "Code that adds itself to the baseline would never be reported as new."],
+      "If you did not edit it, treat the machine as suspect (vswarm respond). Otherwise review vswarm diff, then record a new one: vswarm baseline");
   const [scanned, secretFindings] = await Promise.all([runScan(ctx), findSecrets(ctx)]);
-  const osv = await osvMalicious(scanned.items, files.osv(), { offline: opt.offline });
+  // A quiet gate asks OSV only about packages it has never asked about, with a short wait, so a package installed a
+  // minute ago is checked before production access while a slow network still cannot hold up a login.
+  const osv = await osvMalicious(scanned.items, files.osv(), { offline: opt.offline, onlyNew: opt.osvNewOnly, timeoutMs: opt.osvNewOnly ? 3000 : undefined });
   const all = await evaluate({ scan: scanned, baseline, malicious: osv.hits, secrets: secretFindings, sign: opt.sign });
-  const acceptedIds = loadAccepted();
+  const a = await readAccepted();
+  // An accepted list that does not verify accepts nothing.
+  const acceptedIds = a.untrusted ? {} : a.value ?? {};
+  if (a.untrusted && !a.nokey)
+    state("accepted", "medium", "vswarm's list of accepted findings was changed outside vswarm; nothing in it counts", [`${files.accepted()} ${a.untrusted}`],
+      "Review what is shown, then accept again what you expect: vswarm accept <id>");
+  if (b.nokey || a.nokey)
+    state("nokey", "medium", "vswarm could not check its own files: its sealing key is not readable right now", [String((b.nokey ? b : a).untrusted)],
+      "Unlock the login keychain (macOS) or keyring (Linux) and check again; vswarm doctor shows where the key is");
   // A known-malicious package can never be accepted away.
-  const findings = all
-    .filter((f) => f.rule === "malicious" || !acceptedIds[f.id])
-    .sort((a, b) => RANK[b.severity] - RANK[a.severity]);
+  const findings = [...own, ...all]
+    .filter((f) => f.rule === "malicious" || f.rule === STATE_RULE || !acceptedIds[f.id])
+    .sort((x, y) => RANK[y.severity] - RANK[x.severity]);
   const notes: string[] = [];
   if (!baseline) notes.push("No baseline yet: only always-wrong things are checked. Run `vswarm baseline` on a machine you trust.");
   const fresh = uncovered(scanned, baseline);
@@ -42,10 +65,11 @@ export async function check(ctx: Ctx, opt: { offline?: boolean; sign?: Parameter
   const byWhy = new Map<string, string[]>();
   for (const [k, v] of Object.entries(scanned.gaps)) byWhy.set(v, [...(byWhy.get(v) ?? []), k]);
   for (const [why, what] of byWhy) notes.push(`Could not check ${what.join(", ")}: ${why}`);
-  const lock = loadLock();
+  const ls = await lockState();
+  const lock = ls.lock && ls.why ? { ...ls.lock, reason: ls.why } : ls.lock;
   let verdict = verdictOf(findings);
   if (lock) verdict = "block";
-  const result: Check = { scan: scanned, baseline, findings, accepted: all.length - findings.length, verdict, lock, notes, ms: Date.now() - t0 };
-  saveLast({ scan: forBaseline(scanned), findings, verdict, at: Date.now() });
+  const result: Check = { scan: scanned, baseline, findings, accepted: all.length - findings.length + own.length, verdict, lock, notes, ms: Date.now() - t0, osvUnchecked: osv.unchecked };
+  await saveLast({ scan: forBaseline(scanned), findings, verdict, at: Date.now() });
   return result;
 }

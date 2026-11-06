@@ -1,14 +1,26 @@
 # vswarm
 
-**Check your own machine before it touches production.**
+**Don't be the one who carries it in.**
 
-Attackers increasingly go through the people who hold the keys: a tampered Homebrew package, a "coding
-assignment" from a fake recruiter, a typo-squatted npm module. The malware runs as you, uses the credentials your
-laptop remembers, and the server on the other end only sees a valid token.
+Servers get hardened; they still trust whoever holds valid keys. So attackers go for the developer and the laptop:
+a typo-squatted npm package, a "coding assignment" from a fake recruiter, a poisoned MCP server, a tampered Homebrew
+tap. The malware runs as you, uses what your laptop remembers, and the server only sees a valid token.
 
-vswarm sits in front of that last step. It keeps a record of what your machine looked like when it was clean, tells
-you what changed, finds long-lived credentials that would be worth stealing, and refuses to hand out production
-access (ssh, AWS, Kubernetes) from a machine that does not pass.
+vswarm warns you and pauses at the risky moments, before anything big happens:
+
+- **installing a package**: `guard` checks npm, pip, brew … names before the install runs (look-alikes, known
+  malware, brand-new releases, install scripts);
+- **running a stranger's code**: `try` runs it in a sandbox and tells you what it tried;
+- **adding an AI agent or MCP server**: `agents --inspect` starts it sandboxed and reads what the model will read;
+- **reaching production**: `preflight` / `gate` check the machine before ssh, AWS or kubectl get your credentials.
+
+Every warning says why it is risky and what to do instead. Outside those moments it stays out of your way: a tool
+that cries wolf gets uninstalled, so false alarms are treated as bugs.
+
+It is one local command: no server, no MDM, no per-seat licence, so a solo developer or a small team can actually use
+it. It is **not** an EDR and not a hard access control: malware already running as you can switch it off (see
+[what it protects and what not](SECURITY.md#what-vswarm-can-and-cannot-protect-against)). It complements Socket,
+osquery, EDR and device trust (Teleport, Kolide); it does not replace them.
 
 [ภาษาไทย](README.th.md)
 
@@ -244,13 +256,15 @@ downloads one pinned Bun release from GitHub and installs it only if its SHA-256
 
 vswarm puts these in one local tool for people and small teams without an endpoint platform, and uses the others
 when they are there (`sfw`). Enforcement on the server side (device trust in your identity provider, Teleport) is
-stronger than any check on the laptop; short-lived certificates are vswarm's step in that direction.
+stronger than any check on the laptop; short-lived certificates and signed reports (`vswarm report --json --sign`)
+are vswarm's steps in that direction, see [docs/server-side.md](docs/server-side.md).
 
 ## Privacy
 
 - Everything stays on your machine, under `~/.vswarm/sec` with owner-only permissions. No telemetry.
 - One network call: package **names and versions** to `api.osv.dev` for the known-malicious check, cached for a day.
-  `--offline` skips it; the quiet gate (`preflight --quiet`) only uses the cache.
+  `--offline` skips it; the quiet gate (`preflight --quiet`) asks only about package versions it has never seen,
+  waits at most 3 seconds, and says so when it could not.
 - With `vswarm guard on`, the names you install also go to the registry they come from (registry.npmjs.org,
   api.npmjs.org, api.deps.dev, pypi.org): the same names your package manager is about to send anyway.
 - Credential checks report where and what kind, never the value.
@@ -275,6 +289,12 @@ profile. Inside Docker, run the container with `--security-opt seccomp=unconfine
 
 ## Limits
 
+- **Malware already running as you can disable vswarm.** It can remove the ssh gate from `~/.ssh/config`, stop the
+  watch, or run `vswarm unlock --force` itself. vswarm seals its own files (verdict, lock, baseline, accepted
+  findings, an incident log) with a key kept in the Keychain / Secret Service / DPAPI, so a hand-edited "pass" or a
+  deleted lock is noticed, but a program running as you can read that key too. What vswarm does well is catch what
+  such malware leaves behind before you reach production, and pause the risky moments that let it in; the decision
+  that cannot be bypassed from the laptop belongs on the server ([docs/server-side.md](docs/server-side.md)).
 - It cannot see malware that hides well (rootkits, firmware) or code that ran once and left nothing behind.
 - If a credential was already stolen and is used from the attacker's machine, nothing here sees it. What stops that
   is on the server side: short-lived credentials, hardware keys, device posture checks.

@@ -30,12 +30,13 @@ export interface Malicious {
  * Asks OSV which of these exact package versions are known-malicious. Only names and versions are sent.
  * Answers are cached for a day so preflight does not wait on the network.
  */
-export async function osvMalicious(items: Item[], cacheFile: string, opt: { offline?: boolean } = {}): Promise<{ hits: Malicious[]; checked: number; error?: string }> {
+export async function osvMalicious(items: Item[], cacheFile: string, opt: { offline?: boolean; onlyNew?: boolean; timeoutMs?: number } = {}): Promise<{ hits: Malicious[]; checked: number; error?: string; unchecked?: number }> {
   const cache: Record<string, { at: number; mal: string[]; summary?: string }> = readJson(cacheFile) ?? {};
   const fresh = (k: string) => cache[k] && Date.now() - cache[k].at < 86_400_000;
   const pkgs = items.filter((i) => ECOSYSTEM[i.kind] && i.version);
   const key = (i: Item) => `${ECOSYSTEM[i.kind]}:${i.name}@${i.version}`;
-  const todo = pkgs.filter((i) => !fresh(key(i)));
+  // onlyNew: what was asked about before keeps its cached answer, however old; only versions never asked about are looked up.
+  const todo = pkgs.filter((i) => (opt.onlyNew ? !cache[key(i)] : !fresh(key(i))));
   let error: string | undefined;
   if (todo.length && !opt.offline) {
     try {
@@ -45,7 +46,7 @@ export async function osvMalicious(items: Item[], cacheFile: string, opt: { offl
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ queries: batch.map((p) => ({ package: { name: p.name, ecosystem: ECOSYSTEM[p.kind] }, version: p.version })) }),
-          signal: AbortSignal.timeout(20_000),
+          signal: AbortSignal.timeout(opt.timeoutMs ?? 20_000),
         });
         if (!res.ok) throw new Error(`OSV ${res.status}`);
         const body: any = await res.json();
@@ -58,11 +59,14 @@ export async function osvMalicious(items: Item[], cacheFile: string, opt: { offl
       mkdirSync(dirname(cacheFile), { recursive: true, mode: 0o700 });
       writeFileSync(cacheFile, JSON.stringify(cache), { mode: 0o600 });
     } catch (e: any) {
-      error = `could not reach OSV (${e.message ?? e}); known-malicious check used the cache only`;
+      error = opt.onlyNew
+        ? `could not reach OSV (${e.message ?? e}): ${todo.length} package version${todo.length === 1 ? "" : "s"} new since the last full check ${todo.length === 1 ? "was" : "were"} not checked against known-malicious records`
+        : `could not reach OSV (${e.message ?? e}); known-malicious check used the cache only`;
     }
   }
   const hits = pkgs.filter((p) => cache[key(p)]?.mal.length).map((p) => ({ item: p, ids: cache[key(p)].mal }));
-  return { hits, checked: pkgs.filter((p) => cache[key(p)]).length, error };
+  const checked = pkgs.filter((p) => cache[key(p)]).length;
+  return { hits, checked, error, unchecked: pkgs.length - checked };
 }
 
 /** Popular names that attackers imitate. A short list on purpose: the point is to catch near misses. */

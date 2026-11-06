@@ -7,7 +7,7 @@ import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { ensureHome, HOME, paths, VERSION } from "./home";
 import { dq, exec, shq } from "./sec/ctx";
-import { blockRegex, files, loadBaseline, loadLock, recordManaged, removeBlock } from "./sec/store";
+import { blockRegex, files, forgetKey, loadBaseline, lockState, readBaseline, recordManaged, removeBlock, stateKey } from "./sec/store";
 import { GUARD_END, GUARD_START, guardBlock, psGuardBlock } from "./sec/pkg";
 import { fingerprints, PIN, secureUpdate } from "./sec/update";
 
@@ -331,16 +331,28 @@ export async function doctor(): Promise<boolean> {
     warn("launcher not installed", "run: vswarm install");
     good = false;
   }
-  const base = loadBaseline();
+  // The key that seals vswarm's own files, and where it is.
+  const k = await stateKey();
+  if (!k.key) {
+    bad("sealing key not readable", `${k.error} · ${k.store.where}`);
+    good = false;
+  } else if (k.store.kind === "file" && !process.env.VSWARM_SEC_DIR && !process.env.VSWARM_KEYSTORE)
+    warn("sealing key in a file", `${k.store.where} · no system key store (Keychain, Secret Service, DPAPI) answered; tampering with ~/.vswarm is harder to notice`);
+  else ok(`state files sealed`, k.store.where);
+  const b = await readBaseline();
+  const base = b.untrusted ? undefined : b.value;
   if (base) {
     const days = Math.round((Date.now() - base.at) / 86_400_000);
     (days > 30 ? warn : ok)(`baseline from ${new Date(base.at).toLocaleString()}`, days > 30 ? `${days} days old · refresh it with vswarm baseline once you have reviewed vswarm diff` : `${base.items.length} items`);
+  } else if (b.untrusted) {
+    bad(`the baseline ${b.untrusted}`, "review vswarm diff, then vswarm baseline");
+    good = false;
   } else {
     warn("no baseline", "vswarm baseline on a machine you trust");
     good = false;
   }
-  const lock = loadLock();
-  if (lock) bad(`incident ${lock.incident} is open`, "preflight blocks until vswarm unlock");
+  const { lock, why } = await lockState();
+  if (lock) bad(`incident ${lock.incident} is open`, `${why ? `${why} · ` : ""}preflight blocks until vswarm unlock`);
   const { watchState } = await import("./sec/schedule");
   const w = watchState();
   if (w.on) ok("background watch on", w.state ? `last check ${new Date(w.state.at).toLocaleString()}` : "no check yet");
@@ -539,7 +551,7 @@ export async function install(args: string[]) {
   adoptManagedBlocks();
 
   step("3  baseline");
-  if (loadBaseline()) ok("baseline exists", files.baseline());
+  if (await loadBaseline()) ok("baseline exists", files.baseline());
   else if (!auto && (await yes("Is this machine clean as far as you know? Record it as the baseline now", true))) {
     const p = Bun.spawn([process.execPath, CLI, "baseline", "--yes"], { stdout: "inherit", stderr: "inherit" });
     await p.exited;
@@ -568,6 +580,8 @@ export async function uninstall(args: string[]) {
   if (existsSync(sshCfg) && readFileSync(sshCfg, "utf8").includes(GATE_START)) await gate(["remove"]);
   if (await guardOn()) await guard(["off"]);
   if (args.includes("--purge")) {
+    // The sealing key goes too, or a reinstall would find its incident log "deleted" and stay locked.
+    await forgetKey();
     rmSync(HOME, { recursive: true, force: true });
     ok("data removed", HOME);
   } else console.log(`  ${c.dim(`· kept ${HOME} (baseline, incidents) · remove it too with --purge`)}`);

