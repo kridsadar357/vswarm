@@ -505,13 +505,22 @@ extension ของ Chrome/Edge/Brave, ค่าตั้งของ AI agent (
 ที่พบบ่อย ทั้งหมดมาจากการอ่าน PowerShell รอบเดียวต่อการตรวจ ([windows-snapshot.ps1](../src/sec/collect/windows-snapshot.ps1))
 ส่วนไหนอ่านไม่ได้จะแสดงเป็นช่องว่างที่ยังไม่ได้ตรวจ
 
-ใช้ได้แล้ว: `scan`, `baseline`, `diff`, `watch`, `secrets`, `agents` (แสดงรายการ), `preflight` (รวม `--then`), `accept`,
-`respond`, `report`, `unlock`, `selftest`, `doctor`, `install`, `update`, `uninstall` โดย `watch` จะรัน launcher ทุกชั่วโมง
-(หรือตาม `--every` นาที) ผ่าน `conhost --headless` จึงไม่มีหน้าต่างเด้งขึ้นมา และตอนสแกนจะถือว่า task นี้เป็นของ vswarm
-เฉพาะเมื่อคำสั่งของมันตรงกับที่ vswarm ลงทะเบียนไว้ทุกตัวอักษร ส่วน `uninstall` จะลบ task, launcher และ PATH ออก ส่วน `respond` จะล็อก เก็บหลักฐาน และพิมพ์คำสั่ง PowerShell สำหรับลบสิ่งที่เจอ
-(`Remove-ItemProperty`, `Disable-ScheduledTask`, `Set-Service`, `Remove-CimInstance`) ให้คุณรันเอง บน Windows มันไม่รันเอง
+ใช้ได้ทุกคำสั่ง ยกเว้น `try` และ `agents --inspect` (ต้องใช้ sandbox) กับ `ca`, `cert`, `canary` และ `shot` ซึ่งจะหยุดพร้อม
+exit 4 ถ้าจะใช้ให้ใช้ใน WSL ส่วนที่ต่างจาก macOS และ Linux:
 
-ยังไม่มี: `gate`, `guard`, `pkg`, `try`, `ca`, `cert`, `canary`, `shot` และ `agents --inspect` จะหยุดพร้อม exit 4 ถ้าจะใช้ `try` และ `gate` ให้ใช้ vswarm ใน WSL
+- `watch` เป็น scheduled task ชื่อ `\vswarm\watch` ที่รัน launcher ทุกชั่วโมง (หรือตาม `--every` นาที) ผ่าน
+  `conhost --headless` จึงไม่มีหน้าต่างเด้งขึ้นมา และแจ้งเตือนด้วย toast ตอนสแกนจะถือว่า task นี้เป็นของ vswarm
+  เฉพาะเมื่อคำสั่งของมันตรงกับที่ vswarm ลงทะเบียนไว้ทุกตัวอักษร
+- `gate ssh "prod-*"` ใช้กับ OpenSSH ที่มากับ Windows ได้ คำสั่งตรวจรันผ่าน `cmd.exe` จึงต้อง escape ช่องว่างใน path
+  ของ launcher ด้วย `^` (ถ้า path มี `%` หรือ `"` จะไม่ยอมใส่) และไม่ส่งชื่อ host ต่อไปให้ `cmd.exe` ส่วน `--cert`
+  ยังไม่มีบน Windows
+- `guard on` จะเขียนลง `Documents\WindowsPowerShell\profile.ps1` และลง profile ของ PowerShell 7 ด้วยถ้าติดตั้งไว้
+  โดยคง encoding เดิมของไฟล์ไว้ ถ้า execution policy เป็น Restricted (ค่าเริ่มต้นของ Windows) PowerShell จะไม่รัน
+  profile เลย `guard on` จะเตือนเรื่องนี้ และแก้ได้ด้วย `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned`
+  ถ้าจะข้าม guard ครั้งเดียวให้พิมพ์ `npm.cmd …`
+- `respond` จะล็อก เก็บหลักฐาน และพิมพ์คำสั่ง PowerShell สำหรับลบสิ่งที่เจอ (`Remove-ItemProperty`,
+  `Disable-ScheduledTask`, `Set-Service`, `Remove-CimInstance`) ให้คุณรันเอง มันไม่รันเอง
+- `uninstall` จะลบ task, gate, guard, launcher และ PATH ออก
 
 ### ข้อจำกัด
 

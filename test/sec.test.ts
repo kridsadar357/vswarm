@@ -81,7 +81,7 @@ describe("secrets never leak values", () => {
 
 describe("gate", () => {
   test("the ssh block blocks matching hosts unless preflight exits 0", () => {
-    const g = sshGate(["prod-*", "*.internal"], ["/Users/a/.vswarm/bin/vswarm"]);
+    const g = sshGate(["prod-*", "*.internal"], ["/Users/a/.vswarm/bin/vswarm"], { win: false });
     expect(g).toContain('Match originalhost prod-*,*.internal !exec "/Users/a/.vswarm/bin/vswarm preflight --quiet --host %h"');
     expect(g).toContain("ProxyCommand");
   });
@@ -295,13 +295,13 @@ describe("short-lived SSH certificates", () => {
   }, 60_000);
 
   test("gate --cert writes the session key and certificate into the ssh block", () => {
-    const g = sshGate(["prod-*"], ["/v/vswarm"], { cert: { key: "/v/ca/session", cert: "/v/ca/session-cert.pub" } });
+    const g = sshGate(["prod-*"], ["/v/vswarm"], { win: false, cert: { key: "/v/ca/session", cert: "/v/ca/session-cert.pub" } });
     expect(g).toContain('!exec "/v/vswarm cert --quiet --host %h"');
     expect(g).toContain("CertificateFile /v/ca/session-cert.pub");
   });
 
   test("the ssh block quotes an odd launcher path and refuses patterns that would change the config line", () => {
-    expect(sshGate(["prod-*"], ["/Users/a b/.vswarm/bin/vswarm"])).toContain(`!exec "'/Users/a b/.vswarm/bin/vswarm' preflight --quiet --host %h"`);
+    expect(sshGate(["prod-*"], ["/Users/a b/.vswarm/bin/vswarm"], { win: false })).toContain(`!exec "'/Users/a b/.vswarm/bin/vswarm' preflight --quiet --host %h"`);
     expect(() => sshGate(["prod-* !exec evil"], ["/v/vswarm"])).toThrow(/pattern/);
     expect(() => sshGate(["prod-*\nProxyCommand nc evil"], ["/v/vswarm"])).toThrow(/pattern/);
   });

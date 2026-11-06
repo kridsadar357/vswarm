@@ -535,15 +535,22 @@ Chrome/Edge/Brave extensions, AI agent configs (Claude Desktop and VS Code in `%
 credential files. All of it comes from one read-only PowerShell pass per check
 ([windows-snapshot.ps1](../src/sec/collect/windows-snapshot.ps1)); a part it cannot read is shown as a gap.
 
-Working: `scan`, `baseline`, `diff`, `watch`, `secrets`, `agents` (listing), `preflight` (also `--then`), `accept`,
-`respond`, `report`, `unlock`, `selftest`, `doctor`, `install`, `update`, `uninstall`. `watch` runs the launcher every
-hour (or `--every` minutes) through `conhost --headless`, so no window flashes up; the scan recognises that task as
-vswarm's own only while its action is exactly what vswarm registered. `uninstall` removes the task, the launcher and
-the PATH entry. `respond` locks, keeps evidence and prints the PowerShell commands that would
-remove what it found (`Remove-ItemProperty`, `Disable-ScheduledTask`, `Set-Service`, `Remove-CimInstance`); it never
-runs them itself on Windows.
+Working: everything except `try`, `agents --inspect` (they need the sandbox), `ca`, `cert`, `canary` and `shot`, which
+stop with exit 4; use those inside WSL. What differs from macOS and Linux:
 
-Not yet: `gate`, `guard`, `pkg`, `try`, `ca`, `cert`, `canary`, `shot` and `agents --inspect` stop with exit 4. For `try` and `gate`, use vswarm inside WSL.
+- `watch` is a scheduled task `\vswarm\watch` that runs the launcher every hour (or `--every` minutes) through
+  `conhost --headless`, so no window flashes up, and shows a toast. The scan recognises that task as vswarm's own only
+  while its action is exactly what vswarm registered.
+- `gate ssh "prod-*"` works with the OpenSSH that ships with Windows. Its check runs in `cmd.exe`, so the launcher
+  path is escaped with `^` (a `%` or `"` in it is refused) and the host name is not passed on. `--cert` is not on
+  Windows yet.
+- `guard on` goes into `Documents\WindowsPowerShell\profile.ps1`, and into PowerShell 7's profile when it is
+  installed. Each profile keeps its encoding. PowerShell runs no profile under the Restricted execution policy (the
+  Windows default); `guard on` says so, and `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned` lets it run.
+  Skip it once with `npm.cmd …`.
+- `respond` locks, keeps evidence and prints the PowerShell commands that would remove what it found
+  (`Remove-ItemProperty`, `Disable-ScheduledTask`, `Set-Service`, `Remove-CimInstance`); it never runs them itself.
+- `uninstall` removes the task, the gate, the guard, the launcher and the PATH entry.
 
 ### Limits
 
