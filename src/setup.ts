@@ -158,12 +158,15 @@ function setBlock(file: string, body: string | null, start = BLOCK_START, end = 
   return true;
 }
 
+/** The user's own PATH (not the machine's), through the registry value Windows reads for new terminals. */
 async function windowsPath(add: boolean) {
-  const bin = paths.bin();
+  const { powershell } = await import("./sec/schedule");
+  // The folder travels in an environment variable, so no character in it is read as PowerShell.
   const ps = add
-    ? `$p=[Environment]::GetEnvironmentVariable('Path','User'); if (-not ($p -split ';' -contains '${bin}')) { [Environment]::SetEnvironmentVariable('Path', ('${bin};' + $p).TrimEnd(';'), 'User') }`
-    : `$p=[Environment]::GetEnvironmentVariable('Path','User'); [Environment]::SetEnvironmentVariable('Path', (($p -split ';') | Where-Object { $_ -ne '${bin}' }) -join ';', 'User')`;
-  await Bun.spawn(["powershell", "-NoProfile", "-Command", ps], { stdout: "ignore", stderr: "ignore" }).exited;
+    ? `$b=$env:VSWARM_BIN; $p=[Environment]::GetEnvironmentVariable('Path','User'); if (-not (@($p -split ';') -contains $b)) { [Environment]::SetEnvironmentVariable('Path', ($b + ';' + $p).TrimEnd(';'), 'User') }`
+    : `$b=$env:VSWARM_BIN; $p=[Environment]::GetEnvironmentVariable('Path','User'); [Environment]::SetEnvironmentVariable('Path', ((@($p -split ';') | Where-Object { $_ -and $_ -ne $b }) -join ';'), 'User')`;
+  const r = await exec([powershell(), "-NoProfile", "-NonInteractive", "-Command", ps], { env: { ...process.env, VSWARM_BIN: paths.bin() }, timeoutMs: 30_000 });
+  if (r.code !== 0) warn("could not change your PATH", r.err.trim().split("\n")[0] || `exit ${r.code}`);
 }
 
 // ── Completions
@@ -290,11 +293,11 @@ export async function doctor(): Promise<boolean> {
   step("vswarm");
   ok(`app ${ROOT}`);
   ok(`data ${HOME}`);
-  const onPath = (process.env.PATH ?? "").split(WIN ? ";" : ":").includes(paths.bin());
-  // Windows (phase 1) has no installer yet: vswarm runs as bun src\cli.ts, which is not a fault.
-  if (WIN) console.log(`  ${c.dim("·")} no launcher on Windows yet  ${c.dim(`run: bun ${CLI} <command>`)}`);
-  else if (existsSync(launcherPath()) && onPath) ok("vswarm on PATH", launcherPath());
-  else if (existsSync(launcherPath())) warn("launcher installed, new terminals will have it", `or: export PATH="${paths.bin()}:$PATH"`);
+  // Windows folder names ignore case, and PATH entries may end in a backslash.
+  const norm = (d: string) => (WIN ? d.replace(/[\\/]+$/, "").toLowerCase() : d);
+  const onPath = (process.env.PATH ?? "").split(WIN ? ";" : ":").map(norm).includes(norm(paths.bin()));
+  if (existsSync(launcherPath()) && onPath) ok("vswarm on PATH", launcherPath());
+  else if (existsSync(launcherPath())) warn("launcher installed, new terminals will have it", WIN ? "open a new terminal" : `or: export PATH="${paths.bin()}:$PATH"`);
   else {
     warn("launcher not installed", "run: vswarm install");
     good = false;
@@ -309,8 +312,12 @@ export async function doctor(): Promise<boolean> {
   }
   const lock = loadLock();
   if (lock) bad(`incident ${lock.incident} is open`, "preflight blocks until vswarm unlock");
+  const { watchState } = await import("./sec/schedule");
+  const w = watchState();
+  if (w.on) ok("background watch on", w.state ? `last check ${new Date(w.state.at).toLocaleString()}` : "no check yet");
+  else console.log(`  ${c.dim("·")} background watch off  ${c.dim("vswarm watch on")}`);
   if (WIN) {
-    console.log(`  ${c.dim("·")} ssh gate, background watch and install guard are not on Windows yet  ${c.dim("use them inside WSL")}`);
+    console.log(`  ${c.dim("·")} ssh gate and install guard are not on Windows yet  ${c.dim("use them inside WSL")}`);
     console.log();
     return good;
   }
@@ -318,10 +325,6 @@ export async function doctor(): Promise<boolean> {
   const sshCfg = existsSync(sshCfgPath) ? readFileSync(sshCfgPath, "utf8") : "";
   if (sshCfg.includes(GATE_START)) ok("ssh gate installed", "~/.ssh/config");
   else console.log(`  ${c.dim("·")} ssh gate not installed  ${c.dim('vswarm gate ssh "prod-*"')}`);
-  const { watchState } = await import("./sec/schedule");
-  const w = watchState();
-  if (w.on) ok("background watch on", w.state ? `last check ${new Date(w.state.at).toLocaleString()}` : "no check yet");
-  else console.log(`  ${c.dim("·")} background watch off  ${c.dim("vswarm watch on")}`);
   if (guardOn()) ok("install guard on", "npm, pip, brew … are checked before installing");
   else console.log(`  ${c.dim("·")} install guard off  ${c.dim("vswarm guard on")}`);
   console.log();
@@ -482,6 +485,9 @@ export async function install(args: string[]) {
 
 export async function uninstall(args: string[]) {
   banner("uninstall");
+  // The background check runs the launcher; it goes first, or it would fail every hour from now on.
+  const { watchOff, watchState } = await import("./sec/schedule");
+  if (watchState().on) for (const f of await watchOff()) ok(`removed ${f}`);
   if (existsSync(launcherPath())) rmSync(launcherPath());
   ok("launcher removed");
   if (WIN) await windowsPath(false);

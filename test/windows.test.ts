@@ -375,7 +375,7 @@ describe("windows: respond and the command line", () => {
 
   test.if(process.platform === "win32")("on Windows, commands of later phases stop with exit 4 and point to WSL", async () => {
     const sec = tmp("sec");
-    for (const cmd of [["gate", "ssh", "prod-*"], ["guard", "on"], ["watch", "on"], ["try", "."], ["ca", "init"], ["cert"], ["canary", "list"], ["shot", "x"], ["install"], ["uninstall"], ["update"], ["agents", "--inspect"]]) {
+    for (const cmd of [["gate", "ssh", "prod-*"], ["guard", "on"], ["try", "."], ["ca", "init"], ["cert"], ["canary", "list"], ["shot", "x"], ["pkg", "npm", "i", "x"], ["agents", "--inspect"]]) {
       const r = await vswarm(sec, ...cmd);
       expect([cmd.join(" "), r.code]).toEqual([cmd.join(" "), 4]);
       expect(r.err).toContain("not on Windows yet");
@@ -419,5 +419,42 @@ describe("windows: through scan()", () => {
     const s = await scan({ home, pathDirs: [], system: false, host: "t", user: "t", run: async () => undefined }, { live: false });
     expect(s.items.filter((i) => i.kind === "wmi" || i.id.startsWith("reg:"))).toEqual([]);
     expect(Object.keys(s.gaps).filter((k) => k.startsWith("Windows"))).toEqual([]);
+  });
+});
+
+describe("windows: background watch as a scheduled task", () => {
+  const { winTaskAction, winTaskXml } = require("../src/sec/schedule");
+  const { ownWatchTask } = require("../src/sec/collect/windows");
+  const { recordManagedFile } = require("../src/sec/store");
+  const launcher = "C:\\Users\\a & b\\.vswarm\\bin\\vswarm.cmd";
+
+  test("the task runs the launcher headless every n minutes, with XML characters escaped", () => {
+    const xml = winTaskXml(launcher, 15);
+    expect(xml).toContain("<Interval>PT15M</Interval>");
+    expect(xml).toContain("<Command>conhost.exe</Command>");
+    expect(xml).toContain("<Arguments>--headless &quot;C:\\Users\\a &amp; b\\.vswarm\\bin\\vswarm.cmd&quot; watch run</Arguments>");
+    expect(xml).toContain("<LogonType>InteractiveToken</LogonType>");
+    expect(xml).not.toContain("HighestAvailable");
+    expect(() => winTaskAction('C:\\x"y\\vswarm.cmd')).toThrow("double quote");
+  });
+
+  test("the scan skips vswarm's own task only while its action is exactly what vswarm registered", () => {
+    const sec = tmp("sec");
+    process.env.VSWARM_SEC_DIR = sec;
+    try {
+      const a = winTaskAction(launcher);
+      const action = `${a.execute} ${a.args}`;
+      const task = (id: string, program: string) => ({ kind: "launch", id, name: id.slice(5), source: "system-agent", hash: "", meta: { program } }) as any;
+      expect(ownWatchTask(task("task:\\vswarm\\watch", action))).toBe(false);
+      recordManagedFile(action);
+      expect(ownWatchTask(task("task:\\vswarm\\watch", action))).toBe(true);
+      expect(ownWatchTask(task("task:\\vswarm\\watch", action + " & curl evil"))).toBe(false);
+      expect(ownWatchTask(task("task:\\Updater", action))).toBe(false);
+      // Through the real collector path: the same snapshot with and without the task.
+      const items = windowsItems({ tasks: [{ path: "\\vswarm\\", name: "watch", state: "Ready", actions: [action] }] }, tmp("home")).items;
+      expect(items.filter((i) => !ownWatchTask(i))).toEqual([]);
+    } finally {
+      delete process.env.VSWARM_SEC_DIR;
+    }
   });
 });

@@ -620,7 +620,8 @@ describe("background watch job files", () => {
   test("--every must be a whole number of minutes", () => {
     for (const bad of [NaN, 0, -5, 1.5, Infinity]) expect(() => jobFiles("/v/vswarm", bad, tmp("home"))).toThrow("--every");
     const home = tmp("home");
-    for (const p of Object.keys(jobFiles("/v/vswarm", 1, home))) expect(p.startsWith(home)).toBe(true);
+    // Windows keeps only a copy of the task definition, in vswarm's data folder; the task is in Task Scheduler.
+    if (process.platform !== "win32") for (const p of Object.keys(jobFiles("/v/vswarm", 1, home))) expect(p.startsWith(home)).toBe(true);
   });
 
   test.skipIf(process.platform !== "linux")("Linux: a launcher path with a space is quoted in ExecStart", () => {

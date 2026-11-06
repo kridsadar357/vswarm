@@ -513,14 +513,19 @@ Environment: `VSWARM_HOME` (moves `~/.vswarm`), `VSWARM_GUARD=off`, `VSWARM_SEC_
 
 ### Windows (preview)
 
-Phase 1 checks a Windows 10/11 machine; it does not change it. Run it from a clone with Bun, in Windows PowerShell 5.1
-or newer (no administrator needed):
+Checks a Windows 10/11 machine and watches it in the background; it never changes what it finds. Needs git and
+Windows PowerShell 5.1 or newer, no administrator. The installer adds Bun if it is missing, puts vswarm in
+`~\.vswarm\app` (the newest signed release once there is one, after checking its signature) and `vswarm.cmd` on your
+user PATH:
 
 ```powershell
-git clone https://github.com/kridsadar357/vswarm.git; cd vswarm; bun install
-bun src/cli.ts doctor        # PowerShell answers, and what it could not read
-bun src/cli.ts scan
+powershell -ExecutionPolicy Bypass -c "irm https://raw.githubusercontent.com/kridsadar357/vswarm/main/install.ps1 | iex"
+vswarm doctor        # PowerShell answers, and what it could not read
+vswarm scan
+vswarm watch on      # a scheduled task \vswarm\watch for you only, with a toast when something new appears
 ```
+
+From a clone instead: `bun install`, then `bun src/cli.ts <command>`.
 
 What is checked: Run and RunOnce values (HKCU, HKLM, 32-bit), Startup folders (shortcuts resolved), scheduled tasks
 outside `\Microsoft\`, auto-start services outside the Windows folder, WMI permanent event subscriptions (the stock
@@ -530,13 +535,15 @@ Chrome/Edge/Brave extensions, AI agent configs (Claude Desktop and VS Code in `%
 credential files. All of it comes from one read-only PowerShell pass per check
 ([windows-snapshot.ps1](../src/sec/collect/windows-snapshot.ps1)); a part it cannot read is shown as a gap.
 
-Working: `scan`, `baseline`, `diff`, `secrets`, `agents` (listing), `preflight` (also `--then`), `accept`, `respond`,
-`report`, `unlock`, `selftest`, `doctor`. `respond` locks, keeps evidence and prints the PowerShell commands that would
+Working: `scan`, `baseline`, `diff`, `watch`, `secrets`, `agents` (listing), `preflight` (also `--then`), `accept`,
+`respond`, `report`, `unlock`, `selftest`, `doctor`, `install`, `update`, `uninstall`. `watch` runs the launcher every
+hour (or `--every` minutes) through `conhost --headless`, so no window flashes up; the scan recognises that task as
+vswarm's own only while its action is exactly what vswarm registered. `uninstall` removes the task, the launcher and
+the PATH entry. `respond` locks, keeps evidence and prints the PowerShell commands that would
 remove what it found (`Remove-ItemProperty`, `Disable-ScheduledTask`, `Set-Service`, `Remove-CimInstance`); it never
 runs them itself on Windows.
 
-Not yet: `gate`, `guard`, `pkg`, `watch`, `try`, `ca`, `cert`, `canary`, `shot`, `agents --inspect` and
-`install`/`update` stop with exit 4. For `try` and `gate`, use vswarm inside WSL.
+Not yet: `gate`, `guard`, `pkg`, `try`, `ca`, `cert`, `canary`, `shot` and `agents --inspect` stop with exit 4. For `try` and `gate`, use vswarm inside WSL.
 
 ### Limits
 

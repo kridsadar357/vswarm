@@ -34,3 +34,25 @@ jobs:
           bun src/cli.ts scan --offline || code=$?
           echo "exit $code"
           [ "$code" = 0 ] || [ "$code" = 3 ]
+      # Windows (phase 2): install, the background watch as a real scheduled task, and uninstall, on the runner.
+      - name: Windows install and watch
+        if: runner.os == 'Windows'
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $env:VSWARM_HOME = Join-Path $env:RUNNER_TEMP 'vswarm-home'
+          $vs = Join-Path $env:VSWARM_HOME 'bin\vswarm.cmd'
+          bun src/cli.ts install --yes; if ($LASTEXITCODE) { throw "install exit $LASTEXITCODE" }
+          if (-not (Test-Path $vs)) { throw "no launcher at $vs" }
+          bun src/cli.ts baseline --yes; if ($LASTEXITCODE) { throw "baseline exit $LASTEXITCODE" }
+          bun src/cli.ts watch on --every 30; if ($LASTEXITCODE) { throw "watch on exit $LASTEXITCODE" }
+          $t = Get-ScheduledTask -TaskPath '\vswarm\' -TaskName 'watch'
+          "$($t.Actions[0].Execute) $($t.Actions[0].Arguments)"
+          bun src/cli.ts watch run; if ($LASTEXITCODE) { throw "watch run exit $LASTEXITCODE" }
+          # vswarm's own task is not a new scheduled task in the diff.
+          $diff = (bun src/cli.ts diff) -join "`n"
+          $diff
+          if ($diff -match 'vswarm\\watch') { throw 'the scan reported vswarm''s own task' }
+          bun src/cli.ts uninstall; if ($LASTEXITCODE) { throw "uninstall exit $LASTEXITCODE" }
+          if (Get-ScheduledTask -TaskPath '\vswarm\' -TaskName 'watch' -ErrorAction SilentlyContinue) { throw 'uninstall left the task behind' }
+          if (Test-Path $vs) { throw 'uninstall left the launcher behind' }

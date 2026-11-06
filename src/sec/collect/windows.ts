@@ -9,6 +9,7 @@
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { exec, fileHash, sha256, type Ctx } from "../ctx";
+import { isManagedFile } from "../store";
 import type { Item } from "../types";
 import { suspiciousLocation, WIN_PATH } from "./system";
 
@@ -300,7 +301,12 @@ export async function windows(ctx: Ctx): Promise<{ items: Item[]; texts: Record<
   }
   const r = windowsItems(snap, ctx.home);
   for (const [k, v] of Object.entries(r.gaps)) ctx.gap?.(k, v);
-  return { items: r.items, texts: r.texts };
+  return { items: r.items.filter((i) => !ownWatchTask(i)), texts: r.texts };
+}
+
+/** vswarm's own background check (vswarm watch), with exactly the action vswarm registered. */
+export function ownWatchTask(i: Item): boolean {
+  return i.kind === "launch" && i.id === "task:\\vswarm\\watch" && isManagedFile(sha256(String(i.meta?.program ?? "")));
 }
 
 // ── containment, as commands to paste (phase 1 never changes a Windows machine by itself)

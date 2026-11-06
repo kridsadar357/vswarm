@@ -484,14 +484,18 @@ vswarm trust           # กุญแจที่เครื่องนี้�
 
 ### Windows (รุ่นทดลอง)
 
-ระยะที่ 1 ตรวจเครื่อง Windows 10/11 ได้ แต่ยังไม่แก้ไขอะไรในเครื่อง รันจากโค้ดที่ clone มาด้วย Bun ใน Windows PowerShell 5.1
-ขึ้นไป (ไม่ต้องเป็น administrator)
+ตรวจเครื่อง Windows 10/11 และเฝ้าดูเบื้องหลังได้ โดยไม่แก้ไขสิ่งที่เจอเอง ต้องมี git และ Windows PowerShell 5.1 ขึ้นไป
+ไม่ต้องเป็น administrator ตัวติดตั้งจะลง Bun ให้ถ้ายังไม่มี เอา vswarm ไปไว้ที่ `~\.vswarm\app` (ถ้ามี release ที่เซ็นแล้ว
+จะใช้ตัวล่าสุดหลังตรวจลายเซ็น) และใส่ `vswarm.cmd` ไว้ใน PATH ของผู้ใช้คุณ
 
 ```powershell
-git clone https://github.com/kridsadar357/vswarm.git; cd vswarm; bun install
-bun src/cli.ts doctor        # PowerShell ตอบไหม และส่วนไหนอ่านไม่ได้
-bun src/cli.ts scan
+powershell -ExecutionPolicy Bypass -c "irm https://raw.githubusercontent.com/kridsadar357/vswarm/main/install.ps1 | iex"
+vswarm doctor        # PowerShell ตอบไหม และส่วนไหนอ่านไม่ได้
+vswarm scan
+vswarm watch on      # scheduled task \vswarm\watch ของคุณคนเดียว มี toast แจ้งเมื่อเจอของใหม่
 ```
+
+ถ้ารันจากโค้ดที่ clone มา: `bun install` แล้ว `bun src/cli.ts <คำสั่ง>`
 
 สิ่งที่ตรวจ: ค่า Run และ RunOnce (HKCU, HKLM, 32-bit), โฟลเดอร์ Startup (อ่าน shortcut ว่าเปิดอะไร), scheduled task
 ที่อยู่นอก `\Microsoft\`, service ที่เริ่มเองและไม่ได้อยู่ในโฟลเดอร์ Windows, WMI event subscription แบบถาวร (ตัว
@@ -501,12 +505,13 @@ extension ของ Chrome/Edge/Brave, ค่าตั้งของ AI agent (
 ที่พบบ่อย ทั้งหมดมาจากการอ่าน PowerShell รอบเดียวต่อการตรวจ ([windows-snapshot.ps1](../src/sec/collect/windows-snapshot.ps1))
 ส่วนไหนอ่านไม่ได้จะแสดงเป็นช่องว่างที่ยังไม่ได้ตรวจ
 
-ใช้ได้แล้ว: `scan`, `baseline`, `diff`, `secrets`, `agents` (แสดงรายการ), `preflight` (รวม `--then`), `accept`, `respond`,
-`report`, `unlock`, `selftest`, `doctor` โดย `respond` จะล็อก เก็บหลักฐาน และพิมพ์คำสั่ง PowerShell สำหรับลบสิ่งที่เจอ
+ใช้ได้แล้ว: `scan`, `baseline`, `diff`, `watch`, `secrets`, `agents` (แสดงรายการ), `preflight` (รวม `--then`), `accept`,
+`respond`, `report`, `unlock`, `selftest`, `doctor`, `install`, `update`, `uninstall` โดย `watch` จะรัน launcher ทุกชั่วโมง
+(หรือตาม `--every` นาที) ผ่าน `conhost --headless` จึงไม่มีหน้าต่างเด้งขึ้นมา และตอนสแกนจะถือว่า task นี้เป็นของ vswarm
+เฉพาะเมื่อคำสั่งของมันตรงกับที่ vswarm ลงทะเบียนไว้ทุกตัวอักษร ส่วน `uninstall` จะลบ task, launcher และ PATH ออก ส่วน `respond` จะล็อก เก็บหลักฐาน และพิมพ์คำสั่ง PowerShell สำหรับลบสิ่งที่เจอ
 (`Remove-ItemProperty`, `Disable-ScheduledTask`, `Set-Service`, `Remove-CimInstance`) ให้คุณรันเอง บน Windows มันไม่รันเอง
 
-ยังไม่มี: `gate`, `guard`, `pkg`, `watch`, `try`, `ca`, `cert`, `canary`, `shot`, `agents --inspect` และ
-`install`/`update` จะหยุดพร้อม exit 4 ถ้าจะใช้ `try` และ `gate` ให้ใช้ vswarm ใน WSL
+ยังไม่มี: `gate`, `guard`, `pkg`, `try`, `ca`, `cert`, `canary`, `shot` และ `agents --inspect` จะหยุดพร้อม exit 4 ถ้าจะใช้ `try` และ `gate` ให้ใช้ vswarm ใน WSL
 
 ### ข้อจำกัด
 
