@@ -479,7 +479,8 @@ export async function install(args: string[]) {
   const rc = WIN ? "open a new terminal" : `open a new terminal, or: source ${rcFiles()[0].file}`;
   console.log(`  ${c.bold("next")}  ${c.dim(rc)}`);
   console.log(`        ${c.cyan("vswarm scan")}                         ${c.dim("check this machine")}`);
-  console.log(`        ${c.cyan('vswarm gate ssh "prod-*"')}            ${c.dim("guard ssh to production hosts")}`);
+  if (WIN) console.log(`        ${c.cyan("vswarm watch on")}                     ${c.dim("check every hour in the background")}`);
+  else console.log(`        ${c.cyan('vswarm gate ssh "prod-*"')}            ${c.dim("guard ssh to production hosts")}`);
   console.log(`        ${c.cyan("vswarm help")}                         ${c.dim("aws and kubectl gates, respond, report")}\n`);
 }
 

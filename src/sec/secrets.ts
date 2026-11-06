@@ -156,7 +156,8 @@ export async function secrets(ctx: Ctx): Promise<Finding[]> {
   const plain = Object.entries<any>(dc?.auths ?? {}).filter(([, v]) => v && typeof v.auth === "string" && v.auth.length > 0).map(([k]) => k);
   if (plain.length) {
     out.push(finding("docker", "medium", `Docker registry passwords stored in plain config (${plain.length})`, [`registries: ${plain.join(", ")}`],
-      "Set \"credsStore\": \"osxkeychain\" in ~/.docker/config.json and docker login again."));
+      // The helper Docker ships for each system: Keychain, Windows Credential Manager, or the desktop secret service.
+      `Set "credsStore": "${process.platform === "darwin" ? "osxkeychain" : process.platform === "win32" ? "wincred" : "secretservice"}" in ~/.docker/config.json and docker login again.`));
   }
 
   // Tokens in plain files of common CLIs

@@ -9,6 +9,9 @@ import { stockWmi, winLaunchRisk } from "./collect/windows";
 import { ADDED_KINDS, type Finding, type Item, type Scan, type Severity } from "./types";
 
 /** Lines in a shell startup file that fetch, decode or start something in the background. */
+/** The command that names a process's parent, for the system vswarm runs on. */
+const parentOf = (pid: unknown) =>
+  process.platform === "win32" ? `Get-CimInstance Win32_Process -Filter "ProcessId=${Number(pid) || "PID"}" | Select-Object ParentProcessId` : `ps -o ppid= -p ${Number(pid) || "PID"}`;
 const RISKY_LINE = /\b(curl|wget|nc|ncat|socat|base64|openssl\s+enc|eval|osascript|python3?\s+-c|node\s+-e|perl\s+-e|ruby\s+-e|nohup|launchctl|chmod\s+\+x)\b|&\s*$|\|\s*(ba|z)?sh\b|\/tmp\/|\.cache\//;
 
 /**
@@ -92,7 +95,7 @@ export async function evaluate(input: RuleInput): Promise<Finding[]> {
   for (const i of scan.items) {
     if (i.kind === "proc") {
       add({ id: `proc:${i.id}`, rule: "proc-location", severity: "high", title: `Program running from an unusual place: ${i.path}`,
-        detail: [String(i.meta?.where ?? ""), `pid ${i.meta?.pid}`], fix: "Find out what started it (ps -o ppid= -p PID); if you do not know it, vswarm respond", item: i });
+        detail: [String(i.meta?.where ?? ""), `pid ${i.meta?.pid}`], fix: `Find out what started it (${parentOf(i.meta?.pid)}); if you do not know it, vswarm respond`, item: i });
     }
     if (i.kind === "conn") {
       const where = i.meta?.where as string | undefined;
