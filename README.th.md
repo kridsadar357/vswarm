@@ -13,7 +13,7 @@ vswarm อยู่ตรงก่อนขั้นสุดท้ายนั�
 
 ## ติดตั้ง
 
-ใช้ได้ทั้ง macOS และ Linux ต้องมี [Bun](https://bun.sh) และ git บน Linux ถ้าจะใช้ `vswarm try` ต้องลง bubblewrap และ strace ด้วย (`sudo apt install bubblewrap strace`) ส่วน Windows 10/11 มีรุ่นทดลองที่ตรวจเครื่องได้ (Run key, task, service, WMI, PowerShell profile …) ส่วน `try` และ `gate` ตอนนี้ให้ใช้ใน WSL ดู[Windows (รุ่นทดลอง)](docs/guide.th.md#windows-รุ่นทดลอง)
+ใช้ได้ทั้ง macOS และ Linux ต้องมี git และ [Bun](https://bun.sh) (ตัวติดตั้งใช้ Bun ที่มีอยู่ หรือลง Bun รุ่นที่กำหนดไว้หลังตรวจ SHA-256) บน Linux ถ้าจะใช้ `vswarm try` ต้องลง bubblewrap และ strace ด้วย (`sudo apt install bubblewrap strace`) ส่วน Windows 10/11 มีรุ่นทดลองที่ตรวจเครื่องได้ (Run key, task, service, WMI, PowerShell profile …) ส่วน `try` และ `gate` ตอนนี้ให้ใช้ใน WSL ดู[Windows (รุ่นทดลอง)](docs/guide.th.md#windows-รุ่นทดลอง)
 
 บน Linux vswarm ตรวจ systemd unit, XDG autostart, `/etc/ld.so.preload` และ process จาก `/proc`
 - `vswarm try` ใช้ bubblewrap: ซ่อน home ทุกคน ซ่อน `/run` (socket ของ Docker, D-Bus, keyring) ระบบเป็นอ่านอย่างเดียว และมี network กับ pid ของตัวเอง
@@ -77,9 +77,13 @@ AI agent รันโค้ดด้วยสิทธิ์ของคุณ �
 
 ผล preflight: **PASS** ไปต่อ · **WARN** ไปต่อได้แต่ควรแก้ · **BLOCK** ไม่ปล่อย credential
 
-## อัปเดตเฉพาะ release ที่เซ็นแล้ว
+## อัปเดต: ระบบตรวจลายเซ็นทำเสร็จแล้ว แต่ยังไม่ได้เปิดใช้
 
-`vswarm update` ติดตั้งเฉพาะ tag ที่เซ็นด้วยกุญแจ release ที่เครื่องคุณจำไว้ตอนติดตั้ง และไม่ถอยกลับไปเวอร์ชันเก่า ถ้า repo หรือบัญชี GitHub ของผู้ดูแลถูกยึด เครื่องที่ลงไว้จะไม่รับ release ปลอมและใช้เวอร์ชันเดิมต่อ ดูกุญแจที่จำไว้ได้ด้วย `vswarm trust`
+ระบบตรวจลายเซ็นอยู่ในโค้ดแล้วและจะบังคับใช้ทันทีที่มีกุญแจให้ตรวจ แต่ **ผู้ดูแลยังไม่ได้ประกาศกุญแจ release**: [`trust/allowed_signers`](trust/allowed_signers) ยังไม่มีกุญแจ และ tag ที่มีอยู่ยังไม่ได้เซ็น ตอนนี้ตัวติดตั้งจึงติดตั้งจาก `main` และ `vswarm update` ตาม `main` ด้วย `git pull` โดยบอกให้รู้ทุกครั้ง ความปลอดภัยของการอัปเดตตอนนี้เท่ากับบัญชี GitHub ที่ดูแล repo นี้
+
+เมื่อมี release ที่เซ็นแล้ว ตัวติดตั้งจะตรวจลายเซ็นของ tag ล่าสุด `vswarm install` จะจำกุญแจไว้ และหลังจากนั้น `vswarm update` จะติดตั้งเฉพาะ tag ที่เซ็นด้วยกุญแจที่จำไว้ และไม่ถอยกลับไปเวอร์ชันเก่า ดูกุญแจที่จำไว้ได้ด้วย `vswarm trust` ขั้นตอนอยู่ใน [SECURITY.md](SECURITY.md)
+
+ตัวติดตั้งไม่ได้ดึงสคริปต์จากเน็ตมารันเพื่อลง Bun: ใช้ Bun ที่มีอยู่ หรือดาวน์โหลด Bun รุ่นที่กำหนดไว้จาก GitHub แล้วติดตั้งเฉพาะเมื่อ SHA-256 ตรงกับค่าในสคริปต์
 
 ## ความเป็นส่วนตัว
 

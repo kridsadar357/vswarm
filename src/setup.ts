@@ -222,7 +222,7 @@ export const COMMANDS: [string, string][] = [
   ["shot", "screenshot a localhost page or local file"],
   ["doctor", "check the installation"],
   ["install", "set up launcher, PATH, completions"],
-  ["update", "move to the newest signed release"],
+  ["update", "update vswarm (signature-checked once releases are signed)"],
   ["trust", "release keys updates must be signed with"],
   ["uninstall", "remove launcher and PATH"],
   ["help", "show help"],
@@ -598,7 +598,7 @@ export async function update(args: string[] = []) {
     return ok(`already on ${r.at}, signed by a trusted release key\n`);
   }
   if (r.status === "unsigned-repo") {
-    warn(args.includes("--unsigned") ? "following main without signature checks (--unsigned)" : "this repository has no signed releases yet; following main as before");
+    warn(args.includes("--unsigned") ? "following main without signature checks (--unsigned)" : "this repository has no signed releases yet; following main without a signature check");
     if ((await run(["git", "rev-parse", "--abbrev-ref", "HEAD"])) === "HEAD") await run(["git", "checkout", "--quiet", "main"]);
     await run(["git", "pull", "--ff-only", "--quiet", "origin", "main"]);
   } else {

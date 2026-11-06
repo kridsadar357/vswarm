@@ -30,14 +30,14 @@ vswarm เป็นเครื่องมือ command line แบบ open so
 
 ## 1. ติดตั้ง
 
-ใช้ได้กับ **macOS** และ **Linux** ต้องมี git (ถ้ายังไม่มี Bun ตัวติดตั้งจะลงให้) ส่วน Windows มีรุ่นทดลองที่ตรวจเครื่องได้ ดู[Windows (รุ่นทดลอง)](#windows-รุ่นทดลอง)
+ใช้ได้กับ **macOS** และ **Linux** ต้องมี git ตัวติดตั้งจะใช้ Bun ที่มีอยู่ใน PATH ถ้ายังไม่มี จะดาวน์โหลด Bun รุ่นที่กำหนดไว้ (1.3.14) จาก GitHub แล้วติดตั้งลง `~/.bun/bin` เฉพาะเมื่อค่า SHA-256 ตรงกับค่าที่เขียนไว้ในสคริปต์ ส่วน Windows มีรุ่นทดลองที่ตรวจเครื่องได้ ดู[Windows (รุ่นทดลอง)](#windows-รุ่นทดลอง)
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/kridsadar357/vswarm/main/install.sh | sh
 ```
 
 ตัวติดตั้งจะ:
-- ดาวน์โหลด vswarm ไปไว้ที่ `~/.vswarm/app` และตรวจลายเซ็นของ release (ดู[ข้อ 14](#14-อัปเดตอย่างปลอดภัย-update-และ-trust))
+- ดาวน์โหลด vswarm ไปไว้ที่ `~/.vswarm/app` และตรวจลายเซ็นของ release เมื่อมี release ที่เซ็นแล้ว ตอนนี้ยังไม่มี จึงติดตั้งจาก `main` และแจ้งให้รู้ (ดู[ข้อ 14](#14-อัปเดตอย่างปลอดภัย-update-และ-trust))
 - ใส่คำสั่ง `vswarm` ใน PATH และติดตั้ง tab completion ของ zsh/bash
 - ถามว่าจะบันทึก baseline เลยไหม
 
@@ -403,18 +403,20 @@ vswarm ไม่นับ canary ของคุณเองเป็นคว�
 
 ## 14. อัปเดตอย่างปลอดภัย: update และ trust
 
-`vswarm update` จะย้ายไปใช้ release tag ใหม่ **เฉพาะเมื่อเซ็นด้วยกุญแจ release ที่เครื่องคุณจำไว้** ตอนติดตั้ง และไม่ยอมถอยกลับไปเวอร์ชันเก่า ถ้า repo หรือบัญชี GitHub ของผู้ดูแลถูกยึด เครื่องที่ลงไว้จะไม่รับ release ปลอม
+**สถานะตอนนี้: ระบบตรวจลายเซ็นทำเสร็จแล้ว แต่ยังไม่ได้เปิดใช้จริง** ผู้ดูแลยังไม่ได้ประกาศกุญแจ release จึงยังไม่มี release ที่เซ็น `vswarm update` จึงตาม `main` ด้วย `git pull` และขึ้นข้อความว่า "this repository has no signed releases yet" ตัวติดตั้งก็ติดตั้งจาก `main` แบบเดียวกัน ระหว่างนี้การอัปเดตปลอดภัยเท่ากับ repo บน GitHub และบัญชีที่ดูแลมันเท่านั้น
+
+เมื่อผู้ดูแลประกาศกุญแจและเซ็น release แล้ว `vswarm update` จะย้ายไปใช้ release tag ใหม่ **เฉพาะเมื่อเซ็นด้วยกุญแจ release ที่เครื่องคุณจำไว้** และไม่ยอมถอยกลับไปเวอร์ชันเก่า release แรกที่เซ็นแล้วที่คุณติดตั้งหรืออัปเดตไป จะเป็นตัวที่เครื่องจำกุญแจไว้ (trust on first use) หลังจากนั้นถ้า repo หรือบัญชี GitHub ของผู้ดูแลถูกยึด เครื่องที่ลงไว้จะไม่รับ release ปลอม
 
 ```bash
-vswarm update          # release ล่าสุดที่เซ็นถูกต้อง
-vswarm trust           # กุญแจที่เครื่องนี้ยอมรับ (fingerprint)
+vswarm update          # ตอนนี้: main · เมื่อมี release ที่เซ็นแล้ว: release ล่าสุดที่เซ็นถูกต้อง
+vswarm trust           # กุญแจที่เครื่องนี้ยอมรับ (fingerprint) ยังไม่มีจนกว่าจะมี release แรกที่เซ็น
 ```
 
 ![vswarm trust](img/trust.png)
 
 เทียบ fingerprint ที่ `vswarm trust` แสดงกับที่ประกาศใน [SECURITY.md](../SECURITY.md) และหน้า release จุดอ่อนคือการติดตั้งครั้งแรก: ถ้า repo ถูกยึดตั้งแต่ก่อนคุณติดตั้ง ผู้โจมตีใส่กุญแจของตัวเองได้ ถ้าเรื่องนี้สำคัญ ให้เทียบ fingerprint ผ่านช่องทางอื่นด้วย
 
-สำหรับนักพัฒนา: `vswarm update --unsigned` ตาม branch main โดยไม่ตรวจลายเซ็น
+สำหรับนักพัฒนา: `vswarm update --unsigned` ตาม branch main โดยไม่ตรวจลายเซ็น (ใช้ได้แม้หลังเปิดการเซ็นแล้ว) · ผู้ดูแล: ขั้นตอนเปิดการเซ็น release อยู่ใน [SECURITY.md](../SECURITY.md#for-the-maintainer-switching-signing-on)
 
 ## 15. รายการคำสั่งทั้งหมด
 
@@ -440,7 +442,7 @@ vswarm trust           # กุญแจที่เครื่องนี้�
 | `vswarm accept <id…>` · `--all` · `--list` · `--remove <id>` | ยอมรับสิ่งที่ตรวจแล้ว |
 | `vswarm canary plant aws\|dns\|env` · `list` · `remove <id\|all>` | credential ล่อ |
 | `vswarm selftest` | วัดอัตราการจับ |
-| `vswarm update [--unsigned]` · `vswarm trust [pin]` | อัปเดตเฉพาะ release ที่เซ็นแล้ว |
+| `vswarm update [--unsigned]` · `vswarm trust [pin]` | อัปเดต (ตรวจลายเซ็นเมื่อมี release ที่เซ็นแล้ว) |
 | `vswarm doctor` · `install` · `uninstall [--purge]` · `completions zsh\|bash` · `version` | ติดตั้งและดูแล |
 
 ## 16. ไฟล์ ค่าตั้ง และความเป็นส่วนตัว
@@ -485,7 +487,7 @@ vswarm trust           # กุญแจที่เครื่องนี้�
 ### Windows (รุ่นทดลอง)
 
 ตรวจเครื่อง Windows 10/11 และเฝ้าดูเบื้องหลังได้ โดยไม่แก้ไขสิ่งที่เจอเอง ต้องมี git และ Windows PowerShell 5.1 ขึ้นไป
-ไม่ต้องเป็น administrator ตัวติดตั้งจะลง Bun ให้ถ้ายังไม่มี เอา vswarm ไปไว้ที่ `~\.vswarm\app` (ถ้ามี release ที่เซ็นแล้ว
+ไม่ต้องเป็น administrator ตัวติดตั้งจะใช้ Bun ที่มีอยู่ หรือลง Bun รุ่นที่กำหนดไว้หลังตรวจ SHA-256 (x64, x64 ที่ไม่มี AVX2, ARM64) เอา vswarm ไปไว้ที่ `~\.vswarm\app` (ถ้ามี release ที่เซ็นแล้ว
 จะใช้ตัวล่าสุดหลังตรวจลายเซ็น) และใส่ `vswarm.cmd` ไว้ใน PATH ของผู้ใช้คุณ
 
 ```powershell

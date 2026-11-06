@@ -98,7 +98,7 @@ function usage() {
   row("vswarm unlock", "close the incident once the machine is clean");
   console.log(`\n  ${c.bold("trust, but verify")}`);
   row("vswarm selftest", "plant fake threats in a sandbox home, print the detection rate");
-  row("vswarm doctor · install · update · uninstall", "set-up (update installs signed releases only)");
+  row("vswarm doctor · install · update · uninstall", "set-up (update: signed releases once published, main until then)");
   row("vswarm trust", "release keys this machine accepts updates from");
   console.log(`\n  ${c.bold("gates for other tools")}`);
   console.log(c.dim("    ~/.aws/config     credential_process = vswarm preflight --quiet --then aws configure export-credentials --profile prod-sso --format process"));

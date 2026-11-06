@@ -11,22 +11,44 @@ Include what an attacker could do, the steps to reproduce, and the version (`vsw
 You will get an answer within 7 days. Fixes are released before details are published, and reporters are credited
 unless they prefer not to be.
 
-## Signed releases
+## Signed releases: built, not active yet
 
-Releases are git tags signed with the maintainer's SSH key; the public key is in
-[`trust/allowed_signers`](trust/allowed_signers). The installer checks the newest tag's signature before installing
-it and `vswarm install` pins that key on your machine (`~/.vswarm/trust/allowed_signers`). From then on
-`vswarm update` moves only to tags signed by a pinned key, and never to an older version. A takeover of the
-repository or of the maintainer's GitHub account cannot ship code to installed copies without the signing key.
+**Status today:** no release key is published. [`trust/allowed_signers`](trust/allowed_signers) holds only comments
+and the existing tags (v2.1.0, v2.2.0) are unsigned. The installer therefore installs `main` as it is, and
+`vswarm update` follows `main` with `git pull`; both print that they did so without a signature check. Until a key is
+published, an installed copy is exactly as trustworthy as this GitHub repository and the account that controls it.
+
+**What is built and enforced once a key exists:** releases are git tags signed with the maintainer's SSH key. The
+installer checks the newest tag's signature against the key that tag lists before installing it, and `vswarm install`
+pins that key on your machine (`~/.vswarm/trust/allowed_signers`). From then on `vswarm update` moves only to tags
+signed by a pinned key and never to an older version; tags that do not verify are skipped and named. A takeover of the
+repository or of the maintainer's GitHub account cannot then ship code to installed copies without the signing key.
 
 Check the pinned key with `vswarm trust` and compare it with the fingerprint published here and on the release page:
 
 ```
-release key: (published with the first signed release)
+release key: none published yet
 ```
 
-Trust on first use is the weak point: an attacker in control of the repository before your first install could
-list their own key. Compare the fingerprint through a second channel if that matters to you.
+Trust on first use is the weak point: an attacker in control of the repository before your first signed install
+could list their own key. Compare the fingerprint through a second channel if that matters to you.
+
+The installers do not run a script from the network for Bun: they use the Bun on your PATH, or download one pinned
+Bun release from GitHub and unpack it only when its SHA-256 matches the value written in `install.sh` /
+`install.ps1` (taken from that release's `SHASUMS256.txt`).
+
+### For the maintainer: switching signing on
+
+1. Make the key on your own machine, with a passphrase or on a hardware key; it never goes anywhere else:
+   `ssh-keygen -t ed25519 -f ~/.ssh/vswarm_release` (or `-t ed25519-sk` for a FIDO key).
+2. Add its public half to `trust/allowed_signers`, one line:
+   `kridsadar357@gmail.com namespaces="git" ssh-ed25519 AAAA…`, and commit that with the version bump.
+3. Put the fingerprint (`ssh-keygen -lf ~/.ssh/vswarm_release.pub`) in the block above, in the same commit.
+4. `scripts/release.sh vX.Y.Z notes.md` signs the tag, verifies it against `trust/allowed_signers`, pushes it and
+   creates the GitHub release; paste the fingerprint into the release notes as well.
+5. From that release on, installs and updates are signature-checked. Replacing the key later is a change to
+   `trust/allowed_signers` in a release signed by the old key; users who pinned the old key see `vswarm update`
+   refuse anything else.
 
 ## In scope
 

@@ -20,7 +20,8 @@ access (ssh, AWS, Kubernetes) from a machine that does not pass.
 
 ## Install
 
-macOS and Linux. Needs [Bun](https://bun.sh) and git; on Linux, `vswarm try` also needs bubblewrap and strace
+macOS and Linux. Needs git, and [Bun](https://bun.sh) (the installer uses yours, or installs a pinned Bun release
+after checking its SHA-256); on Linux, `vswarm try` also needs bubblewrap and strace
 (`sudo apt install bubblewrap strace`). Windows 10/11: a preview that checks the machine (Run keys, tasks, services,
 WMI, PowerShell profiles, …) with watch, the ssh gate and the install guard, installed with `install.ps1`; `try` stays
 in WSL for now, see [Windows (preview)](docs/guide.md#windows-preview).
@@ -214,11 +215,21 @@ detected 11/11 (100%) · false alarms on the clean parts: 0
 That number covers the cases in [`src/sec/selftest.ts`](src/sec/selftest.ts), not every attack. Adding a case for
 a technique you have seen is the most useful contribution you can make.
 
-## Updates are signed
+## Updates: signing is built, not switched on yet
 
-`vswarm update` installs only release tags signed by the release key pinned on your machine at install time, and
-never an older version. If the repository or the maintainer's account is taken over, installed copies refuse the
-attacker's release and keep running what they have. `vswarm trust` shows the pinned key; see [SECURITY.md](SECURITY.md).
+The signature check is in the code and enforced as soon as there is a key to check against, but **no release key has
+been published yet**: [`trust/allowed_signers`](trust/allowed_signers) lists none and the existing tags are unsigned.
+So today the installer installs `main` as it is, and `vswarm update` follows `main` with `git pull`; both say so.
+That is as safe as the GitHub account behind this repository, no more.
+
+Once the maintainer publishes a key and signs a release, the installer checks the newest tag's signature,
+`vswarm install` pins the key, and `vswarm update` from then on moves only to tags signed by a pinned key, never to an
+older version: a takeover of the repository or of the maintainer's account cannot ship code to installed copies
+without the signing key. `vswarm trust` shows what is pinned; [SECURITY.md](SECURITY.md) has the steps and, once there
+is one, the fingerprint.
+
+The installer itself does not pipe a script from the network into a shell for Bun: it uses the Bun on your PATH, or
+downloads one pinned Bun release from GitHub and installs it only if its SHA-256 matches the value in the script.
 
 ## How it relates to other tools
 

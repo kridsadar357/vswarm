@@ -40,3 +40,9 @@ bun src/cli.ts scan --all
 
 The signing key never leaves the maintainer's machine; use a passphrase or a hardware key (`ssh-keygen -t ed25519-sk`).
 Adding or replacing a key is a change to `trust/allowed_signers` in a release signed by a key users already trust.
+No key is published yet, so releases are not signed today; the one-time steps to switch signing on are in
+[SECURITY.md](SECURITY.md#for-the-maintainer-switching-signing-on).
+
+If you move the installers to another Bun release, change `BUN_VERSION` and every hash in `install.sh` and
+`$BunVersion` / `$BunSha256` in `install.ps1`, copied from that release's `SHASUMS256.txt`; `bun test` checks that
+both scripts pin the same version and a hash for every platform.
