@@ -453,13 +453,16 @@ export async function checkInstall(p: Plan, opt: { get?: Fetcher; offline?: bool
  * `vswarm pkg <tool> <arguments>`: the check the shell wrapper runs before every install. Prints only when there is
  * something to say (one dim line on a terminal otherwise) and returns the exit code: 3 stops the install.
  */
+/** How to run a tool once without the guard: `command npm` in sh; in PowerShell the program itself, npm.cmd or uv.exe. */
+const skipOnce = (tool: string) => (process.platform === "win32" ? `${tool}.cmd … (or ${tool}.exe …)` : `command ${tool} …`);
+
 export async function pkgCommand(tool: string, args: string[], opt: { offline: boolean; ask: (q: string, def?: boolean) => Promise<boolean> }): Promise<number> {
   try {
     return await pkgCheck(tool, args, opt);
   } catch (e: any) {
     // Fail closed: the shell wrapper installs only on exit 0. Say so, or the user sees an error and wonders what happened.
     line(`${c.red("✖")} ${e?.message ?? e}`);
-    line(c.dim(`  vswarm could not check this install; nothing was installed · skip vswarm once with: command ${tool} …`));
+    line(c.dim(`  vswarm could not check this install; nothing was installed · skip vswarm once with: ${skipOnce(tool)}`));
     return 4;
   }
 }
@@ -484,7 +487,7 @@ async function pkgCheck(tool: string, args: string[], opt: { offline: boolean; a
     line(c.dim("  going ahead, as you said"));
     return 0;
   }
-  line(c.dim(`  not installed · skip vswarm once with: command ${tool} …`));
+  line(c.dim(`  not installed · skip vswarm once with: ${skipOnce(tool)}`));
   return 3;
 }
 
