@@ -130,8 +130,8 @@ export function readText(path: string, max = 2_000_000): string | undefined {
   }
 }
 
-export function readJson<T = any>(path: string): T | undefined {
-  const t = readText(path);
+export function readJson<T = any>(path: string, max?: number): T | undefined {
+  const t = readText(path, max);
   if (t === undefined) return;
   try {
     return JSON.parse(t);

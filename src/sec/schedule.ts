@@ -32,6 +32,7 @@ const xml = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;");
 const unitWord = (s: string) => (/^[A-Za-z0-9_./-]+$/.test(s) ? s : `"${s.replace(/[\\"]/g, "\\$&").replace(/%/g, "%%")}"`);
 
 export function jobFiles(launcher: string, everyMinutes = 60, home = homedir()): Record<string, string> {
+  if (!Number.isInteger(everyMinutes) || everyMinutes < 1) throw new Error("--every needs a whole number of minutes");
   if (mac())
     return {
       [plistPath(home)]: `<?xml version="1.0" encoding="UTF-8"?>

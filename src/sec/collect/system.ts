@@ -2,11 +2,19 @@
 // autostart entries (Linux), shell startup files, cron, git hooks, ssh access files, /etc/ld.so.preload, new
 // executables on PATH, and what is running and talking right now.
 
-import { lstatSync, readlinkSync } from "node:fs";
+import { lstatSync, readlinkSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { fileHash, ls, readText, sha256, type Ctx } from "../ctx";
 import { isManagedFile, stripManaged } from "../store";
 import type { Item } from "../types";
+
+function isFile(p: string): boolean {
+  try {
+    return statSync(p).isFile();
+  } catch {
+    return false;
+  }
+}
 
 export async function launchd(ctx: Ctx): Promise<Item[]> {
   const dirs = [join(ctx.home, "Library/LaunchAgents"), ...(ctx.system ? ["/Library/LaunchAgents", "/Library/LaunchDaemons"] : [])];
@@ -96,7 +104,11 @@ export async function startupFiles(ctx: Ctx): Promise<{ items: Item[]; texts: Re
   for (const rel of RC_FILES) {
     const path = join(ctx.home, rel);
     const raw = readText(path, 1_000_000);
-    if (raw === undefined) continue;
+    if (raw === undefined) {
+      // Present but unreadable or over the cap: say so, or a file padded past the cap would vanish from the diff.
+      if (isFile(path)) ctx.gap?.(`~/${rel}`, "could not be read (larger than 1 MB, or no permission)");
+      continue;
+    }
     // vswarm's own blocks (PATH, gate, guard, canaries) are left out, exactly as vswarm wrote them.
     const t = stripManaged(raw);
     // Credentials in .npmrc are never stored; only the fact that the file changed.

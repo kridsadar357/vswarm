@@ -50,8 +50,10 @@ function append(path: string, id: string, body: string, opt: { top?: boolean } =
 
 function strip(path: string, id: string) {
   if (!existsSync(path)) return;
-  writeFileSync(path, removeBlock(readFileSync(path, "utf8"), START(id), END(id)));
+  // A canary planted at the top of the file leaves no blank lines behind.
+  writeFileSync(path, removeBlock(readFileSync(path, "utf8"), START(id), END(id)).replace(/^\n+/, ""));
 }
+
 
 const newId = () => Math.random().toString(36).slice(2, 8);
 

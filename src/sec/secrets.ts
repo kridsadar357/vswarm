@@ -46,6 +46,8 @@ function jwtExpiry(token: string): number | undefined {
 /** Users in a kubeconfig and how each one authenticates. A small reader for the one shape kubeconfigs have. */
 export function kubeUsers(yaml: string): { name: string; how: string; expires?: number }[] {
   const out: { name: string; how: string; expires?: number }[] = [];
+  // Files written on Windows end lines with \r\n; the value regexes expect bare \n.
+  yaml = yaml.replace(/\r/g, "");
   const start = yaml.search(/^users:\s*$/m);
   if (start < 0) return out;
   const block = yaml.slice(start).split("\n").slice(1);
@@ -71,7 +73,8 @@ export function kubeUsers(yaml: string): { name: string; how: string; expires?: 
   return out;
 }
 
-const SECRET_NAME = /(SECRET|TOKEN|PASSWORD|PASSWD|PRIVATE_KEY|API_KEY|ACCESS_KEY|AUTH|CREDENTIAL)/i;
+// AUTH only as a word of its own (BASIC_AUTH, OAUTH_…), not inside AUTHOR or NEXTAUTH_URL.
+const SECRET_NAME = /(SECRET|TOKEN|PASSWORD|PASSWD|PRIVATE_KEY|API_KEY|ACCESS_KEY|(^|_|O)AUTH(_|$)|CREDENTIAL)/i;
 const SECRET_SHAPE = /\b(AKIA[0-9A-Z]{16}|ghp_[A-Za-z0-9]{30,}|github_pat_[A-Za-z0-9_]{30,}|glpat-[A-Za-z0-9_-]{20,}|sk-ant-[A-Za-z0-9_-]{20,}|sk_live_[A-Za-z0-9]{20,}|xox[abp]-[A-Za-z0-9-]{20,})/;
 
 /** Names of variables in an env-style file that look like secrets with values set. Values are dropped here. */
@@ -154,7 +157,8 @@ export async function secrets(ctx: Ctx): Promise<Finding[]> {
   const plainFiles: [string, RegExp, string, Severity][] = [
     [".config/gh/hosts.yml", /oauth_token:\s*\S+/, "GitHub CLI token stored in a plain file", "medium"],
     [".git-credentials", /:\/\/[^\s:]+:[^\s@]+@/, "Git passwords/tokens stored in ~/.git-credentials", "medium"],
-    [".npmrc", /_authToken\s*=\s*\S+/, "npm publish token in ~/.npmrc", "medium"],
+    // ${NPM_TOKEN} is a reference to the environment, the recommended way; only a literal token counts.
+    [".npmrc", /_authToken\s*=\s*(?!\$\{)\S+/, "npm publish token in ~/.npmrc", "medium"],
     [".pypirc", /password\s*[:=]\s*\S+/, "PyPI password/token in ~/.pypirc", "medium"],
     [".netrc", /password\s+\S+/, "Passwords in ~/.netrc", "medium"],
   ];

@@ -30,7 +30,13 @@ export interface CaConfig {
 }
 
 export function loadCaConfig(): CaConfig {
-  return { principals: [whoami()], ttl: "15m", ...(readJson(caFiles.config()) ?? {}) };
+  const def: CaConfig = { principals: [whoami()], ttl: "15m" };
+  // Hand-edited files: only a non-empty list of names and a non-empty ttl are taken over.
+  const j = readJson(caFiles.config());
+  return {
+    principals: Array.isArray(j?.principals) && j.principals.length ? j.principals.map(String) : def.principals,
+    ttl: typeof j?.ttl === "string" && j.ttl.trim() ? j.ttl.trim() : def.ttl,
+  };
 }
 
 const sh = (cmd: string[], opt: { tty?: boolean } = {}) => exec(cmd, { tty: opt.tty });

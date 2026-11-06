@@ -15,8 +15,8 @@
 // Only package names and versions leave the machine (registry.npmjs.org, api.npmjs.org, api.deps.dev, pypi.org,
 // api.osv.dev). If a registry cannot be reached the install goes ahead with a notice: a broken network is not an attack.
 
-import { existsSync, readFileSync } from "node:fs";
-import { join } from "node:path";
+import { existsSync, readFileSync, statSync } from "node:fs";
+import { dirname, join, resolve } from "node:path";
 import { shq } from "./ctx";
 import { lookAlike, osvMalicious } from "./intel";
 import { c, finding as printFinding, line, VERDICT } from "./print";
@@ -59,10 +59,24 @@ function names(args: string[]): string[] {
       i++;
       continue;
     }
-    if (a.startsWith("-")) continue;
+    if (a.startsWith("-") || !a) continue;
     out.push(a);
   }
   return out;
+}
+
+/** npx / npm exec / bunx / uvx: the package is what -p, --package or --from names, else the first plain word; `--` only separates it from its own arguments. */
+function execSpecs(args: string[]): string[] {
+  const dash = args.indexOf("--");
+  const opts = dash < 0 ? args : args.slice(0, dash);
+  const pkgs: string[] = [];
+  for (let i = 0; i < opts.length; i++) {
+    if (opts[i] === "-p" || opts[i] === "--package" || opts[i] === "--from") pkgs.push(opts[++i] ?? "");
+    else if (opts[i].startsWith("--package=") || opts[i].startsWith("--from=")) pkgs.push(opts[i].slice(opts[i].indexOf("=") + 1));
+  }
+  if (pkgs.some(Boolean)) return pkgs.filter(Boolean);
+  const first = names(opts)[0] ?? (dash >= 0 ? args[dash + 1] : undefined);
+  return first ? [first] : [];
 }
 
 /** npm name[@version] → Want. Scoped names keep their leading @. */
@@ -74,14 +88,15 @@ export function npmSpec(spec: string): Want {
   if (alias) return npmSpec(alias[1]);
   const at = spec.lastIndexOf("@");
   const [name, range] = at > 0 ? [spec.slice(0, at), spec.slice(at + 1)] : [spec, ""];
-  return { eco: "npm", name, version: /^\d+\.\d+\.\d+([-+][\w.-]+)?$/.test(range) ? range : undefined };
+  return { eco: "npm", name, version: /^\d+\.\d+\.\d+(-[\w.-]+)?(\+[\w.-]+)?$/.test(range) ? range : undefined };
 }
 
 /** pip requirement → Want, or nothing for local paths and editable installs of the project itself. */
 export function pipSpec(spec: string): Want | undefined {
   const s = spec.trim().replace(/\s*[;#].*$/, "");
   if (!s) return;
-  if (/^(git\+|https?:|hg\+|svn\+)/.test(s) || /\s@\s*(git\+|https?:)/.test(s)) return { eco: "pip", name: s, outside: s };
+  // PEP 508 direct references need no space around the @.
+  if (/^(git\+|https?:|hg\+|svn\+)/.test(s) || /\s*@\s*(git\+|https?:|file:)/.test(s)) return { eco: "pip", name: s, outside: s };
   if (/^(\.|\/|~)/.test(s) || /\.(whl|tar\.gz|zip)$/.test(s)) return;
   const m = /^([A-Za-z0-9][A-Za-z0-9._-]*)(\[[^\]]*\])?\s*(==\s*([\w.+!-]+))?/.exec(s);
   if (!m) return;
@@ -89,18 +104,27 @@ export function pipSpec(spec: string): Want | undefined {
 }
 
 function requirements(path: string, depth = 0): Want[] {
-  if (depth > 3 || !existsSync(path)) return [];
+  let text: string;
+  try {
+    // A folder or an unreadable file is pip's problem to report, not a reason to stop the check.
+    if (depth > 3 || !statSync(path).isFile()) return [];
+    text = readFileSync(path, "utf8");
+  } catch {
+    return [];
+  }
   const out: Want[] = [];
-  for (const raw of readFileSync(path, "utf8").split("\n")) {
+  for (const raw of text.split("\n")) {
     const l = raw.trim();
     if (!l || l.startsWith("#")) continue;
-    const inc = /^(-r|--requirement)\s+(\S+)/.exec(l);
+    const inc = /^(?:-r|--requirement)(?:\s+|=)(\S+)/.exec(l);
     if (inc) {
-      out.push(...requirements(join(path, "..", inc[2]), depth + 1));
+      out.push(...requirements(resolve(dirname(path), inc[1]), depth + 1));
       continue;
     }
-    if (l.startsWith("-")) continue;
-    const w = pipSpec(l);
+    // -e git+https://… installs code from outside the registry, like the same spec on the command line.
+    const spec = l.replace(/^(?:-e|--editable)(?:\s+|=)/, "");
+    if (spec.startsWith("-")) continue;
+    const w = pipSpec(spec);
     if (w) out.push(w);
   }
   return out;
@@ -112,10 +136,22 @@ export function npmProject(dir: string): Want[] {
     const p = join(dir, lock);
     if (!existsSync(p)) continue;
     try {
-      const pkgs: Record<string, any> = JSON.parse(readFileSync(p, "utf8")).packages ?? {};
-      return Object.entries(pkgs)
-        .filter(([k, v]) => k && !v.link)
-        .map(([k, v]) => ({ eco: "npm" as const, name: v.name ?? k.split("node_modules/").at(-1)!, version: v.version, ...(v.resolved && !/^https:\/\/registry\.npmjs\.org\//.test(v.resolved) ? { outside: v.resolved } : {}) }));
+      const j = JSON.parse(readFileSync(p, "utf8"));
+      const outside = (v: any) => (typeof v.resolved === "string" && !/^https:\/\/registry\.npmjs\.org\//.test(v.resolved) ? { outside: v.resolved } : {});
+      const pkgs: Record<string, any> = j.packages ?? {};
+      const out = Object.entries(pkgs)
+        .filter(([k, v]) => k && v && !v.link)
+        .map(([k, v]) => ({ eco: "npm" as const, name: v.name ?? k.split("node_modules/").at(-1)!, version: v.version, ...outside(v) }));
+      // Lockfile v1 (npm 6) nests `dependencies` instead of listing `packages`.
+      const walk = (deps: unknown) => {
+        for (const [name, v] of Object.entries<any>(deps && typeof deps === "object" ? deps : {})) {
+          if (!v || typeof v !== "object") continue;
+          out.push({ eco: "npm", name, version: v.version, ...outside(v) });
+          walk(v.dependencies);
+        }
+      };
+      if (!out.length) walk(j.dependencies);
+      if (out.length) return out;
     } catch {}
   }
   try {
@@ -132,14 +168,14 @@ export function plan(tool: string, args: string[], cwd = process.cwd()): Plan {
   const none: Plan = { wants: [], skip: true, from: "" };
   const sub = args[0];
   if (tool === "npx" || tool === "bunx" || tool === "uvx") {
-    const spec = names(args)[0];
-    const w = spec ? (tool === "uvx" ? pipSpec(spec) : npmSpec(spec)) : undefined;
-    return w ? { wants: [w], skip: false, from: `${tool} ${spec}` } : none;
+    const specs = execSpecs(args);
+    const wants = specs.map((s) => (tool === "uvx" ? pipSpec(s) : npmSpec(s))).filter((w): w is Want => !!w);
+    return wants.length ? { wants, skip: false, from: `${tool} ${specs.join(" ")}` } : none;
   }
   if (["npm", "pnpm", "yarn", "bun"].includes(tool)) {
     if (sub && NPM_RUN_PKG.has(sub)) {
-      const spec = names(args.slice(1))[0];
-      return spec ? { wants: [npmSpec(spec)], skip: false, from: `${tool} ${sub} ${spec}` } : none;
+      const specs = execSpecs(args.slice(1));
+      return specs.length ? { wants: specs.map(npmSpec), skip: false, from: `${tool} ${sub} ${specs.join(" ")}` } : none;
     }
     // yarn with no arguments installs; `yarn <script>` runs a script.
     const installs = (sub && NPM_INSTALL.has(sub)) || sub === "ci" || (tool === "yarn" && !sub);
@@ -162,7 +198,10 @@ export function plan(tool: string, args: string[], cwd = process.cwd()): Plan {
     if (tool === "pipx" && !["install", "inject", "run"].includes(rest[0] ?? "")) return none;
     if (tool !== "pipx" && rest[0] !== "install" && !(tool === "uv" && sub === "tool" && (rest[0] === "install" || rest[0] === "run"))) return none;
     const wants: Want[] = [];
-    for (let i = 1; i < rest.length; i++) if (rest[i] === "-r" || rest[i] === "--requirement") wants.push(...requirements(join(cwd, rest[++i] ?? "")));
+    for (let i = 1; i < rest.length; i++) {
+      if (rest[i] === "-r" || rest[i] === "--requirement") wants.push(...requirements(resolve(cwd, rest[++i] ?? "")));
+      else if (rest[i].startsWith("--requirement=")) wants.push(...requirements(resolve(cwd, rest[i].slice("--requirement=".length))));
+    }
     const specs = names(rest.slice(1));
     // pipx inject <venv> <pkgs…>: the first name is the existing app.
     for (const s of tool === "pipx" && rest[0] === "inject" ? specs.slice(1) : specs) {
@@ -320,8 +359,10 @@ export async function depTree(eco: "npm" | "pip", name: string, version: string,
   for (const e of g.edges ?? []) if (!parent.has(e.toNode)) parent.set(e.toNode, e.fromNode);
   return nodes.slice(1).map((n, i) => {
     // The direct dependency this one hangs under, so a finding can say which package brought it in.
+    // Dependency graphs have cycles; a chain that loops never reaches the root.
     let at = i + 1;
-    while (parent.has(at) && parent.get(at) !== 0) at = parent.get(at)!;
+    const seen = new Set<number>();
+    while (parent.has(at) && parent.get(at) !== 0 && !seen.has(at)) (seen.add(at), (at = parent.get(at)!));
     return { name: n.versionKey.name, version: n.versionKey.version, via: nodes[at]?.versionKey.name ?? name };
   });
 }

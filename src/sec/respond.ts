@@ -153,7 +153,8 @@ function containment(f: Finding, ctx: Ctx, inc: Incident): { what: string; act?:
         act: async () => {
           const text = readFileSync(i.path!, "utf8");
           copyFileSync(i.path!, join(inc.dir, "evidence", `${basename(i.path!)}.before-cleanup`));
-          const kept = text.split("\n").filter((l) => !added.includes(l.trim())).join("\n");
+          // The finding shows the first 160 characters of each line; a long loader line is matched the same way.
+          const kept = text.split("\n").filter((l) => !added.includes(l.trim().slice(0, 160))).join("\n");
           writeFileSync(i.path!, kept);
           return `removed ${added.length} line(s) from ${i.path}`;
         },

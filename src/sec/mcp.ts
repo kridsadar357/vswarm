@@ -7,6 +7,7 @@
 //   change (a "rug pull") is reported even when the new text looks harmless.
 
 import { createHash } from "node:crypto";
+import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { VERSION } from "../home";
@@ -90,9 +91,10 @@ export function pinTools(i: Item, tools: Tool[], pins: Pins): Finding[] {
   const now: Record<string, string> = Object.fromEntries(tools.map((t) => [t.name, hash(t)]));
   const old = pins[i.id]?.tools;
   if (old) {
-    const changed = tools.filter((t) => old[t.name] && old[t.name] !== now[t.name]).map((t) => t.name);
-    const added = tools.filter((t) => !old[t.name]).map((t) => t.name);
-    const gone = Object.keys(old).filter((n) => !now[n]);
+    // Own keys only: a tool called "constructor" or "__proto__" must not read the prototype.
+    const changed = tools.filter((t) => Object.hasOwn(old, t.name) && old[t.name] !== now[t.name]).map((t) => t.name);
+    const added = tools.filter((t) => !Object.hasOwn(old, t.name)).map((t) => t.name);
+    const gone = Object.keys(old).filter((n) => !Object.hasOwn(now, n));
     if (changed.length)
       out.push({ id: `mcp-changed:${i.id}:${changed.map((n) => now[n]).join(",")}`, rule: "mcp-changed", severity: "high", title: `MCP server ${i.name} (${i.source}) changed ${changed.length} tool definition${changed.length > 1 ? "s" : ""} since you last inspected it`,
         detail: [`changed: ${changed.join(", ")}`, "A server can show harmless tools when you add it and change them later (rug pull)."], fix: "Read the new descriptions (vswarm agents --inspect --show); accept them only if you expected an update", item: i });
@@ -119,8 +121,12 @@ async function listOver(send: (msg: any) => Promise<any>): Promise<Tool[]> {
   for (let page = 0; page < 20; page++) {
     const r = await send({ jsonrpc: "2.0", id: 2 + page, method: "tools/list", params: cursor ? { cursor } : {} });
     if (r?.error) throw new Error(`tools/list: ${r.error.message ?? "refused"}`);
-    tools.push(...(r?.result?.tools ?? []));
-    cursor = r?.result?.nextCursor;
+    // Only the shape of a tool definition: a broken or hostile server must not crash the inspection.
+    for (const t of Array.isArray(r?.result?.tools) ? r.result.tools : []) {
+      if (!t || typeof t.name !== "string") continue;
+      tools.push({ name: t.name, description: typeof t.description === "string" ? t.description : undefined, inputSchema: t.inputSchema && typeof t.inputSchema === "object" ? t.inputSchema : undefined });
+    }
+    cursor = typeof r?.result?.nextCursor === "string" ? r.result.nextCursor : undefined;
     if (!cursor) break;
   }
   return tools;
@@ -210,6 +216,8 @@ async function inspectStdio(cmd: string[], env: Record<string, string>, sandbox:
 /** Reads the server definition back from the agent's config (the scan keeps only a summary). */
 function definition(i: Item): { command?: string; args?: string[]; url?: string; env?: Record<string, string>; headers?: Record<string, string> } | undefined {
   const j = i.path?.endsWith(".json") ? readJson(i.path) : undefined;
+  // A config that no longer parses is worth saying so, not quietly falling back to the scan's summary.
+  if (!j && i.path?.endsWith(".json") && existsSync(i.path)) throw new Error(`${i.path} is not valid JSON`);
   if (!j) {
     const cmd = String(i.meta?.command ?? "").split(" ").filter(Boolean);
     return cmd.length ? { command: cmd[0], args: cmd.slice(1) } : i.meta?.url ? { url: String(i.meta.url) } : undefined;
@@ -228,9 +236,9 @@ function expand(o: Record<string, string> | undefined): Record<string, string> {
 }
 
 export async function inspect(i: Item, opt: { sandbox: boolean }): Promise<Inspection> {
-  const def = definition(i);
-  if (!def) return { item: i, error: "no command or URL in its config" };
   try {
+    const def = definition(i);
+    if (!def) return { item: i, error: "no command or URL in its config" };
     if (def.url) {
       if (!/^https?:\/\//.test(def.url)) return { item: i, error: `unsupported transport ${def.url}` };
       return { item: i, tools: await inspectHttp(def.url, expand(def.headers)) };
