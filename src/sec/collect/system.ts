@@ -44,18 +44,36 @@ export async function autostart(ctx: Ctx): Promise<Item[]> {
     ...(ctx.system ? ([["/etc/systemd/system", "system-daemon"], ["/etc/systemd/user", "system-agent"], ["/etc/xdg/autostart", "system-agent"]] as [string, string][]) : []),
   ];
   const out: Item[] = [];
+  const seen = new Set<string>();
+  const unit = (path: string, name: string, source: string) => {
+    const text = readText(path, 200_000);
+    if (text === undefined) return;
+    // ExecStart=-/path …  (systemd prefixes: - @ : + !)   Exec=/path … (desktop entries); %h and $HOME are the home folder.
+    const program = [...text.matchAll(/^\s*(?:ExecStart|ExecStartPre|Exec)\s*=\s*[-@:+!]*(.+)$/gm)].map((m) => m[1].trim()).join(" ; ")
+      .replace(/%h|\$\{?HOME\}?/g, ctx.home);
+    out.push({ kind: "launch", id: path, name, path, hash: sha256(text), source, meta: { program: program.slice(0, 300) } });
+  };
   for (const [dir, source] of dirs) {
     for (const f of ls(dir)) {
-      if (!/\.(service|timer|desktop)$/.test(f)) continue;
       const path = join(dir, f);
-      const text = readText(path, 200_000);
-      if (text === undefined) continue;
-      // ExecStart=-/path …  (systemd prefixes: - @ : + !)   Exec=/path … (desktop entries)
-      const program = [...text.matchAll(/^\s*(?:ExecStart|ExecStartPre|Exec)\s*=\s*[-@:+!]*(.+)$/gm)].map((m) => m[1].trim()).join(" ; ");
-      out.push({ kind: "launch", id: path, name: f, path, hash: sha256(text), source, meta: { program: program.slice(0, 300) } });
+      if (/\.(service|timer|desktop)$/.test(f)) {
+        unit(path, f, source);
+        seen.add(f);
+      } else if (f.endsWith(".wants")) {
+        // Enabled units are links in *.wants/; a link to a unit no package shipped is someone's own addition.
+        for (const w of ls(path)) {
+          if (seen.has(w) || !/\.(service|timer)$/.test(w)) continue;
+          let target = "";
+          try {
+            target = readlinkSync(join(path, w));
+          } catch {}
+          if (/^\/(usr\/)?lib\/systemd\//.test(target)) continue;
+          unit(join(path, w), w, source);
+        }
+      }
     }
   }
-  return out;
+  return [...new Map(out.map((i) => [i.id, i])).values()];
 }
 
 /** /etc/ld.so.preload makes every program on the system load a library first: a classic Linux rootkit trick. */
@@ -84,6 +102,15 @@ export async function startupFiles(ctx: Ctx): Promise<{ items: Item[]; texts: Re
   if (cron !== undefined && ctx.system) {
     items.push({ kind: "cron", id: "crontab", name: "crontab", hash: sha256(cron), meta: { lines: cron.split("\n").filter((l) => l.trim() && !l.startsWith("#")).length } });
     texts.crontab = cron;
+  }
+  // System cron (Linux): /etc/crontab and /etc/cron.d, one item each, so added lines show up in a diff.
+  if (ctx.system) {
+    for (const path of ["/etc/crontab", ...ls("/etc/cron.d").map((f) => join("/etc/cron.d", f))]) {
+      const t = readText(path, 500_000);
+      if (t === undefined) continue;
+      items.push({ kind: "cron", id: path, name: path, path, hash: sha256(t), meta: { lines: t.split("\n").filter((l) => l.trim() && !l.startsWith("#")).length } });
+      texts[path] = t;
+    }
   }
   const hooksPath = (await ctx.run(["git", "config", "--global", "core.hooksPath"], 5000))?.trim();
   if (hooksPath && ctx.system) {

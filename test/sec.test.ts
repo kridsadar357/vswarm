@@ -182,6 +182,21 @@ describe("vswarm try", () => {
   }, 120_000);
 });
 
+describe("linux persistence", () => {
+  test("systemd units: %h is the home folder, links in *.wants count, packaged links do not", async () => {
+    const { autostart } = require("../src/sec/collect/system");
+    const { symlinkSync } = require("node:fs");
+    const home = mkdtempSync(join(tmpdir(), "vs-sd-"));
+    const dir = join(home, ".config/systemd/user");
+    mkdirSync(join(dir, "default.target.wants"), { recursive: true });
+    writeFileSync(join(home, "x.service"), "[Service]\nExecStart=%h/.cache/.x/agent\n");
+    symlinkSync(join(home, "x.service"), join(dir, "default.target.wants/x.service"));
+    symlinkSync("/usr/lib/systemd/user/pipewire.service", join(dir, "default.target.wants/pipewire.service"));
+    const items = await autostart({ home, system: false, pathDirs: [], run: async () => undefined, host: "t", user: "t" });
+    expect(items.map((i: any) => `${i.name} ${i.meta.program}`)).toEqual([`x.service ${home}/.cache/.x/agent`]);
+  });
+});
+
 describe("linux sandbox", () => {
   const { traceDenials, bwrapArgs } = require("../src/sec/try/linux");
   const box = { dir: "/home/u/.vswarm/try/x", work: "/home/u/.vswarm/try/x/work", home: "/home/u/.vswarm/try/x/home", tmp: "/home/u/.vswarm/try/x/tmp", netlog: "" };

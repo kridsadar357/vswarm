@@ -19,6 +19,7 @@ if command -v bun >/dev/null 2>&1; then
 elif [ -x "$HOME/.bun/bin/bun" ]; then
   BUN="$HOME/.bun/bin/bun"
 else
+  command -v unzip >/dev/null 2>&1 || die "unzip is needed to install Bun (Ubuntu/Debian: sudo apt install unzip)"
   say "installing Bun (https://bun.sh)"
   curl -fsSL https://bun.sh/install | bash >/dev/null
   BUN="$HOME/.bun/bin/bun"
