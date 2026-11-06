@@ -3,7 +3,8 @@
 import { createHash } from "node:crypto";
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { homedir, hostname, userInfo } from "node:os";
-import { join } from "node:path";
+import { delimiter, join } from "node:path";
+import type { WinSnapshot } from "./collect/windows";
 
 export interface Ctx {
   home: string;
@@ -19,6 +20,8 @@ export interface Ctx {
   user: string;
   /** Records a place that could not be checked, so a gap is reported instead of looking clean. */
   gap?: (what: string, why: string) => void;
+  /** Windows only: the one PowerShell snapshot of start-up places, processes and connections. Tests inject one. */
+  win?: () => Promise<WinSnapshot | undefined>;
 }
 
 /** Whether a folder exists but the OS refuses to list it (macOS privacy protection). */
@@ -119,13 +122,18 @@ export function realCtx(): Ctx {
   const home = homedir();
   const brew = ["/opt/homebrew", "/usr/local/Homebrew", "/home/linuxbrew/.linuxbrew"].find((p) => existsSync(join(p, "bin", "brew")) || existsSync(join(p, "Library")))
     ?.replace(/\/Homebrew$/, "");
-  const fromPath = (process.env.PATH ?? "").split(":").filter(Boolean);
+  const win = process.platform === "win32";
+  // Windows separates PATH with ; (a : is part of C:\) and does not care about case.
+  const fromPath = (process.env.PATH ?? "").split(delimiter).filter(Boolean);
+  const inHome = (d: string) => (win ? d.toLowerCase().startsWith(home.toLowerCase()) : d.startsWith(home));
   const watch = [
     ...(brew ? [join(brew, "bin"), join(brew, "sbin")] : []),
     "/usr/local/bin", join(home, ".local/bin"), join(home, "bin"), join(home, ".cargo/bin"), join(home, "go/bin"),
     join(home, ".bun/bin"), join(home, ".npm-global/bin"), join(home, ".deno/bin"),
-    ...fromPath.filter((d) => d.startsWith(home)),
+    ...(win ? [join(home, "AppData/Roaming/npm"), join(home, "scoop/shims")] : []),
+    ...fromPath.filter(inHome),
   ];
+  let snapshot: Promise<WinSnapshot> | undefined;
   return {
     home,
     brew,
@@ -134,6 +142,8 @@ export function realCtx(): Ctx {
     system: true,
     host: hostname(),
     user: whoami(),
+    // One PowerShell run per check, shared by every collector that asks.
+    win: win ? () => (snapshot ??= import("./collect/windows").then((m) => m.winSnapshot())) : undefined,
   };
 }
 

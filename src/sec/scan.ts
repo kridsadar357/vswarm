@@ -4,16 +4,17 @@ import type { Ctx } from "./ctx";
 import { brew, browsers, cargo, editors, node, python } from "./collect/packages";
 import { autostart, binaries, launchd, preload, running, startupFiles } from "./collect/system";
 import { agents } from "./collect/agents";
+import { windows } from "./collect/windows";
 import type { Item, Scan } from "./types";
 
 /** Every item kind the collectors produce; stored with a baseline so later checks know what it covered. */
-export const COVERS = ["brew", "brew-tap", "npm", "pip", "cargo", "editor-ext", "browser-ext", "launch", "rc", "ssh", "cron", "git-hooks", "hosts", "preload", "bin", "proc", "conn", "mcp", "agent-hook", "agent-perm", "agent-plugin"];
+export const COVERS = ["brew", "brew-tap", "npm", "pip", "cargo", "editor-ext", "browser-ext", "launch", "rc", "ssh", "cron", "git-hooks", "hosts", "preload", "bin", "proc", "conn", "mcp", "agent-hook", "agent-perm", "agent-plugin", "wmi"];
 
 export async function scan(ctx: Ctx, opt: { live?: boolean } = {}): Promise<Scan> {
   const gaps: Record<string, string> = {};
   ctx = { ...ctx, gap: (what, why) => (gaps[what] = why) };
   const items: Item[] = [];
-  let texts: Record<string, string> = {};
+  const texts: Record<string, string> = {};
   const parts: [string, () => Promise<Item[]>][] = [
     ["homebrew", () => brew(ctx)],
     ["npm", () => node(ctx)],
@@ -27,7 +28,13 @@ export async function scan(ctx: Ctx, opt: { live?: boolean } = {}): Promise<Scan
     ["ld.so.preload", () => preload(ctx)],
     ["startup files", async () => {
       const r = await startupFiles(ctx);
-      texts = r.texts;
+      Object.assign(texts, r.texts);
+      return r.items;
+    }],
+    // Run keys, Startup folders, tasks, services, WMI and PowerShell profiles; nothing outside Windows.
+    ["Windows start-up places", async () => {
+      const r = await windows(ctx);
+      Object.assign(texts, r.texts);
       return r.items;
     }],
     ["PATH executables", () => binaries(ctx)],

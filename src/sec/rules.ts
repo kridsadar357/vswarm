@@ -5,10 +5,19 @@
 import { redact } from "./ctx";
 import { lookAlike, signature, type Malicious, type Signature } from "./intel";
 import { suspiciousLocation } from "./collect/system";
+import { stockWmi, winLaunchRisk } from "./collect/windows";
 import { ADDED_KINDS, type Finding, type Item, type Scan, type Severity } from "./types";
 
 /** Lines in a shell startup file that fetch, decode or start something in the background. */
 const RISKY_LINE = /\b(curl|wget|nc|ncat|socat|base64|openssl\s+enc|eval|osascript|python3?\s+-c|node\s+-e|perl\s+-e|ruby\s+-e|nohup|launchctl|chmod\s+\+x)\b|&\s*$|\|\s*(ba|z)?sh\b|\/tmp\/|\.cache\//;
+
+/**
+ * The same for PowerShell profiles: run code from a string, fetch it, decode it, start it hidden, or switch off
+ * Defender for a folder. Case-insensitive like PowerShell itself; only profile scripts are held to it.
+ */
+const RISKY_PS = /\b(invoke-expression|iex|downloadstring|downloadfile|frombase64string)\b|\b(invoke-webrequest|iwr|invoke-restmethod|irm)\b.*\|\s*(iex|invoke-expression)\b|\s-(encodedcommand|enc|ec|e)\s|\bstart-process\b.*\s-w(indowstyle)?\s+h(idden)?\b|\badd-mppreference\b.*-exclusion|\bset-mppreference\b.*-disable/i;
+
+const capital = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
 
 /** The program an MCP server or hook runs, and the package it pulls when it is started through npx/uvx/bunx. */
 function launcher(cmd: string, home: string): { exe?: string; pkg?: { eco: "npm" | "pip"; name: string } } {
@@ -125,12 +134,30 @@ export async function evaluate(input: RuleInput): Promise<Finding[]> {
     }
     if (i.kind === "launch") {
       const prog = String(i.meta?.program ?? "");
-      const exe = prog.split(" ").find((p) => p.startsWith("/") && !/^\/(bin|usr\/bin)\/(ba|z)?sh$/.test(p) && !/^\/usr\/bin\/(env|python3?|osascript|open)$/.test(p)) ?? "";
-      const where = exe ? suspiciousLocation(exe, home) : undefined;
-      if (where) {
-        add({ id: `launch-location:${i.id}`, rule: "launch-location", severity: "high", title: `Login job ${i.name} starts a program that ${where}`,
-          detail: [i.path ?? "", prog], fix: "Unless you set this up yourself, vswarm respond", item: i });
+      // Windows entries (Run values, tasks, services, Startup) say what they are, and their command lines are Windows'.
+      const what = i.meta?.what ? capital(String(i.meta.what)) : undefined;
+      if (what) {
+        const r = winLaunchRisk(prog, home);
+        if (r.risky || r.where) {
+          add({ id: `launch-location:${i.id}`, rule: "launch-location", severity: "high", title: `${what} ${i.name} ${r.risky ?? `starts a program that ${r.where}`}`,
+            detail: [i.path ?? "", redact(prog.slice(0, 300))], fix: "Unless you set this up yourself, vswarm respond", item: i });
+        }
+      } else {
+        const exe = prog.split(" ").find((p) => p.startsWith("/") && !/^\/(bin|usr\/bin)\/(ba|z)?sh$/.test(p) && !/^\/usr\/bin\/(env|python3?|osascript|open)$/.test(p)) ?? "";
+        const where = exe ? suspiciousLocation(exe, home) : undefined;
+        if (where) {
+          add({ id: `launch-location:${i.id}`, rule: "launch-location", severity: "high", title: `Login job ${i.name} starts a program that ${where}`,
+            detail: [i.path ?? "", prog], fix: "Unless you set this up yourself, vswarm respond", item: i });
+        }
       }
+    }
+    if (i.kind === "wmi" && !stockWmi(i)) {
+      // A permanent subscription runs on its own whenever its event fires, as SYSTEM: fileless persistence.
+      const runs = i.meta?.type === "CommandLineEventConsumer" || i.meta?.type === "ActiveScriptEventConsumer";
+      add({ id: `wmi:${i.id}:${i.hash?.slice(0, 12)}`, rule: "wmi", severity: runs ? "high" : "medium",
+        title: runs ? `WMI subscription runs a ${i.meta?.type === "ActiveScriptEventConsumer" ? "script" : "command"} on an event: ${i.name}` : `WMI subscription that Windows does not ship: ${i.name} (${i.meta?.type})`,
+        detail: [i.meta?.command ? redact(String(i.meta.command).slice(0, 200)) : "", i.meta?.filter ? `when: ${i.meta.filter}` : "not bound to an event filter"].filter(Boolean),
+        fix: "Almost no software uses these; unless you know this one, vswarm respond", item: i });
     }
   }
 
@@ -181,7 +208,7 @@ export async function evaluate(input: RuleInput): Promise<Finding[]> {
         }
         case "launch":
           add({ id: `launch:${i.id}:${i.hash?.slice(0, 12)}`, rule: fresh ? "launch-new" : "launch-changed", severity: fresh ? "high" : "medium",
-            title: `${fresh ? "New" : "Changed"} login job: ${i.name}`, detail: [i.path ?? "", `runs: ${i.meta?.program ?? "?"}`],
+            title: `${fresh ? "New" : "Changed"} ${i.meta?.what ?? "login job"}: ${i.name}`, detail: [i.path ?? "", `runs: ${i.meta?.program ?? "?"}`],
             fix: "If you did not install software that needs this, vswarm respond", item: i });
           break;
         case "rc":
@@ -189,16 +216,22 @@ export async function evaluate(input: RuleInput): Promise<Finding[]> {
         case "cron":
         case "hosts": {
           const lines = addedLines(baseline.texts[i.id], scan.texts[i.id]);
-          const risky = lines.filter((l) => RISKY_LINE.test(l));
+          const ps = /\.ps1$/i.test(i.id);
+          const risky = lines.filter((l) => RISKY_LINE.test(l) || (ps && RISKY_PS.test(l)));
           const authKeys = i.id === ".ssh/authorized_keys";
           // Only lines removed: less risky than anything added, but still a change you should recognise.
           const sev: Severity = authKeys || risky.length || i.kind === "cron" ? "high" : lines.length ? "medium" : "low";
           add({ id: `file:${i.id}:${i.hash?.slice(0, 12)}`, rule: "startup-file", severity: sev,
-            title: authKeys ? "~/.ssh/authorized_keys changed: someone may have added a way to log in" : `${i.id === "crontab" ? "crontab" : i.name.startsWith("/") ? i.name : "~/" + i.name} changed`,
+            title: authKeys ? "~/.ssh/authorized_keys changed: someone may have added a way to log in" : `${i.id === "crontab" ? "crontab" : /^(\/|[A-Za-z]:[\\/])/.test(i.name) ? i.name : "~/" + i.name} changed`,
             detail: (risky.length ? risky : lines).slice(0, 6).map((l) => `+ ${l.slice(0, 160)}`).concat(lines.length > 6 ? [`… ${lines.length - 6} more added lines`] : []),
             fix: risky.length ? "These lines download, decode or start something in the background; remove them unless you wrote them" : "Check the change is yours", item: i });
           break;
         }
+        case "wmi":
+          if (!stockWmi(i))
+            add({ id: `wmi-new:${i.id}:${i.hash?.slice(0, 12)}`, rule: fresh ? "wmi-new" : "wmi-changed", severity: "medium", title: `${fresh ? "New" : "Changed"} WMI subscription: ${i.name} (${i.meta?.type})`,
+              detail: [i.meta?.command ? redact(String(i.meta.command).slice(0, 200)) : "", i.meta?.filter ? `when: ${i.meta.filter}` : ""].filter(Boolean), fix: "If you did not install software that needs this, vswarm respond", item: i });
+          break;
         case "mcp":
           add({ id: `agent-mcp:${i.id}:${i.hash?.slice(0, 12)}`, rule: fresh ? "agent-mcp-new" : "agent-mcp-changed", severity: "medium",
             title: `${fresh ? "New" : "Changed"} MCP server for ${i.source}: ${i.name}`, detail: [redact(String(i.meta?.command ?? i.meta?.url ?? "")), i.path ?? ""],

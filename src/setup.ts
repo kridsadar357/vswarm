@@ -252,17 +252,37 @@ async function version(cmd: string[]): Promise<string | undefined> {
   }
 }
 
+/** Windows: PowerShell answers, and which parts of the snapshot it could not read. */
+async function windowsDoctor(): Promise<boolean> {
+  const { winSnapshot, SNAPSHOT_SCRIPT } = await import("./sec/collect/windows");
+  const t0 = Date.now();
+  const s = await winSnapshot();
+  const errors = Object.entries(s.errors ?? {});
+  if (errors.some(([k]) => k === "snapshot")) {
+    bad("PowerShell snapshot failed", String(s.errors!.snapshot));
+    console.log(`  ${c.dim(`run it by hand: powershell -NoProfile -ExecutionPolicy Bypass -File "${SNAPSHOT_SCRIPT}"`)}`);
+    return false;
+  }
+  const n = (x: unknown) => (Array.isArray(x) ? x.length : x ? 1 : 0);
+  ok(`PowerShell snapshot in ${Date.now() - t0} ms`, `${n(s.runKeys)} Run values · ${n(s.startup)} Startup entries · ${n(s.tasks)} tasks · ${n(s.services)} services · ${n(s.wmi?.consumers)} WMI consumers`);
+  if (s.docs) ok(`Documents ${s.docs}`, "PowerShell profiles are read from here");
+  for (const [k, v] of errors) warn(`could not read ${k}`, String(v).slice(0, 160));
+  return true;
+}
+
 export async function doctor(): Promise<boolean> {
   let good = true;
   step("runtime");
   ok(`bun ${Bun.version}`, process.execPath);
   const tools: [string, string][] = process.platform === "darwin"
     ? [["codesign", "some checks will be skipped"], ["plutil", "some checks will be skipped"], ["lsof", "connections will not be checked"], ["ps", "processes will not be checked"]]
+    : WIN ? []
     : [["ss", "connections will not be checked (iproute2)"], ["bwrap", "vswarm try needs it: sudo apt install bubblewrap"], ["strace", "vswarm try will not see file and connection attempts: sudo apt install strace"]];
   for (const [tool, why] of tools) {
     if (Bun.which(tool)) ok(tool);
     else warn(`${tool} not found`, why);
   }
+  if (WIN && !(await windowsDoctor())) good = false;
   const git = await version(["git", "--version"]);
   if (git) ok(git);
   else warn("git not found", "needed for vswarm update");
@@ -271,7 +291,9 @@ export async function doctor(): Promise<boolean> {
   ok(`app ${ROOT}`);
   ok(`data ${HOME}`);
   const onPath = (process.env.PATH ?? "").split(WIN ? ";" : ":").includes(paths.bin());
-  if (existsSync(launcherPath()) && onPath) ok("vswarm on PATH", launcherPath());
+  // Windows (phase 1) has no installer yet: vswarm runs as bun src\cli.ts, which is not a fault.
+  if (WIN) console.log(`  ${c.dim("·")} no launcher on Windows yet  ${c.dim(`run: bun ${CLI} <command>`)}`);
+  else if (existsSync(launcherPath()) && onPath) ok("vswarm on PATH", launcherPath());
   else if (existsSync(launcherPath())) warn("launcher installed, new terminals will have it", `or: export PATH="${paths.bin()}:$PATH"`);
   else {
     warn("launcher not installed", "run: vswarm install");
@@ -287,6 +309,11 @@ export async function doctor(): Promise<boolean> {
   }
   const lock = loadLock();
   if (lock) bad(`incident ${lock.incident} is open`, "preflight blocks until vswarm unlock");
+  if (WIN) {
+    console.log(`  ${c.dim("·")} ssh gate, background watch and install guard are not on Windows yet  ${c.dim("use them inside WSL")}`);
+    console.log();
+    return good;
+  }
   const sshCfgPath = join(homedir(), ".ssh/config");
   const sshCfg = existsSync(sshCfgPath) ? readFileSync(sshCfgPath, "utf8") : "";
   if (sshCfg.includes(GATE_START)) ok("ssh gate installed", "~/.ssh/config");

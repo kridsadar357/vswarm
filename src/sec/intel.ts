@@ -107,9 +107,35 @@ export interface Signature {
   who?: string;
 }
 
-/** How a file is signed (macOS codesign). Scripts carry no signature by nature. */
+/** Get-AuthenticodeSignature's answer ("Status|Subject") in the terms the rules use. */
+export function authenticode(out: string, script: boolean): Signature {
+  const [status = "", subject = ""] = out.trim().split("|");
+  // Subject is "CN=Name, O=Org, …"; the CN is who signed it.
+  const who = /(?:^|,\s*)CN=("[^"]*"|[^,]*)/.exec(subject)?.[1]?.replace(/"/g, "") || subject || undefined;
+  if (status === "Valid") return { kind: "developer-id", who };
+  if (status === "NotSigned") return { kind: script ? "script" : "unsigned" };
+  if (status === "HashMismatch" || status === "NotTrusted" || status === "UnknownError") return { kind: "other", who: who ? `${who} (${status})` : status };
+  return { kind: "unknown" };
+}
+
+/** Authenticode on Windows. The path goes in through the environment, so nothing in it is read as PowerShell. */
+async function windowsSignature(path: string): Promise<Signature> {
+  if (/\.(cmd|bat|vbs|js)$/i.test(path)) return { kind: "script" };
+  try {
+    const ps = `${process.env.SystemRoot ?? "C:\\Windows"}\\System32\\WindowsPowerShell\\v1.0\\powershell.exe`;
+    const { out, code } = await exec([ps, "-NoProfile", "-NonInteractive", "-Command", "$s = Get-AuthenticodeSignature -LiteralPath $env:VSWARM_SIGN_PATH; [string]$s.Status + '|' + [string]$s.SignerCertificate.Subject"], {
+      env: { ...process.env, VSWARM_SIGN_PATH: path }, timeoutMs: 15_000,
+    });
+    return code === 0 ? authenticode(out, /\.ps1$/i.test(path)) : { kind: "unknown" };
+  } catch {
+    return { kind: "unknown" };
+  }
+}
+
+/** How a file is signed (macOS codesign, Windows Authenticode). Scripts carry no signature by nature. */
 export async function signature(path: string): Promise<Signature> {
   if (firstBytes(path, 2) === "#!") return { kind: "script" };
+  if (process.platform === "win32") return windowsSignature(path);
   if (process.platform !== "darwin") return { kind: "unknown" };
   try {
     const { err, code } = await exec(["codesign", "-dv", "--verbose=2", path]);

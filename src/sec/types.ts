@@ -2,7 +2,7 @@
 
 /** Something on the machine that can run code, keep itself running, or hold access. */
 export interface Item {
-  /** Collector family: brew, brew-tap, npm, pip, cargo, editor-ext, browser-ext, launch, rc, cron, git-hooks, bin, proc, conn, ssh-config, hosts. */
+  /** Collector family: brew, brew-tap, npm, pip, cargo, editor-ext, browser-ext, launch, rc, cron, git-hooks, bin, proc, conn, ssh-config, hosts, wmi. */
   kind: string;
   /** Stable key within the kind, used to match the same item across scans. */
   id: string;
@@ -35,6 +35,7 @@ export interface Scan {
 /** Kinds that vswarm 2.3 and earlier did not record, for baselines saved before `covers` existed. */
 export const ADDED_KINDS: Record<string, string> = {
   mcp: "AI agents and MCP", "agent-hook": "AI agents and MCP", "agent-perm": "AI agents and MCP", "agent-plugin": "AI agents and MCP",
+  wmi: "Windows WMI subscriptions",
 };
 
 export type Severity = "critical" | "high" | "medium" | "low" | "info";

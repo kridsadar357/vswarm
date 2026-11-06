@@ -1,0 +1,59 @@
+{"v":1,"errors":{},
+"runKeys":[
+{"hive":"HKCU","key":"Software\\Microsoft\\Windows\\CurrentVersion\\Run","name":"OneDrive","command":"\"C:\\Users\\nok\\AppData\\Local\\Microsoft\\OneDrive\\OneDrive.exe\" /background"},
+{"hive":"HKCU","key":"Software\\Microsoft\\Windows\\CurrentVersion\\Run","name":"Discord","command":"\"C:\\Users\\nok\\AppData\\Local\\Discord\\Update.exe\" --processStart Discord.exe"},
+{"hive":"HKCU","key":"Software\\Microsoft\\Windows\\CurrentVersion\\Run","name":"MicrosoftEdgeAutoLaunch_5C2D0E1F","command":"\"C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe\" --no-startup-window --win-session-start"},
+{"hive":"HKCU","key":"Software\\Microsoft\\Windows\\CurrentVersion\\RunOnce","name":"Uninstall 24.101.0519.0010","command":"C:\\Users\\nok\\AppData\\Local\\Microsoft\\OneDrive\\24.101.0519.0010\\OneDriveSetup.exe /thfirstsetup"},
+{"hive":"HKLM","key":"Software\\Microsoft\\Windows\\CurrentVersion\\Run","name":"SecurityHealth","command":"%windir%\\system32\\SecurityHealthSystray.exe"},
+{"hive":"HKLM","key":"Software\\Microsoft\\Windows\\CurrentVersion\\Run","name":"RtkAudUService","command":"\"C:\\Windows\\System32\\DriverStore\\FileRepository\\realtekservice.inf_amd64_3e1b2c\\RtkAudUService64.exe\" -background"},
+{"hive":"HKLM","key":"Software\\WOW6432Node\\Microsoft\\Windows\\CurrentVersion\\Run","name":"SunJavaUpdateSched","command":"\"C:\\Program Files (x86)\\Common Files\\Java\\Java Update\\jusched.exe\""},
+{"hive":"HKLM","key":"Software\\WOW6432Node\\Microsoft\\Windows\\CurrentVersion\\Run","name":"VendorTray","command":"C:\\Program Files (x86)\\Vendor Tools\\tray.exe /min"}
+],
+"startup":[
+{"scope":"user","file":"Send to OneNote.lnk","path":"C:\\Users\\nok\\AppData\\Roaming\\Microsoft\\Windows\\Start Menu\\Programs\\Startup\\Send to OneNote.lnk","target":"C:\\Program Files\\Microsoft Office\\root\\Office16\\ONENOTEM.EXE","arguments":"/tsr"},
+{"scope":"user","file":"laragon.lnk","path":"C:\\Users\\nok\\AppData\\Roaming\\Microsoft\\Windows\\Start Menu\\Programs\\Startup\\laragon.lnk","target":"C:\\laragon\\laragon.exe","arguments":""},
+{"scope":"all","file":"FortiTray.lnk","path":"C:\\ProgramData\\Microsoft\\Windows\\Start Menu\\Programs\\StartUp\\FortiTray.lnk","target":"C:\\Program Files\\Fortinet\\FortiClient\\FortiTray.exe","arguments":""}
+],
+"tasks":[
+{"path":"\\","name":"OneDrive Reporting Task-S-1-5-21-1111111111-2222222222-3333333333-1001","state":"Ready","actions":["%localappdata%\\Microsoft\\OneDrive\\OneDriveStandaloneUpdater.exe /reporting"]},
+{"path":"\\","name":"MicrosoftEdgeUpdateTaskMachineCore{8D5A2B1C-0F3E-4A7B-9C6D-1E2F3A4B5C6D}","state":"Ready","actions":["C:\\Program Files (x86)\\Microsoft\\EdgeUpdate\\MicrosoftEdgeUpdate.exe /c"]},
+{"path":"\\","name":"GoogleUpdaterTaskSystem131.0.6727.0{A1B2C3D4-E5F6-4711-8899-AABBCCDDEEFF}","state":"Ready","actions":["\"C:\\Program Files (x86)\\Google\\GoogleUpdater\\131.0.6727.0\\updater.exe\" --wake --system"]},
+{"path":"\\Mozilla\\","name":"Firefox Default Browser Agent 308046B0AF4A39CB","state":"Ready","actions":["C:\\Program Files\\Mozilla Firefox\\default-browser-agent.exe do-task 308046B0AF4A39CB"]},
+{"path":"\\VendorTools\\","name":"Health Check","state":"Ready","actions":["powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File \"C:\\Program Files\\VendorTools\\health.ps1\""]},
+{"path":"\\","name":"NvTmRep_CrashReport1_{B2FE1952-0186-46C3-BAEC-A80AA35AC5B8}","state":"Ready","actions":["%ProgramFiles%\\NVIDIA Corporation\\NvContainer\\NvTmRep.exe --crash-report"]},
+{"path":"\\","name":"ShellExtensionHost","state":"Disabled","actions":["com-handler {F1E2D3C4-B5A6-4978-8695-A4B3C2D1E0F9}"]},
+{"path":"\\","name":"npm-cache-clean","state":"Ready","actions":["cmd.exe /c \"C:\\Users\\nok\\AppData\\Roaming\\npm\\npm.cmd\" cache verify"]}
+],
+"services":[
+{"name":"edgeupdate","displayName":"Microsoft Edge Update Service (edgeupdate)","pathName":"\"C:\\Program Files (x86)\\Microsoft\\EdgeUpdate\\MicrosoftEdgeUpdate.exe\" /svc","startName":"LocalSystem","state":"Stopped"},
+{"name":"AnyDesk","displayName":"AnyDesk Service","pathName":"\"C:\\Program Files (x86)\\AnyDesk\\AnyDesk.exe\" --service","startName":"LocalSystem","state":"Running"},
+{"name":"jhi_service","displayName":"Intel(R) Dynamic Application Loader Host Interface Service","pathName":"\"C:\\Program Files (x86)\\Intel\\Intel(R) Management Engine Components\\DAL\\jhi_service.exe\"","startName":"LocalSystem","state":"Running"},
+{"name":"RtkAudioUniversalService","displayName":"Realtek Audio Universal Service","pathName":"C:\\Program Files\\Realtek\\Audio\\HDA\\RtkAudUService64.exe","startName":"LocalSystem","state":"Running"},
+{"name":"FA_Scheduler","displayName":"FortiClient Service Scheduler","pathName":"\"C:\\Program Files\\Fortinet\\FortiClient\\scheduler.exe\"","startName":"LocalSystem","state":"Running"}
+],
+"wmi":{
+"filters":[{"name":"SCM Event Log Filter","query":"select * from MSFT_SCMEventLogEvent"}],
+"consumers":[{"name":"SCM Event Log Consumer","class":"NTEventLogEventConsumer","commandLine":"","executable":"","scriptFile":"","scriptText":""}],
+"bindings":[{"filter":"SCM Event Log Filter","consumer":"SCM Event Log Consumer"}]
+},
+"processes":[
+{"pid":4,"name":"System","exe":"","mine":false},
+{"pid":1188,"name":"svchost.exe","exe":"","mine":false},
+{"pid":7420,"name":"explorer.exe","exe":"C:\\WINDOWS\\Explorer.EXE","mine":true},
+{"pid":8120,"name":"OneDrive.exe","exe":"C:\\Users\\nok\\AppData\\Local\\Microsoft\\OneDrive\\OneDrive.exe","mine":true},
+{"pid":9001,"name":"Code.exe","exe":"C:\\Users\\nok\\AppData\\Local\\Programs\\Microsoft VS Code\\Code.exe","mine":true},
+{"pid":9310,"name":"bun.exe","exe":"C:\\Users\\nok\\.bun\\bin\\bun.exe","mine":true},
+{"pid":10244,"name":"msedge.exe","exe":"C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe","mine":true},
+{"pid":11032,"name":"mysqld.exe","exe":"C:\\laragon\\bin\\mysql\\mysql-8.0.30-winx64\\bin\\mysqld.exe","mine":true}
+],
+"connections":[
+{"pid":10244,"remote":"142.250.66.110","port":443},
+{"pid":10244,"remote":"2404:6800:4001:80e::200e","port":443},
+{"pid":8120,"remote":"13.107.42.12","port":443},
+{"pid":11032,"remote":"127.0.0.1","port":50112},
+{"pid":9001,"remote":"::1","port":3000},
+{"pid":1188,"remote":"20.198.119.84","port":443}
+],
+"docs":"C:\\Users\\nok\\OneDrive\\Documents",
+"pshome":"C:\\Windows\\System32\\WindowsPowerShell\\v1.0"
+}

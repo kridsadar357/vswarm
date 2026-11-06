@@ -7,6 +7,7 @@ import { join } from "node:path";
 import { fileHash, ls, readText, sha256, type Ctx } from "../ctx";
 import { isManagedFile, stripManaged } from "../store";
 import type { Item } from "../types";
+import { winLive } from "./windows";
 
 function isFile(p: string): boolean {
   try {
@@ -136,18 +137,23 @@ export async function startupFiles(ctx: Ctx): Promise<{ items: Item[]; texts: Re
     for (const h of ls(dir)) items.push({ kind: "git-hooks", id: join(dir, h), name: h, path: join(dir, h), hash: fileHash(join(dir, h)) });
   }
   if (ctx.system) {
-    const hosts = readText("/etc/hosts");
+    const hostsFile = process.platform === "win32" ? join(process.env.SystemRoot ?? "C:\\Windows", "System32", "drivers", "etc", "hosts") : "/etc/hosts";
+    const hosts = readText(hostsFile);
     if (hosts !== undefined) {
-      items.push({ kind: "hosts", id: "/etc/hosts", name: "/etc/hosts", path: "/etc/hosts", hash: sha256(hosts) });
-      texts["/etc/hosts"] = hosts;
+      items.push({ kind: "hosts", id: hostsFile, name: hostsFile, path: hostsFile, hash: sha256(hosts) });
+      texts[hostsFile] = hosts;
     }
   }
   return { items, texts };
 }
 
+/** What Windows runs by name from PATH. */
+export const WIN_EXEC = /\.(exe|com|cmd|bat|ps1|vbs|js)$/i;
+
 /** Executables in the PATH directories people install into. Size and time only; new ones are checked further. */
 export async function binaries(ctx: Ctx): Promise<Item[]> {
   const out: Item[] = [];
+  const win = process.platform === "win32";
   for (const dir of ctx.pathDirs) {
     for (const f of ls(dir)) {
       const path = join(dir, f);
@@ -155,7 +161,8 @@ export async function binaries(ctx: Ctx): Promise<Item[]> {
         const st = lstatSync(path);
         if (st.isDirectory()) continue;
         const link = st.isSymbolicLink() ? readlinkSync(path) : undefined;
-        if (!link && !(st.mode & 0o111)) continue;
+        // Windows has no mode bits; it runs by extension.
+        if (!link && !(win ? WIN_EXEC.test(f) : st.mode & 0o111)) continue;
         out.push({ kind: "bin", id: path, name: f, path, meta: { link, size: link ? undefined : st.size, mtime: Math.round(st.mtimeMs) } });
       } catch {}
     }
@@ -166,7 +173,31 @@ export async function binaries(ctx: Ctx): Promise<Item[]> {
 /** Hidden folders in the home directory that ordinary tools are known to use. */
 const KNOWN_HIDDEN = /^\.(bun|cargo|rustup|npm|npm-global|nvm|volta|pyenv|rbenv|deno|local|vscode|cursor|windsurf|docker|orbstack|colima|ollama|claude[\w-]*|codex|gemini|vswarm|config|gradle|m2|sdkman|swiftpm|dotnet|android|pub-cache|fvm|flutter|conda|mamba|jenv|asdf|mise|nix-profile|lmstudio|cache\/(ms-playwright|puppeteer|huggingface|pre-commit|bazel|go-build|deno))(\/|$)/;
 
+/** A Windows path with a drive letter, either separator. */
+export const WIN_PATH = /^[A-Za-z]:[\\/]/;
+
+/** The same judgement for Windows paths: case-insensitive, either separator. */
+function windowsLocation(path: string, home: string): string | undefined {
+  const p = path.replace(/\//g, "\\").toLowerCase();
+  if (/^[a-z]:\\windows\\temp\\/.test(p) || /\\appdata\\local\\temp\\/.test(p)) return "runs from a temp folder";
+  if (/^[a-z]:\\windows\\(tasks|tracing|system32\\spool\\drivers\\color)\\/.test(p)) return "runs from a Windows folder any user can write to";
+  if (/^[a-z]:\\users\\public\\/.test(p)) return "runs from C:\\Users\\Public";
+  if (/^[a-z]:\\\$recycle\.bin\\/.test(p)) return "runs from the Recycle Bin";
+  // Straight in ProgramData, not in a vendor's folder under it.
+  if (/^[a-z]:\\programdata\\[^\\]+$/.test(p)) return "runs straight from C:\\ProgramData";
+  // Downloads and Desktop of any profile, also when OneDrive holds them.
+  const dl = /^[a-z]:\\users\\[^\\]+\\(?:onedrive[^\\]*\\)?(downloads|desktop)\\/.exec(p);
+  if (dl) return `runs from the ${dl[1] === "downloads" ? "Downloads" : "Desktop"} folder`;
+  const h = home.replace(/\//g, "\\").replace(/\\+$/, "");
+  if (WIN_PATH.test(h) && p.startsWith(h.toLowerCase() + "\\")) {
+    const rel = p.slice(h.length + 1).replace(/\\/g, "/");
+    const top = path.replace(/\//g, "\\").slice(h.length + 1).split("\\")[0];
+    if (rel.startsWith(".") && !KNOWN_HIDDEN.test(rel)) return `runs from a hidden folder (~\\${top})`;
+  }
+}
+
 export function suspiciousLocation(path: string, home: string): string | undefined {
+  if (WIN_PATH.test(path)) return windowsLocation(path, home);
   if (/^\/(private\/)?(tmp|var\/tmp)\//.test(path)) return "runs from a temp folder";
   if (path.startsWith("/dev/shm/")) return "runs from shared memory (/dev/shm)";
   if (path.startsWith("/Users/Shared/")) return "runs from /Users/Shared";
@@ -222,6 +253,11 @@ async function connections(ctx: Ctx): Promise<[string, string, string][]> {
 
 export async function running(ctx: Ctx): Promise<Item[]> {
   if (!ctx.system) return [];
+  // Windows: the scan's one PowerShell snapshot already holds processes and connections.
+  if (ctx.win) {
+    const snap = await ctx.win();
+    return snap ? winLive(snap, ctx.home) : [];
+  }
   const exeOf = new Map<string, string>();
   const out = new Map<string, Item>();
   for (const { pid, user, exe } of await processes(ctx)) {

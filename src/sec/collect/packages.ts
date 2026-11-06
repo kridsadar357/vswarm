@@ -66,10 +66,19 @@ function nodeModules(root: string, kind: string, source: string): Item[] {
   return out;
 }
 
+/** npm as a command to run. On Windows it is npm.cmd, which only cmd.exe can start. */
+function npmCommand(args: string[]): string[] {
+  if (process.platform !== "win32") return ["npm", ...args];
+  const cmd = Bun.which("npm.cmd");
+  return cmd ? [join(process.env.SystemRoot ?? "C:\\Windows", "System32", "cmd.exe"), "/d", "/c", cmd, ...args] : ["npm", ...args];
+}
+
 export async function node(ctx: Ctx): Promise<Item[]> {
   const roots = new Set<string>();
-  const npmRoot = (await ctx.run(["npm", "root", "-g"], 8000))?.trim();
+  const npmRoot = (await ctx.run(npmCommand(["root", "-g"]), 8000))?.trim();
   if (npmRoot) roots.add(npmRoot);
+  // %APPDATA%\npm is where npm puts global packages on Windows unless told otherwise.
+  if (process.platform === "win32") roots.add(join(ctx.home, "AppData/Roaming/npm/node_modules"));
   for (const r of [join(ctx.home, ".npm-global/lib/node_modules"), ...(ctx.brew ? [join(ctx.brew, "lib/node_modules")] : []), ...(ctx.system ? ["/usr/local/lib/node_modules"] : [])]) {
     if (isDir(r)) roots.add(r);
   }
@@ -95,7 +104,11 @@ function distInfo(site: string, source: string): Item[] {
 
 export async function python(ctx: Ctx): Promise<Item[]> {
   const sites = new Set<string>();
-  const py = await ctx.run(["python3", "-c", "import site,json;print(json.dumps(site.getsitepackages()+[site.getusersitepackages()]))"], 8000);
+  const code = "import site,json;print(json.dumps(site.getsitepackages()+[site.getusersitepackages()]))";
+  // Windows has python (or the py launcher), no python3.
+  const py = process.platform === "win32"
+    ? (await ctx.run(["python", "-c", code], 8000)) ?? (await ctx.run(["py", "-3", "-c", code], 8000))
+    : await ctx.run(["python3", "-c", code], 8000);
   try {
     for (const s of JSON.parse(py ?? "[]")) if (isDir(s) && (ctx.system || s.startsWith(ctx.home))) sites.add(s);
   } catch {}
@@ -144,6 +157,9 @@ const BROWSERS: [string, string][] = [
   ["chromium", "Library/Application Support/Chromium"],
   ["chrome", ".config/google-chrome"],
   ["chromium", ".config/chromium"],
+  ["chrome", "AppData/Local/Google/Chrome/User Data"],
+  ["edge", "AppData/Local/Microsoft/Edge/User Data"],
+  ["brave", "AppData/Local/BraveSoftware/Brave-Browser/User Data"],
 ];
 
 export async function browsers(ctx: Ctx): Promise<Item[]> {

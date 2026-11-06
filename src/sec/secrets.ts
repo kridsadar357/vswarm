@@ -1,7 +1,7 @@
 // Long-lived credentials sitting on this machine: what anyone who gets a copy of the disk, or code running as
 // this user, could take and use from anywhere. Values are never printed or stored; only where, what kind, how old.
 
-import { join } from "node:path";
+import { delimiter, join } from "node:path";
 import { isDir, ls, mtime, readJson, readText, type Ctx } from "./ctx";
 import type { Finding, Severity } from "./types";
 import { canaryKeyIds, canaryWhere } from "./canary";
@@ -139,7 +139,7 @@ export async function secrets(ctx: Ctx): Promise<Finding[]> {
   }
 
   // kubeconfig users with static tokens or client keys
-  for (const kc of [join(h, ".kube/config"), ...(process.env.KUBECONFIG ?? "").split(":").filter((p) => p && ctx.system)]) {
+  for (const kc of [join(h, ".kube/config"), ...(process.env.KUBECONFIG ?? "").split(delimiter).filter((p) => p && ctx.system)]) {
     const y = readText(kc);
     if (!y) continue;
     for (const u of kubeUsers(y)) {

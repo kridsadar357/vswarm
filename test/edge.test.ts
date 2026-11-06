@@ -3,7 +3,7 @@
 import { describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, join, sep } from "node:path";
 import { VERSION } from "../src/home";
 import { checkInstall, depTree, guardBlock, npmSpec, pipSpec, plan } from "../src/sec/pkg";
 import { kubeUsers, secretNames, secrets as findSecrets } from "../src/sec/secrets";
@@ -29,6 +29,9 @@ import type { Ctx } from "../src/sec/ctx";
 import type { Item } from "../src/sec/types";
 
 const tmp = (tag: string) => mkdtempSync(join(tmpdir(), `vs-edge-${tag}-`));
+// Tests that need sh/zsh/bash, echo, POSIX modes, symlinks, strace, ssh config or the Unix-only commands do not run on
+// Windows (phase 1); test/windows.test.ts covers what vswarm does there.
+const WIN = process.platform === "win32";
 const ctxFor = (home: string): Ctx => ({ home, pathDirs: [], system: false, host: "t", user: "t", run: async () => undefined });
 const CLI = join(import.meta.dir, "../src/cli.ts");
 
@@ -211,7 +214,7 @@ describe("install guard: command lines", () => {
     expect(big.verdict).toBe("pass");
   });
 
-  test("the shell wrapper survives a launcher path with spaces and a quote, in zsh and bash", async () => {
+  test.skipIf(WIN)("the shell wrapper survives a launcher path with spaces and a quote, in zsh and bash", async () => {
     const d = join(tmp("quote"), "O'Brien dir");
     mkdirSync(d);
     const log = join(d, "log");
@@ -286,7 +289,7 @@ describe("AI agent configs: malformed and oversized", () => {
   test("a ~/.claude.json grown past 2 MB still lists its MCP servers", async () => {
     const home = tmp("home");
     writeFileSync(join(home, ".claude.json"), JSON.stringify({ mcpServers: { huge: { command: "node", args: ["x.js"] } }, projects: { [join(home, "p")]: { mcpServers: { proj: { url: "https://x.example" } } } }, history: "x".repeat(2_500_000) }));
-    expect((await agents(ctxFor(home))).map((i) => i.name).sort()).toEqual(["huge", "~/p › proj"]);
+    expect((await agents(ctxFor(home))).map((i) => i.name).sort()).toEqual(["huge", `~${sep}p › proj`]);
   });
 
   test("Bearer ${VAR} is a reference, a pasted token is not", () => {
@@ -406,7 +409,7 @@ describe("MCP servers that misbehave", () => {
 describe("strace log shapes", () => {
   const box = { dir: "/home/u/.vswarm/try/x", work: "/home/u/.vswarm/try/x/work", home: "/home/u/.vswarm/try/x/home", tmp: "/home/u/.vswarm/try/x/tmp", netlog: "" };
 
-  test("interleaved unfinished/resumed halves, escaped paths, IPv6, abstract sockets and noise lines", () => {
+  test.skipIf(WIN)("interleaved unfinished/resumed halves, escaped paths, IPv6, abstract sockets and noise lines", () => {
     const log = join(tmp("trace"), "trace.log");
     writeFileSync(log, [
       `7     execve("/usr/bin/node", ["node", "x.js"], 0x7ffd /* 20 vars */) = 0`,
@@ -476,7 +479,7 @@ describe("the recording proxy", () => {
 });
 
 describe("vswarm's own blocks and the lock", () => {
-  test("an unreadable lock file still blocks; a look-alike block in ~/.ssh/config is not adopted by vswarm gate", async () => {
+  test.skipIf(WIN)("an unreadable lock file still blocks; a look-alike block in ~/.ssh/config is not adopted by vswarm gate", async () => {
     await withSec(async () => {
       const home = tmp("home");
       writeFileSync(join(home, ".zshrc"), "alias ll='ls -la'\n");
@@ -570,7 +573,7 @@ describe("canaries", () => {
 });
 
 describe("respond: containment on awkward input", () => {
-  test("a long added line is stripped; a file that vanished is logged, not fatal", async () => {
+  test.skipIf(WIN)("a long added line is stripped; a file that vanished is logged, not fatal", async () => {
     await withSec(async () => {
       const home = tmp("home");
       const ctx = ctxFor(home);
@@ -596,7 +599,7 @@ describe("respond: containment on awkward input", () => {
 });
 
 describe("start-up files", () => {
-  test("a file padded past the size cap is reported as a gap, not silently dropped; symlinked files are read", async () => {
+  test.skipIf(WIN)("a file padded past the size cap is reported as a gap, not silently dropped; symlinked files are read", async () => {
     const home = tmp("home");
     const real = join(home, "dotfiles");
     mkdirSync(real);
@@ -620,7 +623,7 @@ describe("background watch job files", () => {
     for (const p of Object.keys(jobFiles("/v/vswarm", 1, home))) expect(p.startsWith(home)).toBe(true);
   });
 
-  test.skipIf(process.platform === "darwin")("Linux: a launcher path with a space is quoted in ExecStart", () => {
+  test.skipIf(process.platform !== "linux")("Linux: a launcher path with a space is quoted in ExecStart", () => {
     const text = Object.values(jobFiles("/home/a b/.vswarm/bin/vswarm", 60, tmp("home"))).join("\n");
     expect(text).toContain('ExecStart="/home/a b/.vswarm/bin/vswarm" watch run');
   });
@@ -655,7 +658,7 @@ describe("certificate authority config", () => {
 });
 
 describe("signed updates: edge cases", () => {
-  test("no tags, a tag on the current commit, and version ordering", async () => {
+  test.skipIf(WIN)("no tags, a tag on the current commit, and version ordering", async () => {
     const root = tmp("upd");
     const sh = async (cwd: string, ...cmd: string[]) => {
       const p = Bun.spawn(cmd, { cwd, stdout: "pipe", stderr: "pipe", env: { ...process.env, GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_SYSTEM: "/dev/null" } });
@@ -701,7 +704,7 @@ describe("signed updates: edge cases", () => {
 });
 
 describe("static check on odd trees", () => {
-  test("empty folders, symlink loops, unicode names, binaries, dense lines and broken package.json", () => {
+  test.skipIf(WIN)("empty folders, symlink loops, unicode names, binaries, dense lines and broken package.json", () => {
     const root = tmp("static");
     expect(staticCheck(root)).toEqual([]);
     mkdirSync(join(root, "sub/deep"), { recursive: true });
@@ -736,7 +739,7 @@ describe("static check on odd trees", () => {
 });
 
 describe("command line: exit codes and argument parsing", () => {
-  test("missing values, unknown commands, bad options", async () => {
+  test.skipIf(WIN)("missing values, unknown commands, bad options", async () => {
     expect((await vswarm({}, "version")).out.trim()).toBe(VERSION);
     const unknown = await vswarm({}, "scna");
     expect(unknown.code).toBe(4);
@@ -759,7 +762,7 @@ describe("command line: exit codes and argument parsing", () => {
     expect((await vswarm({}, "try", "--list")).err).toContain("no tries yet");
   }, 60_000);
 
-  test("pkg: a known-malicious version stops with exit 3 offline; a clean name goes ahead quietly", async () => {
+  test.skipIf(WIN)("pkg: a known-malicious version stops with exit 3 offline; a clean name goes ahead quietly", async () => {
     // vswarm's own options come before --; everything after it belongs to the package manager.
     const sec = tmp("sec");
     writeFileSync(join(sec, "osv-cache.json"), JSON.stringify({ "npm:evil-pkg@1.0.0": { at: Date.now(), mal: ["MAL-2099-1"] } }));
@@ -773,7 +776,7 @@ describe("command line: exit codes and argument parsing", () => {
     expect((await vswarm({ sec }, "pkg", "pip", "--offline", "--", "install", "-r", "nonexistent.txt")).code).toBe(0);
   }, 60_000);
 
-  test("preflight: flags after --then belong to the command; --max-age without a value is tolerated", async () => {
+  test.skipIf(WIN)("preflight: flags after --then belong to the command; --max-age without a value is tolerated", async () => {
     const sec = tmp("sec");
     const last = (verdict: string) => writeFileSync(join(sec, "last.json"), JSON.stringify({ verdict, findings: [], at: Date.now(), scan: {} }));
     last("warn");
@@ -815,7 +818,7 @@ describe("command line: exit codes and argument parsing", () => {
 describe("parsing, CLI and collectors", () => {
   const names = (tool: string, args: string[], cwd = "/nonexistent") => plan(tool, args, cwd).wants.map((w) => w.name + (w.version ? "@" + w.version : "") + (w.outside ? " outside" : ""));
 
-  test("CLI: --opt=value is split for vswarm's own options; an option vswarm does not know is an error, except behind pkg <tool> and try --", async () => {
+  test.skipIf(WIN)("CLI: --opt=value is split for vswarm's own options; an option vswarm does not know is an error, except behind pkg <tool> and try --", async () => {
     const sec = tmp("sec");
     writeFileSync(join(sec, "last.json"), JSON.stringify({ verdict: "pass", findings: [], at: Date.now(), scan: {} }));
     expect((await vswarm({ sec }, "preflight", "--quiet", "--max-age=30")).code).toBe(0);
@@ -947,7 +950,7 @@ describe("parsing, CLI and collectors", () => {
     expect(kubeUsers("users:\n- name: sso\n  user:\n    exec:\n      env:\n      - name: X\n        value: y\n- name: t\n  user:\n    token: abc\n").map((u) => `${u.name}:${u.how}`)).toEqual(["sso:exec", "t:token"]);
   });
 
-  test("strace: paths with . and .. are normalised before matching; readlink on the real home is a read", () => {
+  test.skipIf(WIN)("strace: paths with . and .. are normalised before matching; readlink on the real home is a read", () => {
     const box = { dir: "/home/u/.vswarm/try/x", work: "/home/u/.vswarm/try/x/work", home: "/home/u/.vswarm/try/x/home", tmp: "/home/u/.vswarm/try/x/tmp", netlog: "" };
     const log = join(tmp("trace"), "trace.log");
     writeFileSync(log, [
@@ -969,7 +972,7 @@ describe("parsing, CLI and collectors", () => {
     ]);
   });
 
-  test("rc files: a plain PATH line is byte-identical; quotes, $ and backticks in the home are escaped so the shells read the same path", () => {
+  test.skipIf(WIN)("rc files: a plain PATH line is byte-identical; quotes, $ and backticks in the home are escaped so the shells read the same path", () => {
     const { rcFiles } = require("../src/setup");
     const home = tmp("home");
     writeFileSync(join(home, ".zshrc"), "");
@@ -1011,7 +1014,7 @@ describe("hardening: sandbox, MCP, updates", () => {
   const { isPreRelease } = require("../src/sec/update");
   const { pkgCommand } = require("../src/sec/pkg");
 
-  test("sandbox profile: the host's listening ports are denied one by one, except the proxy's own; apps and the screen are off limits", () => {
+  test.skipIf(WIN)("sandbox profile: the host's listening ports are denied one by one, except the proxy's own; apps and the screen are off limits", () => {
     const lsof = [
       "COMMAND     PID USER   FD   TYPE             DEVICE SIZE/OFF NODE NAME",
       "rapportd    992  mac   12u  IPv4 0xefd67f9ecf19cf0a      0t0  TCP *:51722 (LISTEN)",
@@ -1166,7 +1169,7 @@ process.stdin.on("data", d => { for (const l of String(d).split("\\n")) { let m;
     expect(isPreRelease("v2.5.0")).toBe(false);
   });
 
-  test("updates, first pin: newer unsigned tags are skipped and reported, pre-releases left alone, an older signed tag refused without pinning", async () => {
+  test.skipIf(WIN)("updates, first pin: newer unsigned tags are skipped and reported, pre-releases left alone, an older signed tag refused without pinning", async () => {
     const root = tmp("upd-first");
     const sh = async (cwd: string, ...cmd: string[]) => {
       const p = Bun.spawn(cmd, { cwd, stdout: "pipe", stderr: "pipe", env: { ...process.env, GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_SYSTEM: "/dev/null" } });
@@ -1197,7 +1200,7 @@ process.stdin.on("data", d => { for (const l of String(d).split("\\n")) { let m;
     expect(readFileSync(pin, "utf8")).toContain("a@test");
   }, 60_000);
 
-  test("quarantine: across filesystems the file is copied with its mode and the original removed; other errors surface", () => {
+  test.skipIf(WIN)("quarantine: across filesystems the file is copied with its mode and the original removed; other errors surface", () => {
     const dir = tmp("q");
     const src = join(dir, "evil.sh");
     writeFileSync(src, "#!/bin/sh\n", { mode: 0o750 });

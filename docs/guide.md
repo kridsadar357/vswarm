@@ -44,7 +44,7 @@ The installer downloads vswarm into `~/.vswarm/app` and checks the release signa
 puts `vswarm` on your PATH with zsh/bash completions, and offers to record a baseline.
 
 On Linux, `vswarm try` also needs `sudo apt install bubblewrap strace` (dnf / pacman have the same packages). Installing
-Bun needs `unzip`.
+Bun needs `unzip`. Windows: a preview that checks the machine, see [Windows (preview)](#windows-preview).
 
 Check the setup with `vswarm doctor`:
 
@@ -510,6 +510,33 @@ Environment: `VSWARM_HOME` (moves `~/.vswarm`), `VSWARM_GUARD=off`, `VSWARM_SEC_
 | `Your baseline is older than these checks` | vswarm added checks; review them (e.g. `vswarm agents`), then `vswarm baseline` |
 | `not updating to vX: … not signed` | do not force it; compare the fingerprint (see [§14](#14-safe-updates-update-and-trust)) |
 | preflight keeps blocking after an incident | clean the machine → `vswarm baseline` → `vswarm unlock` |
+
+### Windows (preview)
+
+Phase 1 checks a Windows 10/11 machine; it does not change it. Run it from a clone with Bun, in Windows PowerShell 5.1
+or newer (no administrator needed):
+
+```powershell
+git clone https://github.com/kridsadar357/vswarm.git; cd vswarm; bun install
+bun src/cli.ts doctor        # PowerShell answers, and what it could not read
+bun src/cli.ts scan
+```
+
+What is checked: Run and RunOnce values (HKCU, HKLM, 32-bit), Startup folders (shortcuts resolved), scheduled tasks
+outside `\Microsoft\`, auto-start services outside the Windows folder, WMI permanent event subscriptions (the stock
+"SCM Event Log" one is not reported), PowerShell profiles in your real Documents folder (also when OneDrive holds it),
+processes and connections, programs on PATH (with Authenticode for new ones), global npm and Python packages,
+Chrome/Edge/Brave extensions, AI agent configs (Claude Desktop and VS Code in `%APPDATA%` too) and the usual
+credential files. All of it comes from one read-only PowerShell pass per check
+([windows-snapshot.ps1](../src/sec/collect/windows-snapshot.ps1)); a part it cannot read is shown as a gap.
+
+Working: `scan`, `baseline`, `diff`, `secrets`, `agents` (listing), `preflight` (also `--then`), `accept`, `respond`,
+`report`, `unlock`, `selftest`, `doctor`. `respond` locks, keeps evidence and prints the PowerShell commands that would
+remove what it found (`Remove-ItemProperty`, `Disable-ScheduledTask`, `Set-Service`, `Remove-CimInstance`); it never
+runs them itself on Windows.
+
+Not yet: `gate`, `guard`, `pkg`, `watch`, `try`, `ca`, `cert`, `canary`, `shot`, `agents --inspect` and
+`install`/`update` stop with exit 4. For `try` and `gate`, use vswarm inside WSL.
 
 ### Limits
 

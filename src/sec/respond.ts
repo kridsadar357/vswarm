@@ -8,6 +8,7 @@
 import { chmodSync, copyFileSync, existsSync, mkdirSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { basename, join } from "node:path";
 import { dq, fileHash, redact, run, shq, type Ctx } from "./ctx";
+import { commandExe, winContainment } from "./collect/windows";
 import type { Check } from "./engine";
 import { writeReport } from "./report";
 import { files, setLock, writePrivate } from "./store";
@@ -53,7 +54,7 @@ export function credentialChecklist(ctx: Ctx, findings: Finding[]): string[] {
   return out;
 }
 
-async function collectEvidence(inc: Incident) {
+async function collectEvidence(inc: Incident, ctx: Ctx) {
   const ev = join(inc.dir, "evidence");
   const copies = join(ev, "files");
   mkdirSync(copies, { recursive: true, mode: 0o700 });
@@ -61,8 +62,10 @@ async function collectEvidence(inc: Incident) {
   for (const f of inc.findings) {
     const p = f.item?.path;
     if (p && existsSync(p) && statSync(p).isFile()) paths.add(p);
-    const prog = String(f.item?.meta?.program ?? "").split(" ").find((x) => x.startsWith("/") && existsSync(x));
-    if (prog && statSync(prog).isFile()) paths.add(prog);
+    const program = String(f.item?.meta?.program ?? "");
+    // A Windows entry names its program in a Windows command line ("C:\…\x.exe" /args, or handed to a LOLBin).
+    const prog = program.split(" ").find((x) => x.startsWith("/") && existsSync(x)) ?? (f.item?.meta?.what ? commandExe(program, ctx.home).exe : undefined);
+    if (prog && existsSync(prog) && statSync(prog).isFile()) paths.add(prog);
   }
   for (const p of paths) {
     try {
@@ -87,6 +90,12 @@ async function collectEvidence(inc: Incident) {
       writeFileSync(join(ev, name), out, { mode: 0o600 });
       inc.evidence.push({ path: `(${cmd.join(" ")})`, sha256: fileHash(join(ev, name)), copy: join(ev, name) });
     }
+  }
+  // Windows: the snapshot the check was made from (Run values, tasks, services, WMI, processes, connections).
+  const winSnap = await ctx.win?.();
+  if (winSnap) {
+    writeFileSync(join(ev, "windows-snapshot.json"), JSON.stringify(winSnap, null, 1), { mode: 0o600 });
+    inc.evidence.push({ path: "(windows-snapshot.ps1)", sha256: fileHash(join(ev, "windows-snapshot.json")), copy: join(ev, "windows-snapshot.json") });
   }
   const manifest = inc.evidence.map((e) => `${e.sha256 ?? "-".repeat(64)}  ${e.path}`).join("\n") + "\n";
   writeFileSync(join(ev, "MANIFEST.sha256"), manifest, { mode: 0o600 });
@@ -125,6 +134,9 @@ function containment(f: Finding, ctx: Ctx, inc: Incident): { what: string; act?:
     return `moved ${p} → ${dest}`;
   };
   if (!i) return [];
+  // Windows entries, and everything on a Windows machine: commands to paste, never run by vswarm in this phase.
+  const win = i.meta?.what !== undefined || i.kind === "wmi" || process.platform === "win32" ? winContainment(i, quarantine) : undefined;
+  if (win) return win;
   switch (i.kind) {
     case "launch": {
       const systemd = /\.(service|timer)$/.test(i.name);
@@ -229,7 +241,7 @@ export async function respond(ctx: Ctx, check: Check, ask: Ask, opt: { yes?: boo
   line(`  ${c.dim("if a finding is critical, also disconnect from the network (Wi-Fi off) before going on")}`);
 
   line(`\n${c.bold("2  evidence")}`);
-  await collectEvidence(inc);
+  await collectEvidence(inc, ctx);
   log(`collected ${inc.evidence.length} evidence items with SHA-256`, true);
   line(`  ${c.green("✔")} ${inc.evidence.length} items with SHA-256 in ${join(dir, "evidence")}`);
 
@@ -254,6 +266,12 @@ export async function respond(ctx: Ctx, check: Check, ask: Ask, opt: { yes?: boo
       if (step.manual) {
         line(`  ☐ ${step.what}\n      ${c.cyan(step.manual)}`);
         log(step.what, false, step.manual);
+        continue;
+      }
+      // Windows (phase 1): vswarm never changes the machine itself, not even when asked.
+      if (process.platform === "win32") {
+        line(`  ☐ ${step.what} ${c.dim("(by hand on Windows)")}`);
+        log(step.what, false, "by hand on Windows");
         continue;
       }
       // Changing the machine is never automatic: --yes skips the questions by skipping these steps.

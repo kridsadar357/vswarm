@@ -7,7 +7,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [macos-latest, ubuntu-latest]
+        os: [macos-latest, ubuntu-latest, windows-latest]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -25,3 +25,12 @@ jobs:
       - run: bunx tsc --noEmit
       - run: bun test
       - run: bun src/cli.ts selftest
+      # Windows (phase 1): a real scan of the runner must end in PASS/WARN (0) or BLOCK (3), never a crash (4).
+      - name: Windows scan smoke run
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          code=0
+          bun src/cli.ts scan --offline || code=$?
+          echo "exit $code"
+          [ "$code" = 0 ] || [ "$code" = 3 ]

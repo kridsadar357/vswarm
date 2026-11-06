@@ -49,6 +49,9 @@ function servers(app: string, file: string, map: unknown, prefix = ""): Item[] {
   return Object.entries(map as Record<string, Server>).filter(([, s]) => s && typeof s === "object").map(([n, s]) => serverItem(app, file, prefix + n, s));
 }
 
+/** Path separators: Windows takes both. */
+const SEP = process.platform === "win32" ? /[\\/]/ : "/";
+
 /** Claude Code keeps its settings in ~/.claude, or in another folder per profile (CLAUDE_CONFIG_DIR). */
 function claudeDirs(home: string): string[] {
   return ls(home).filter((d) => /^\.claude([\w.-]*)$/.test(d) && !d.endsWith(".json")).map((d) => join(home, d));
@@ -60,7 +63,7 @@ function claude(home: string): Item[] {
   for (const f of configs) {
     const j = cfg(f);
     if (!j) continue;
-    const app = f === join(home, ".claude.json") ? "claude-code" : `claude-code:${f.split("/").at(-2)}`;
+    const app = f === join(home, ".claude.json") ? "claude-code" : `claude-code:${f.split(SEP).at(-2)}`;
     out.push(...servers(app, f, j.mcpServers));
     for (const [proj, p] of Object.entries<any>(j.projects ?? {})) out.push(...servers(app, f, p?.mcpServers, `${proj.replace(home, "~")} › `));
   }
@@ -69,7 +72,7 @@ function claude(home: string): Item[] {
       const f = join(dir, name);
       const j = cfg(f);
       if (!j) continue;
-      const app = `claude-code:${dir.split("/").pop()}`;
+      const app = `claude-code:${dir.split(SEP).pop()}`;
       for (const [event, matchers] of Object.entries<any>(j.hooks ?? {})) {
         (Array.isArray(matchers) ? matchers : []).forEach((m: any, i: number) =>
           (m?.hooks ?? []).forEach((h: any, k: number) => {
@@ -149,10 +152,12 @@ export function codexServers(toml: string): Record<string, Server> {
 export async function agents(ctx: Ctx): Promise<Item[]> {
   const h = ctx.home;
   const mac = (rel: string) => join(h, "Library/Application Support", rel);
+  const appData = (rel: string) => join(h, "AppData/Roaming", rel);
   const out: Item[] = [...claude(h)];
   const plain: [string, string, string][] = [
     ["claude-desktop", mac("Claude/claude_desktop_config.json"), "mcpServers"],
     ["claude-desktop", join(h, ".config/Claude/claude_desktop_config.json"), "mcpServers"],
+    ["claude-desktop", appData("Claude/claude_desktop_config.json"), "mcpServers"],
     ["cursor", join(h, ".cursor/mcp.json"), "mcpServers"],
     ["windsurf", join(h, ".codeium/windsurf/mcp_config.json"), "mcpServers"],
     ["gemini", join(h, ".gemini/settings.json"), "mcpServers"],
@@ -160,6 +165,8 @@ export async function agents(ctx: Ctx): Promise<Item[]> {
     ["vscode", join(h, ".config/Code/User/mcp.json"), "servers"],
     ["vscode", mac("Code/User/settings.json"), "mcp.servers"],
     ["vscode", join(h, ".config/Code/User/settings.json"), "mcp.servers"],
+    ["vscode", appData("Code/User/mcp.json"), "servers"],
+    ["vscode", appData("Code/User/settings.json"), "mcp.servers"],
   ];
   for (const [app, f, key] of plain) {
     const j = cfg(f);

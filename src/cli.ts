@@ -62,6 +62,9 @@ function noMoreOptions(cmd: string, args: string[], known: string[] = []) {
   if (bad) throw new Error(`unknown option ${bad} for vswarm ${cmd} · vswarm help`);
 }
 
+/** Commands that need a Unix shell, ssh config, launchd/systemd or a sandbox; Windows gets them in a later phase. */
+const NOT_ON_WINDOWS = new Set(["gate", "guard", "watch", "try", "ca", "cert", "canary", "shot", "install", "uninstall", "update", "upgrade", "pkg"]);
+
 function usage() {
   banner("check your machine before it touches production");
   const row = (cmd: string, desc: string) => console.log(`  ${c.cyan(cmd.padEnd(46))}${c.dim(desc)}`);
@@ -100,6 +103,7 @@ function usage() {
   console.log(`\n  ${c.bold("gates for other tools")}`);
   console.log(c.dim("    ~/.aws/config     credential_process = vswarm preflight --quiet --then aws configure export-credentials --profile prod-sso --format process"));
   console.log(c.dim("    kubeconfig user   exec: { command: vswarm, args: [preflight, --quiet, --then, kubelogin, get-token, …] }"));
+  if (process.platform === "win32") console.log(c.amber("\n  Windows preview: scan, baseline, diff, secrets, agents, preflight, accept, respond, report, unlock, selftest and doctor work.\n  gate, guard, watch, try, ca, cert, canary, pkg, shot and install are not on Windows yet; use them inside WSL."));
   console.log(c.dim("\n  Local-first, no telemetry. Only package names and versions go to api.osv.dev for the known-malicious check (--offline skips it).\n"));
 }
 
@@ -112,6 +116,7 @@ async function main() {
   if (cmd !== "pkg") splitEquals(args);
   const offline = has(args, "--offline");
   const json = has(args, "--json");
+  if (process.platform === "win32" && NOT_ON_WINDOWS.has(cmd)) throw new Error(`vswarm ${cmd} is not on Windows yet (phase 1 checks the machine only); use it inside WSL`);
 
   switch (cmd) {
     case "scan":
@@ -156,6 +161,7 @@ async function main() {
       noMoreOptions(cmd, args);
       const list = await agents(realCtx());
       if (doInspect) {
+        if (process.platform === "win32") throw new Error("vswarm agents --inspect is not on Windows yet (it needs the sandbox); use it inside WSL");
         const { inspectAll } = await import("./sec/mcp");
         process.exitCode = await inspectAll(list.filter((i) => i.kind === "mcp"), inspectOpt);
         return;
