@@ -5,7 +5,7 @@
 // the registries before the package manager runs anything:
 //
 //   known-malicious   OSV MAL- records (OpenSSF malicious-packages)                      critical
-//   look-alike        one edit away from a popular name (axois, reqeusts)                 high
+//   look-alike        close to a popular name (axois, reqeusts, solana-web3.js)           high, low when established
 //   does not exist    a name nobody published yet: a typo, or a name an AI made up        high when it looks like a popular one
 //   brand new         the version was published in the last 48 hours (hijacked releases)   medium
 //   new and unknown   package created in the last 30 days with few downloads              medium, high with an install script
@@ -17,10 +17,10 @@
 
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
-import { shq } from "./ctx";
+import { exec, readJson, shq } from "./ctx";
 import { lookAlike, osvMalicious } from "./intel";
 import { c, finding as printFinding, line, VERDICT } from "./print";
-import { files } from "./store";
+import { files, SEC, writePrivate } from "./store";
 import { RANK, verdictOf, type Finding, type Item, type Severity, type Verdict } from "./types";
 
 export type Eco = "npm" | "pip" | "brew";
@@ -331,7 +331,7 @@ export function judge(w: Want, f: Facts | undefined, now = Date.now()): Finding[
   }
   const near = lookAlike(w.eco, w.name);
   if (!f) {
-    if (near) add("lookalike", "high", `${label(w)}: looks like ${near}`, ["One edit away from a popular package name: the classic typo-squat."], `did you mean ${near}?`);
+    if (near) add("lookalike", "high", `${label(w)}: looks like ${near}`, ["Close to a popular package name: the classic typo-squat, which runs its install script as soon as it lands."], `did you mean ${near}? If ${w.name} is really what you want, check its page on the registry first`);
     return out;
   }
   if (!f.exists) {
@@ -340,7 +340,16 @@ export function judge(w: Want, f: Facts | undefined, now = Date.now()): Finding[
     ], near ? `did you mean ${near}?` : "check the name on the registry website");
     return out;
   }
-  if (near) add("lookalike", "high", `${label(w)}: looks like ${near}`, ["One edit away from a popular package name: the classic typo-squat."], `did you mean ${near}?`);
+  // A name that resembles a popular one but is itself widely used and years old is a real package of its own
+  // (lodash.set, babel-core): said in one line, not stopped. Typo-squats are new and little used; they get taken down.
+  // PyPI publishes no download counts; there, years on the registry stand in for them.
+  const established = (f.weeklyDownloads ?? 0) >= 50_000 || (w.eco === "pip" && f.weeklyDownloads === undefined && f.createdAt !== undefined && now - f.createdAt > 3 * 365 * DAY);
+  if (near && established)
+    add("lookalike", "low", `${label(w)}: resembles ${near}, but is an established package of its own`,
+      [f.weeklyDownloads !== undefined ? `${f.weeklyDownloads} downloads last week` : `first published ${ago(f.createdAt!)}`], `make sure you meant ${w.name}, not ${near}`);
+  else if (near)
+    add("lookalike", "high", `${label(w)}: looks like ${near}`, ["Close to a popular package name and not established itself: the classic typo-squat, which runs its install script as soon as it lands."],
+      `did you mean ${near}? If ${w.name} is really what you want, check its page on the registry first`);
   const fresh = f.versionAt !== undefined && now - f.versionAt < 2 * DAY;
   const young = f.createdAt !== undefined && now - f.createdAt < 30 * DAY;
   const unknown = f.weeklyDownloads !== undefined ? f.weeklyDownloads < 500 : young;
@@ -368,6 +377,10 @@ export interface PkgCheck {
   ms: number;
   /** Dependencies checked beyond the named packages (the whole tree, from deps.dev). */
   deps: number;
+  /** What could not be checked (a registry or OSV did not answer); --strict stops on these. */
+  unverified: string[];
+  /** Named packages whose chosen version runs install scripts. */
+  scripted: string[];
 }
 
 /** Every package a version pulls in, resolved the way the registry would (api.deps.dev), with the one that brings it. */
@@ -394,6 +407,7 @@ export async function checkInstall(p: Plan, opt: { get?: Fetcher; offline?: bool
   const t0 = Date.now();
   const get = opt.get ?? realFetch;
   const notes: string[] = [];
+  const unverified: string[] = [];
   const findings: Finding[] = [];
   // Named on the command line: ask the registry about each (a lockfile can list a thousand; those get OSV only).
   const named = p.wants.length <= 25 ? p.wants : p.wants.filter((w) => w.outside);
@@ -407,7 +421,10 @@ export async function checkInstall(p: Plan, opt: { get?: Fetcher; offline?: bool
         failed = e.message ?? String(e);
       }
     }));
-    if (failed) notes.push(`could not ask the registry (${failed}); checked names offline only`);
+    if (failed) {
+      notes.push(`could not ask the registry (${failed}); checked names offline only`);
+      unverified.push(`the registry did not answer (${failed})`);
+    }
   }
   for (const w of p.wants.length <= 25 ? p.wants : p.wants.filter((x) => x.outside || lookAlike(x.eco, x.name))) findings.push(...judge(w, facts.get(w)));
   // Known-malicious: every exact version we know, from the command line, the registry answer, or the lockfile.
@@ -429,7 +446,7 @@ export async function checkInstall(p: Plan, opt: { get?: Fetcher; offline?: bool
         items.push({ kind: items[k].kind, id: d.name, name: d.name, version: d.version, meta: { dep: true } });
         const like = lookAlike(items[k].kind, d.name);
         if (like)
-          findings.push({ id: `pkg:dep-lookalike:${items[k].kind}:${d.name}`, rule: "pkg-lookalike", severity: "high", title: `${items[k].name} pulls in ${d.name}, which looks like ${like}`,
+          findings.push({ id: `pkg:dep-lookalike:${items[k].kind}:${d.name}`, rule: "pkg-lookalike", severity: "medium", title: `${items[k].name} pulls in ${d.name}, which looks like ${like}`,
             detail: [`via ${via.get(key)}`], fix: `check why ${items[k].name} depends on it; a typo-squat in the tree runs its install scripts too` });
       }
     });
@@ -437,7 +454,10 @@ export async function checkInstall(p: Plan, opt: { get?: Fetcher; offline?: bool
   const deps = items.filter((i) => i.meta?.dep).length;
   if (items.length) {
     const osv = await osvMalicious(items, opt.osvCache ?? files.osv(), { offline: opt.offline });
-    if (osv.error) notes.push(osv.error);
+    if (osv.error) {
+      notes.push(osv.error);
+      unverified.push("the known-malicious database (OSV) did not answer");
+    }
     for (const h of osv.hits) {
       const path = via.get(`${h.item.kind}:${h.item.name}@${h.item.version}`);
       findings.push({ id: `pkg:malicious:${h.item.kind}:${h.item.name}@${h.item.version}`, rule: "pkg-malicious", severity: "critical",
@@ -446,49 +466,131 @@ export async function checkInstall(p: Plan, opt: { get?: Fetcher; offline?: bool
     }
   }
   findings.sort((a, b) => RANK[b.severity] - RANK[a.severity]);
-  return { plan: p, findings, verdict: verdictOf(findings), notes, ms: Date.now() - t0, deps };
+  const scripted = [...facts].filter(([, f]) => (f.scripts?.length ?? 0) > 0 || f.sdistOnly).map(([w]) => w.name);
+  return { plan: p, findings, verdict: verdictOf(findings), notes, ms: Date.now() - t0, deps, unverified, scripted };
 }
 
-/**
- * `vswarm pkg <tool> <arguments>`: the check the shell wrapper runs before every install. Prints only when there is
- * something to say (one dim line on a terminal otherwise) and returns the exit code: 3 stops the install.
- */
 /** How to run a tool once without the guard: `command npm` in sh; in PowerShell the program itself, npm.cmd or uv.exe. */
 const skipOnce = (tool: string) => (process.platform === "win32" ? `${tool}.cmd … (or ${tool}.exe …)` : `command ${tool} …`);
 
-export async function pkgCommand(tool: string, args: string[], opt: { offline: boolean; ask: (q: string, def?: boolean) => Promise<boolean> }): Promise<number> {
+// ── Guard settings (vswarm guard on [--ignore-scripts] [--sandbox] [--strict])
+
+export interface GuardConfig {
+  /** npm, pnpm, yarn and bun installs run with their lifecycle scripts off. */
+  ignoreScripts?: boolean;
+  /** Those installs run in the try sandbox (macOS, Linux): your project folder writable, the rest of home hidden, registries only. */
+  sandbox?: boolean;
+  /** A registry or OSV that does not answer stops the install instead of letting it through. */
+  strict?: boolean;
+}
+
+const guardFile = () => join(SEC(), "guard.json");
+export const loadGuardConfig = (): GuardConfig => readJson<GuardConfig>(guardFile()) ?? {};
+export const saveGuardConfig = (g: GuardConfig) => writePrivate(guardFile(), g);
+
+/** Tools whose installs vswarm runs itself when scripts are off or the sandbox is on. */
+export const RUN_TOOLS = ["npm", "pnpm", "yarn", "bun"];
+
+const isGlobal = (tool: string, args: string[]) => args.includes("-g") || args.includes("--global") || (tool === "yarn" && args[0] === "global");
+
+/**
+ * The same install with lifecycle scripts off: --ignore-scripts right after the subcommand for npm, pnpm, bun and
+ * yarn 1; yarn 2 and later have no such flag and read YARN_ENABLE_SCRIPTS instead. Commands that run a package
+ * (npm exec, dlx) are left as they are.
+ */
+export function withoutScripts(tool: string, args: string[], yarnMajor = 1): { args: string[]; env: Record<string, string> } {
+  const sub = args[0];
+  const installs = (sub !== undefined && NPM_INSTALL.has(sub)) || sub === "ci" || (tool === "yarn" && (sub === undefined || sub === "global"));
+  if (!installs || args.includes("--ignore-scripts")) return { args, env: {} };
+  if (tool === "yarn" && yarnMajor >= 2) return { args, env: { YARN_ENABLE_SCRIPTS: "false" } };
+  // yarn global add <names>: the flag belongs after "add".
+  const at = tool === "yarn" && sub === "global" ? 2 : sub === undefined ? 0 : 1;
+  return { args: [...args.slice(0, at), "--ignore-scripts", ...args.slice(at)], env: {} };
+}
+
+/** How to run the scripts that were skipped, deliberately: in the sandbox first, for real once you trust them. */
+export function scriptsHint(tool: string, names: string[]): string {
+  const which = names.length ? names.slice(0, 4).join(" ") : "<package>";
+  const rebuild = tool === "pnpm" ? `pnpm rebuild ${which}` : tool === "bun" ? `bun pm trust ${which}` : `npm rebuild ${which}`;
+  return `install scripts were skipped${names.length ? ` (${names.slice(0, 4).join(", ")}${names.length > 4 ? " …" : ""} has them)` : ""}. Native modules (sharp, bcrypt, esbuild, puppeteer …) may need them: ` +
+    `see what they do with: vswarm try . -- ${rebuild} · then run them for real: command ${rebuild}`;
+}
+
+/**
+ * `vswarm pkg [--run] <tool> <arguments>`: the check the shell wrapper runs before every install. Prints only when
+ * there is something to say (one dim line on a terminal otherwise) and returns the exit code: 3 stops the install.
+ * With --run (guard on --ignore-scripts or --sandbox), vswarm then runs the install itself, the way those settings say.
+ */
+export async function pkgCommand(tool: string, args: string[], opt: { offline: boolean; strict?: boolean; run?: boolean; get?: Fetcher; ask: (q: string, def?: boolean) => Promise<boolean> }): Promise<number> {
+  let checked: { code: number; scripted: string[] };
   try {
-    return await pkgCheck(tool, args, opt);
+    checked = await pkgCheck(tool, args, opt);
   } catch (e: any) {
     // Fail closed: the shell wrapper installs only on exit 0. Say so, or the user sees an error and wonders what happened.
     line(`${c.red("✖")} ${e?.message ?? e}`);
     line(c.dim(`  vswarm could not check this install; nothing was installed · skip vswarm once with: ${skipOnce(tool)}`));
     return 4;
   }
+  if (!opt.run || checked.code !== 0) return checked.code;
+  return runInstall(tool, args, checked.scripted);
 }
 
-async function pkgCheck(tool: string, args: string[], opt: { offline: boolean; ask: (q: string, def?: boolean) => Promise<boolean> }): Promise<number> {
+/** The install itself, as the guard settings say: scripts off, in the sandbox, through Socket Firewall when it is there. */
+async function runInstall(tool: string, args: string[], scripted: string[]): Promise<number> {
+  const g = loadGuardConfig();
+  const real = Bun.which(tool);
+  if (!real) {
+    line(`${c.red("✖")} ${tool}: not found on PATH`);
+    return 127;
+  }
+  const yarnMajor = tool === "yarn" ? Number((await exec([real, "--version"]).catch(() => ({ out: "1" }))).out.trim().split(".")[0]) || 1 : 1;
+  const plain = { args, env: {} as Record<string, string> };
+  const cmd = g.ignoreScripts && RUN_TOOLS.includes(tool) ? withoutScripts(tool, args, yarnMajor) : plain;
+  const skipped = cmd.args !== args || Object.keys(cmd.env).length > 0;
+  const sfw = process.env.VSWARM_SFW !== "off" && SFW.has(tool) ? Bun.which("sfw") : null;
+  const argv = sfw ? [sfw, tool, ...cmd.args] : [real, ...cmd.args];
+  let code: number;
+  const { canSandbox, sandboxRun } = await import("./try/spawn");
+  if (g.sandbox && RUN_TOOLS.includes(tool) && !isGlobal(tool, args) && canSandbox()) {
+    line(c.dim(`vswarm: ${tool} runs in the sandbox (this folder writable, the rest of your home hidden, package registries only)`));
+    const r = await sandboxRun([tool, ...cmd.args], { cwd: process.cwd(), env: cmd.env });
+    code = r.code;
+    if (r.refused.length) line(c.amber(`vswarm: the install tried to reach ${r.refused.slice(0, 5).join(", ")}, which the sandbox refused (only package registries are open). A private registry: install with ${skipOnce(tool)}`));
+  } else {
+    if (g.sandbox && isGlobal(tool, args)) line(c.dim("vswarm: a global install changes files outside this folder, so it does not run in the sandbox"));
+    const p = Bun.spawn(argv, { env: { ...process.env, ...cmd.env }, stdin: "inherit", stdout: "inherit", stderr: "inherit" });
+    code = await p.exited;
+  }
+  if (skipped && code === 0) line(c.dim(`vswarm: ${scriptsHint(tool, scripted)}`));
+  return code;
+}
+
+async function pkgCheck(tool: string, args: string[], opt: { offline: boolean; strict?: boolean; get?: Fetcher; ask: (q: string, def?: boolean) => Promise<boolean> }): Promise<{ code: number; scripted: string[] }> {
   const p = plan(tool, args);
-  if (p.skip) return 0;
-  const r = await checkInstall(p, { offline: opt.offline });
+  if (p.skip) return { code: 0, scripted: [] };
+  const r = await checkInstall(p, { offline: opt.offline, get: opt.get });
+  const done = (code: number) => ({ code, scripted: r.scripted });
+  // Strict: what could not be checked is a reason to stop, not a notice. Offline on purpose (--offline) is not.
+  const strict = (opt.strict || loadGuardConfig().strict) && !opt.offline && r.unverified.length > 0;
   const quietPass = !r.findings.some((f) => f.severity !== "info") && !r.notes.length;
   if (quietPass) {
     if (process.stderr.isTTY) line(c.dim(`vswarm ✔ ${p.wants.length > 1 ? `${p.wants.length} packages` : p.from}${r.deps ? ` and ${r.deps} dependencies` : ""} checked · ${r.ms} ms`));
-    return 0;
+    return done(0);
   }
   line(`${c.violet("▼ vswarm")} checked ${p.from.startsWith(tool) ? p.from : `${tool} ${p.from}`} ${c.dim(`${r.deps ? `and ${r.deps} dependencies ` : ""}· ${r.ms} ms`)}`);
   for (const f of r.findings.filter((x) => x.severity !== "info")) printFinding({ ...f, id: "" }, f.severity !== "low");
   for (const n of r.notes) line(c.dim(`  · ${n}`));
-  if (r.verdict !== "block") {
+  if (r.verdict !== "block" && !strict) {
     if (r.findings.length) line(c.dim(`  ${VERDICT[r.verdict]} · going ahead`));
-    return 0;
+    return done(0);
   }
+  if (strict && r.verdict !== "block") line(c.amber(`  strict guard: ${r.unverified.join("; ")}, so this install was not fully checked`));
   if (await opt.ask(`${c.red("Stop here.")} Install anyway?`, false)) {
     line(c.dim("  going ahead, as you said"));
-    return 0;
+    return done(0);
   }
-  line(c.dim(`  not installed · skip vswarm once with: ${skipOnce(tool)}`));
-  return 3;
+  line(c.dim(`  not installed · ${strict && r.verdict !== "block" ? "try again when online, or " : ""}skip vswarm once with: ${skipOnce(tool)}`));
+  return done(3);
 }
 
 // ── The shell wrapper
@@ -510,12 +612,25 @@ const INSTALLS: Record<string, string> = {
 /** Package managers Socket Firewall (sfw) can proxy; with sfw installed, approved installs run through it as well. */
 const SFW = new Set(["npm", "pnpm", "yarn", "pip", "pip3", "uv"]);
 
-export function guardBlock(launcher: string): string {
+/** Subcommands that run a package rather than install into the project; scripts-off and the sandbox leave them alone. */
+const EXEC_SUBS = ["exec", "x", "dlx"];
+
+/**
+ * `run`: guard on --ignore-scripts or --sandbox. npm, pnpm, yarn and bun installs then go through `vswarm pkg --run`,
+ * which checks and then runs the install itself the way those settings say.
+ */
+export function guardBlock(launcher: string, opt: { run?: boolean } = {}): string {
   const q = shq(launcher);
   const run = (tool: string) => (SFW.has(tool) ? `__vswarm_run ${tool} "$@"` : `command ${tool} "$@"`);
-  const fn = (tool: string, subs?: string) => subs === undefined
-    ? `function ${tool} { ${q} pkg ${tool} -- "$@" && command ${tool} "$@"; }`
-    : `function ${tool} { case "$1" in ${subs}) ${q} pkg ${tool} -- "$@" || return $?; ${run(tool)}; return $?;; esac; command ${tool} "$@"; }`;
+  const checked = (tool: string, subs: string) => `${subs}) ${q} pkg ${tool} -- "$@" || return $?; ${run(tool)}; return $?;;`;
+  const fn = (tool: string, subs?: string) => {
+    if (subs === undefined) return `function ${tool} { ${q} pkg ${tool} -- "$@" && command ${tool} "$@"; }`;
+    if (!opt.run || !RUN_TOOLS.includes(tool)) return `function ${tool} { case "$1" in ${checked(tool, subs)} esac; command ${tool} "$@"; }`;
+    const all = subs.split("|");
+    const exec = all.filter((s) => EXEC_SUBS.includes(s));
+    const installs = all.filter((s) => !EXEC_SUBS.includes(s)).join("|");
+    return `function ${tool} { case "$1" in ${exec.length ? `${checked(tool, exec.join("|"))} ` : ""}${installs}) ${q} pkg --run ${tool} -- "$@"; return $?;; esac; command ${tool} "$@"; }`;
+  };
   return [
     GUARD_START,
     "# Package installs are checked by vswarm first. Skip once: command npm …   Turn off: vswarm guard off",
@@ -534,8 +649,20 @@ export function guardBlock(launcher: string): string {
  * cmd.exe would read & or | inside a package URL as its own. The real tool is found as an application on PATH, so
  * the function never calls itself.
  */
-export function psGuardBlock(bun: string, cli: string): string {
+export function psGuardBlock(bun: string, cli: string, opt: { ignoreScripts?: boolean } = {}): string {
   const q = (s: string) => `'${s.replace(/['\u2018\u2019\u201a\u201b]/g, "$&$&")}'`;
+  // guard on --ignore-scripts: npm, pnpm, bun and yarn 1 get --ignore-scripts after the subcommand; yarn 2+ has no such
+  // flag and reads YARN_ENABLE_SCRIPTS. (No sandbox on Windows yet.)
+  const scriptsOff = opt.ignoreScripts
+    ? [
+      `  $ys = $null`,
+      `  if (@(${RUN_TOOLS.map(q).join(", ")}) -contains $tool -and $first -notmatch '^(${EXEC_SUBS.join("|")})$' -and -not ($a -contains '--ignore-scripts')) {`,
+      "    if ($tool -eq 'yarn' -and [int](([string](& $real --version)) -split '\\.')[0] -ge 2) { $ys = [string]$env:YARN_ENABLE_SCRIPTS; $env:YARN_ENABLE_SCRIPTS = 'false' }",
+      "    else { $at = if ($tool -eq 'yarn' -and $first -eq 'global') { 2 } elseif ($a.Count) { 1 } else { 0 }; $a = @($a | Select-Object -First $at) + @('--ignore-scripts') + @($a | Select-Object -Skip $at) }",
+      `    Write-Host "vswarm: install scripts were skipped; run them deliberately with: npm rebuild <package> (pnpm rebuild, bun pm trust)" -ForegroundColor DarkGray`,
+      "  }",
+    ]
+    : [];
   const fn = (tool: string, subs?: string) =>
     `function ${tool} { __vswarm_go ${tool} ${subs === undefined ? "'.*'" : q(`^(${subs.replace(/""/g, "")})$`)} $args }`;
   return [
@@ -548,9 +675,11 @@ export function psGuardBlock(bun: string, cli: string): string {
     "  if ($first -notmatch $installs) { & $real @a; return }",
     `  & ${q(bun)} ${q(cli)} pkg $tool '--' @a`,
     "  if ($LASTEXITCODE -ne 0) { return }",
+    ...scriptsOff,
     // Socket Firewall, when present, checks every download of the install too (VSWARM_SFW=off to skip it).
     `  $sfw = if ($env:VSWARM_SFW -ne 'off' -and @(${[...SFW].map(q).join(", ")}) -contains $tool) { Get-Command -Name sfw -CommandType Application -TotalCount 1 -ErrorAction SilentlyContinue }`,
     "  if ($sfw) { & $sfw $tool @a } else { & $real @a }",
+    ...(opt.ignoreScripts ? ["  if ($null -ne $ys) { $env:YARN_ENABLE_SCRIPTS = $(if ($ys) { $ys } else { $null }) }"] : []),
     "}",
     ...Object.entries(INSTALLS).filter(([t]) => t !== "brew").map(([t, subs]) => fn(t, subs)),
     fn("npx"),

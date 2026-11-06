@@ -5,13 +5,15 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, symlinkSync, writeFil
 import { tmpdir } from "node:os";
 import { dirname, join, sep } from "node:path";
 import { VERSION } from "../src/home";
-import { checkInstall, depTree, guardBlock, npmSpec, pipSpec, plan } from "../src/sec/pkg";
+import { checkInstall, depTree, guardBlock, npmSpec, pipSpec, pkgCommand, plan, psGuardBlock, scriptsHint, withoutScripts } from "../src/sec/pkg";
+import { sandboxRun } from "../src/sec/try/spawn";
+import { profile } from "../src/sec/try/sandbox";
 import { kubeUsers, secretNames, secrets as findSecrets } from "../src/sec/secrets";
 import { agents, literalSecrets } from "../src/sec/collect/agents";
 import { startupFiles } from "../src/sec/collect/system";
 import { evaluate } from "../src/sec/rules";
 import { inspect, judgeTools, pinTools, type Tool } from "../src/sec/mcp";
-import { traceDenials } from "../src/sec/try/linux";
+import { bwrapArgs, traceDenials } from "../src/sec/try/linux";
 import { allowedBy, startProxy } from "../src/sec/try/proxy";
 import { network } from "../src/sec/try/watch";
 import { staticCheck } from "../src/sec/try/static";
@@ -1278,5 +1280,116 @@ describe("vswarm's own changes and the cached verdict", () => {
     } finally {
       delete process.env.VSWARM_SEC_DIR;
     }
+  });
+});
+
+describe("install guard: scripts off, the sandbox, strict", () => {
+  test("--ignore-scripts goes right after the subcommand; yarn 2+ gets YARN_ENABLE_SCRIPTS; running a package is left alone", () => {
+    expect(withoutScripts("npm", ["install", "x"]).args).toEqual(["install", "--ignore-scripts", "x"]);
+    expect(withoutScripts("npm", ["ci"]).args).toEqual(["ci", "--ignore-scripts"]);
+    expect(withoutScripts("pnpm", ["add", "-D", "x"]).args).toEqual(["add", "--ignore-scripts", "-D", "x"]);
+    expect(withoutScripts("bun", ["add", "x"]).args).toEqual(["add", "--ignore-scripts", "x"]);
+    expect(withoutScripts("yarn", []).args).toEqual(["--ignore-scripts"]);
+    expect(withoutScripts("yarn", ["global", "add", "x"]).args).toEqual(["global", "add", "--ignore-scripts", "x"]);
+    expect(withoutScripts("yarn", ["add", "x"], 4)).toEqual({ args: ["add", "x"], env: { YARN_ENABLE_SCRIPTS: "false" } });
+    for (const a of [["exec", "x"], ["x", "y"], ["dlx", "z"], ["run", "dev"], ["install", "--ignore-scripts"]]) expect(withoutScripts("npm", a).args).toBe(a);
+    expect(scriptsHint("pnpm", ["sharp"])).toContain("vswarm try . -- pnpm rebuild sharp");
+    expect(scriptsHint("bun", [])).toContain("bun pm trust <package>");
+  });
+
+  test.skipIf(WIN)("with scripts off, the shell wrapper hands installs to vswarm pkg --run; other commands stay as they were", async () => {
+    const d = tmp("guard-run");
+    const log = join(d, "log");
+    writeFileSync(join(d, "vswarm"), `#!/bin/sh\necho "vswarm $*" >> ${log}\n`, { mode: 0o755 });
+    writeFileSync(join(d, "npm"), `#!/bin/sh\necho "npm $*" >> ${log}\n`, { mode: 0o755 });
+    const rc = join(d, "rc");
+    writeFileSync(rc, guardBlock(join(d, "vswarm"), { run: true }));
+    for (const sh of [["zsh", "-f"], ["bash", "--norc", "--noprofile"]]) {
+      if (!Bun.which(sh[0])) continue;
+      writeFileSync(log, "");
+      const p = Bun.spawn([...sh, "-c", `. ${rc}; npm run dev; npm install good; npm exec cowsay`], { cwd: d, env: { PATH: `${d}:/usr/bin:/bin`, HOME: d }, stdout: "pipe", stderr: "pipe" });
+      expect(await p.exited).toBe(0);
+      expect(readFileSync(log, "utf8").trim().split("\n")).toEqual(["npm run dev", "vswarm pkg --run npm -- install good", "vswarm pkg npm -- exec cowsay", "npm exec cowsay"]);
+    }
+  });
+
+  test.skipIf(WIN)("vswarm pkg --run installs with --ignore-scripts when the guard says so, and says how to run the scripts", async () => {
+    const sec = tmp("sec");
+    const bin = tmp("bin");
+    const log = join(bin, "log");
+    writeFileSync(join(bin, "npm"), `#!/bin/sh\necho "$*" >> ${log}\n`, { mode: 0o755 });
+    writeFileSync(join(sec, "guard.json"), JSON.stringify({ ignoreScripts: true }));
+    const env = { ...process.env, NO_COLOR: "1", VSWARM_SEC_DIR: sec, VSWARM_SFW: "off", PATH: `${bin}:${process.env.PATH}` };
+    const p = Bun.spawn([process.execPath, CLI, "pkg", "--run", "npm", "--offline", "--", "install", "harmless-pkg@1.0.0"], { env, stdin: "ignore", stdout: "pipe", stderr: "pipe" });
+    const err = await new Response(p.stderr).text();
+    expect(await p.exited).toBe(0);
+    expect(readFileSync(log, "utf8").trim()).toBe("install --ignore-scripts harmless-pkg@1.0.0");
+    expect(err).toContain("npm rebuild");
+    // A look-alike is still stopped before anything runs.
+    const bad = Bun.spawn([process.execPath, CLI, "pkg", "--run", "npm", "--offline", "--", "install", "axois"], { env, stdin: "ignore", stdout: "pipe", stderr: "pipe" });
+    expect(await bad.exited).toBe(3);
+    expect(readFileSync(log, "utf8").trim().split("\n").length).toBe(1);
+  }, 60_000);
+
+  test("a registry that does not answer: the install goes ahead by default, and stops under --strict", async () => {
+    const down: any = async () => {
+      throw new Error("getaddrinfo ENOTFOUND registry.npmjs.org");
+    };
+    const r = await checkInstall(plan("npm", ["install", "left-pad-x"], "/nonexistent"), { get: down });
+    expect(r.verdict).toBe("pass");
+    expect(r.unverified[0]).toContain("registry did not answer");
+    const asked: string[] = [];
+    const ask = async (q: string) => (asked.push(q), false);
+    await withSec(async () => {
+      expect(await pkgCommand("npm", ["install", "left-pad-x"], { offline: false, get: down, ask })).toBe(0);
+      expect(await pkgCommand("npm", ["install", "left-pad-x"], { offline: false, strict: true, get: down, ask })).toBe(3);
+      expect(asked.length).toBe(1);
+      // Offline on purpose is not a failure to check.
+      expect(await pkgCommand("npm", ["install", "left-pad-x"], { offline: true, strict: true, ask })).toBe(0);
+    });
+  });
+
+  const sandbox = process.platform === "darwin" || (process.platform === "linux" && !!Bun.which("bwrap"));
+  test.skipIf(!sandbox)("an install in the sandbox may write its project folder, but not the project's .git", async () => {
+    const proj = tmp("proj");
+    mkdirSync(join(proj, ".git"));
+    writeFileSync(join(proj, ".git", "HEAD"), "ref: refs/heads/main\n");
+    const prev = process.env.VSWARM_TRY_DIR;
+    process.env.VSWARM_TRY_DIR = tmp("try");
+    try {
+      const r = await sandboxRun(["/bin/sh", "-c", "echo ok > made.txt; echo planted > .git/hooks-post-checkout 2>/dev/null; echo hacked >> .git/HEAD 2>/dev/null; exit 0"], { cwd: proj });
+      expect(r.code).toBe(0);
+      expect(readFileSync(join(proj, "made.txt"), "utf8")).toBe("ok\n");
+      expect(existsSync(join(proj, ".git", "hooks-post-checkout"))).toBe(false);
+      expect(readFileSync(join(proj, ".git", "HEAD"), "utf8")).toBe("ref: refs/heads/main\n");
+    } finally {
+      if (prev === undefined) delete process.env.VSWARM_TRY_DIR;
+      else process.env.VSWARM_TRY_DIR = prev;
+    }
+  }, 60_000);
+
+  test("the sandbox walls for an install: the project folder writable, its .git kept read-only (Seatbelt and bubblewrap)", () => {
+    const box = { dir: "/b", work: "/b/work", home: "/b/home", tmp: "/b/tmp", netlog: "/b/tmp/n" };
+    const project = { dir: "/Users/a/app", readOnly: ["/Users/a/app/.git"] };
+    const sb = profile("/Users/a", box, 9999, [], [], project);
+    expect(sb).toMatch(/\(allow file-write\*[^\n]*\(subpath "\/Users\/a\/app"\)/);
+    expect(sb).toContain('(deny file-write* (subpath "/Users/a/app/.git"))');
+    expect(sb.indexOf('(deny file-write* (subpath "/Users/a/app/.git"))')).toBeGreaterThan(sb.indexOf("(allow file-write*"));
+    const bw = bwrapArgs("/home/a", box, { tools: [], bun: "/usr/bin/bun", interactive: true, project: { dir: "/home/a/app", readOnly: ["/home/a/app/.git"] } });
+    const at = (a: string[], i: number) => a.slice(i, i + 3).join(" ");
+    expect(bw.map((_, i) => at(bw, i))).toContain("--bind /home/a/app /home/a/app");
+    expect(bw.map((_, i) => at(bw, i))).toContain("--ro-bind /home/a/app/.git /home/a/app/.git");
+    expect(bw[bw.lastIndexOf("--chdir") + 1]).toBe("/home/a/app");
+    // Without a project nothing changes for try.
+    expect(profile("/Users/a", box, 9999)).not.toContain("/Users/a/app");
+  });
+
+  test("Windows guard with scripts off: the PowerShell function adds --ignore-scripts and restores YARN_ENABLE_SCRIPTS", () => {
+    const ps = psGuardBlock("C:\\b\\bun.exe", "C:\\v\\cli.ts", { ignoreScripts: true });
+    expect(ps).toContain("@('npm', 'pnpm', 'yarn', 'bun') -contains $tool");
+    expect(ps).toContain("@('--ignore-scripts')");
+    expect(ps).toContain("$env:YARN_ENABLE_SCRIPTS = 'false'");
+    expect(ps.indexOf("$env:YARN_ENABLE_SCRIPTS = $(if ($ys)")).toBeGreaterThan(ps.indexOf("& $real @a }"));
+    expect(psGuardBlock("C:\\b\\bun.exe", "C:\\v\\cli.ts")).not.toContain("--ignore-scripts");
   });
 });

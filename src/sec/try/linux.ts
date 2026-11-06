@@ -38,7 +38,7 @@ export async function freshProc(bwrap: string): Promise<boolean> {
   return (await exec([bwrap, "--unshare-pid", "--unshare-net", "--ro-bind", "/", "/", "--dev", "/dev", "--proc", "/proc", "true"])).code === 0;
 }
 
-export function bwrapArgs(realHome: string, box: Box, opt: { tools: string[]; bun: string; interactive: boolean; hostProc?: boolean }): string[] {
+export function bwrapArgs(realHome: string, box: Box, opt: { tools: string[]; bun: string; interactive: boolean; hostProc?: boolean; project?: { dir: string; readOnly: string[] } }): string[] {
   const a = ["--die-with-parent", "--unshare-pid", "--unshare-ipc", "--unshare-uts", "--unshare-cgroup-try", "--unshare-net", "--hostname", "vswarm-try",
     "--ro-bind", "/", "/", "--dev", "/dev", ...(opt.hostProc ? ["--ro-bind", "/proc", "/proc"] : ["--proc", "/proc"]), "--tmpfs", "/tmp", "--tmpfs", "/var/tmp"];
   // Every home folder, then the real one in case it lives elsewhere.
@@ -49,6 +49,12 @@ export function bwrapArgs(realHome: string, box: Box, opt: { tools: string[]; bu
   const bunDir = dirname(opt.bun);
   if (bunDir.startsWith(realHome + "/") && !opt.tools.some((t) => bunDir.startsWith(t))) a.push("--ro-bind", bunDir, bunDir);
   a.push("--bind", box.dir, box.dir, "--chdir", box.work);
+  // An install in the sandbox (guard --sandbox) works in your project folder itself; its .git stays read-only.
+  if (opt.project) {
+    a.push("--bind", opt.project.dir, opt.project.dir);
+    for (const r of opt.project.readOnly) a.push("--ro-bind", r, r);
+    a.push("--chdir", opt.project.dir);
+  }
   // A new session stops TIOCSTI keystroke injection into your terminal; an interactive shell needs the terminal.
   if (!opt.interactive) a.push("--new-session");
   return a;

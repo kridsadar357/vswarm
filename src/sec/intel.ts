@@ -2,7 +2,7 @@
 // records), look-alike names of popular packages, and code signatures of new executables.
 
 import { closeSync, mkdirSync, openSync, readSync, writeFileSync } from "node:fs";
-import { dirname } from "node:path";
+import { dirname, join } from "node:path";
 import { exec, readJson } from "./ctx";
 import type { Item } from "./types";
 
@@ -69,41 +69,129 @@ export async function osvMalicious(items: Item[], cacheFile: string, opt: { offl
   return { hits, checked, error, unchecked: pkgs.length - checked };
 }
 
-/** Popular names that attackers imitate. A short list on purpose: the point is to catch near misses. */
-const POPULAR: Record<string, string[]> = {
-  npm: ["react", "react-dom", "lodash", "express", "axios", "chalk", "commander", "debug", "dotenv", "typescript", "webpack", "vite", "eslint", "prettier", "jest", "mocha", "moment", "dayjs", "uuid", "yargs", "inquirer", "request", "node-fetch", "cross-env", "nodemon", "next", "vue", "angular", "svelte", "three", "socket.io", "mongoose", "sequelize", "prisma", "pg", "mysql", "mysql2", "redis", "ioredis", "jsonwebtoken", "bcrypt", "bcryptjs", "colors", "ethers", "web3", "electron", "puppeteer", "playwright", "tailwindcss", "postcss", "babel-cli", "core-js", "rimraf", "glob", "minimist", "semver", "ws", "body-parser", "cors", "helmet", "zod", "openai", "@anthropic-ai/sdk", "pnpm", "yarn", "npm", "bun", "tsx", "ts-node", "esbuild", "rollup", "turbo", "nx", "lerna", "firebase", "aws-sdk", "stripe", "discord.js", "telegraf", "solana", "@solana/web3.js", "bitcoinjs-lib", "tronweb",
+// ── look-alike names
+// The most-downloaded npm and PyPI names (src/sec/data/popular.json, made by scripts/popular.ts from public download
+// rankings), plus names attackers are known to imitate that a download ranking may rank low or miss: frameworks, MCP
+// servers, wallets, AI SDKs, packages hijacked before. These count as most-used.
+const EXTRA: Record<string, string[]> = {
+  npm: ["react", "react-dom", "lodash", "express", "axios", "chalk", "commander", "dotenv", "typescript", "webpack", "vite", "eslint", "prettier", "jest", "mocha",
+    "moment", "dayjs", "uuid", "yargs", "inquirer", "request", "node-fetch", "cross-env", "nodemon", "next", "angular", "@angular/core", "svelte", "three", "socket.io",
+    "mongoose", "sequelize", "prisma", "mysql", "mysql2", "redis", "ioredis", "jsonwebtoken", "bcrypt", "bcryptjs", "colors", "electron", "tailwindcss", "postcss",
+    "babel-cli", "core-js", "rimraf", "minimist", "body-parser", "cors", "helmet", "zod", "pnpm", "yarn", "ts-node", "esbuild", "rollup", "turbo", "lerna", "firebase",
+    "aws-sdk", "stripe", "jquery", "nodemailer", "event-stream", "ua-parser-js", "eslint-scope", "node-ipc", "faker",
+    "ethers", "web3", "solana", "@solana/web3.js", "bitcoinjs-lib", "tronweb", "discord.js", "telegraf", "openai", "@anthropic-ai/sdk", "puppeteer", "playwright",
     // MCP servers people start through npx; a near miss here runs with the agent's access.
     "@modelcontextprotocol/server-filesystem", "@modelcontextprotocol/server-github", "@modelcontextprotocol/server-postgres", "@modelcontextprotocol/server-puppeteer",
     "@modelcontextprotocol/server-memory", "@modelcontextprotocol/server-sequential-thinking", "@modelcontextprotocol/sdk", "@playwright/mcp", "mcp-remote",
     "@upstash/context7-mcp", "@notionhq/notion-mcp-server", "figma-developer-mcp", "@supabase/mcp-server-supabase", "@stripe/mcp", "chrome-devtools-mcp"],
-  pip: ["requests", "urllib3", "numpy", "pandas", "scipy", "matplotlib", "django", "flask", "fastapi", "pydantic", "boto3", "botocore", "setuptools", "pip", "wheel", "six", "pyyaml", "cryptography", "pycryptodome", "paramiko", "selenium", "beautifulsoup4", "lxml", "pillow", "opencv-python", "torch", "tensorflow", "transformers", "openai", "anthropic", "langchain", "colorama", "termcolor", "click", "rich", "httpx", "aiohttp", "jinja2", "sqlalchemy", "psycopg2", "pymongo", "redis", "celery", "pytest", "black", "ruff", "web3", "solana", "python-dotenv", "discord.py", "telethon", "ccxt", "mcp", "fastmcp", "mcp-server-fetch", "mcp-server-git", "mcp-server-time"],
+  pip: ["requests", "urllib3", "numpy", "pandas", "scipy", "matplotlib", "django", "flask", "fastapi", "pydantic", "boto3", "botocore", "setuptools", "wheel",
+    "pyyaml", "cryptography", "pycryptodome", "paramiko", "selenium", "beautifulsoup4", "lxml", "pillow", "opencv-python", "torch", "tensorflow", "transformers",
+    "colorama", "termcolor", "click", "rich", "httpx", "aiohttp", "jinja2", "sqlalchemy", "psycopg2", "pymongo", "redis", "celery", "pytest", "black", "ruff",
+    "python-dotenv", "python-dateutil", "jellyfish", "scikit-learn",
+    "web3", "solana", "discord-py", "telethon", "ccxt", "openai", "anthropic", "langchain", "mcp", "fastmcp", "mcp-server-fetch", "mcp-server-git", "mcp-server-time"],
 };
 
-function distance(a: string, b: string): number {
-  if (Math.abs(a.length - b.length) > 2) return 3;
-  if (a.length > 64 || b.length > 64) return 3;
-  const dp = Array.from({ length: a.length + 1 }, (_, i) => [i, ...Array(b.length).fill(0)]);
-  for (let j = 1; j <= b.length; j++) dp[0][j] = j;
-  for (let i = 1; i <= a.length; i++)
-    for (let j = 1; j <= b.length; j++)
-      dp[i][j] = Math.min(dp[i - 1][j] + 1, dp[i][j - 1] + 1, dp[i - 1][j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1),
-        i > 1 && j > 1 && a[i - 1] === b[j - 2] && a[i - 2] === b[j - 1] ? dp[i - 2][j - 2] + 1 : 99);
-  return dp[a.length][b.length];
+let popular: Record<string, { list: string[]; set: Set<string>; rank: Map<string, number> }> | undefined;
+
+/** The ranked names per ecosystem, most popular first, read once. */
+function lists() {
+  if (!popular) {
+    const data = readJson<{ npm: string[]; pip: string[] }>(join(import.meta.dir, "data", "popular.json"), 5_000_000) ?? { npm: [], pip: [] };
+    popular = {};
+    for (const kind of ["npm", "pip"] as const) {
+      const list = [...new Set([...(data[kind] ?? []), ...EXTRA[kind]].map((n) => normName(kind, n)))];
+      const extra = new Set(EXTRA[kind].map((n) => normName(kind, n)));
+      popular[kind] = { list, set: new Set(list), rank: new Map(list.map((name, i) => [name, extra.has(name) ? 0 : i])) };
+    }
+  }
+  return popular;
 }
 
-/** The popular package this name imitates, if it is one edit away (or the same name with a separator trick). */
-export function lookAlike(kind: string, name: string): string | undefined {
-  const list = POPULAR[kind];
-  if (!list) return;
-  const n = name.toLowerCase();
-  if (list.includes(n)) return;
-  const norm = (s: string) => s.replace(/[-_.]/g, "");
-  for (const p of list) {
-    if (p.length < 4) continue;
-    if (norm(p) === norm(n)) return p;
-    if (distance(p, n) === 1) return p;
-    if (n === `${p}js` || n === `${p}-js` || n === `py${p}` || n === `${p}-py` || n === `${p}2` || n === `${p}s`) return p;
+/** How a registry compares names: npm by lower case, PyPI after PEP 503 (lower case, - _ . all the same). */
+export function normName(kind: string, name: string): string {
+  const n = name.trim().toLowerCase();
+  return kind === "pip" ? n.replace(/[-_.]+/g, "-") : n;
+}
+
+/** Names your team says are fine (internal packages that happen to resemble popular ones); see team.ts. */
+let allowed: (kind: string, name: string) => boolean = () => false;
+export function allowNames(fn: (kind: string, name: string) => boolean) {
+  allowed = fn;
+}
+
+/**
+ * Optimal-string-alignment Damerau–Levenshtein distance (insert, delete, substitute, swap two neighbours), giving up
+ * as soon as it must exceed `max`.
+ */
+export function distance(a: string, b: string, max = 2): number {
+  if (Math.abs(a.length - b.length) > max) return max + 1;
+  if (a.length > 214 || b.length > 214) return max + 1;
+  let prev2: number[] = [];
+  let prev = Array.from({ length: b.length + 1 }, (_, j) => j);
+  for (let i = 1; i <= a.length; i++) {
+    const cur = [i];
+    let best = i;
+    for (let j = 1; j <= b.length; j++) {
+      let v = Math.min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1));
+      if (i > 1 && j > 1 && a[i - 1] === b[j - 2] && a[i - 2] === b[j - 1]) v = Math.min(v, prev2[j - 2] + 1);
+      cur.push(v);
+      best = Math.min(best, v);
+    }
+    if (best > max) return max + 1;
+    prev2 = prev;
+    prev = cur;
   }
+  return prev[b.length];
+}
+
+const flat = (s: string) => s.replace(/[-_.]/g, "");
+
+/**
+ * The popular package this name imitates, if any: the most popular one within one edit (two for names of 8 characters
+ * or more), the same name with other separators (cross_env, cross.env), a scope folded into the name
+ * (solana-web3.js for @solana/web3.js), or a popular name with a typical suffix (lodashjs, requests2). A popular name
+ * is never a look-alike of another popular name, and neither is a name your team allows.
+ */
+export function lookAlike(kind: string, name: string): string | undefined {
+  const l = lists()[kind];
+  if (!l) return;
+  const n = normName(kind, name);
+  // Three letters or fewer: too many real packages sit one edit from each other (ms, ws, ip, npm).
+  if (n.length < 4 || l.set.has(n) || allowed(kind, n)) return;
+  for (const p of l.list) {
+    if (p.length < 4) continue;
+    if (flat(p) === flat(n)) return p;
+    // @scope/name written without the scope's slash: solana-web3.js, solanaweb3.js.
+    const scoped = /^@([^/]+)\/(.+)$/.exec(p);
+    if (scoped && !n.startsWith("@") && flat(n) === flat(scoped[1] + scoped[2])) return p;
+    // Short names have many real neighbours (color, colord; util, utila): only the most-used ones are matched there.
+    const long = Math.min(p.length, n.length) >= 8;
+    if (long || l.rank.get(p)! < (kind === "pip" ? 500 : 1000)) {
+      const max = long ? 2 : 1;
+      const d = distance(p, n, max);
+      if (d >= 1 && d <= max && !family(p, n, l.rank.get(p)!)) return p;
+    }
+    if (n === `${p}js` || n === `${p}-js` || n === `${p}.js` || n === `py${p}` || n === `${p}-py`) return p;
+  }
+}
+
+/**
+ * Near names that are a package family, not a typo: another major version (eventemitter2 / eventemitter3, cu12 /
+ * cu13), a scope added or dropped with a second edit, a word added in front or behind (estraverse / traverse), a
+ * plural (cookie / cookies) unless the name is among the 200 most used, or one whole word swapped among the same
+ * words around it (css-loader / sass-loader, client-sso / client-sts, @sentry/core / @sentry/node). One slip inside
+ * a word (react-domm) is still a typo.
+ */
+function family(p: string, n: string, rank: number): boolean {
+  if (/\d/.test(p) && /\d/.test(n) && p.replace(/\d+/g, "") === n.replace(/\d+/g, "")) return true;
+  const d = distance(p, n, 2);
+  if (p.startsWith("@") !== n.startsWith("@") && d === 2) return true;
+  if (d === 2 && (n.startsWith(p) || n.endsWith(p) || p.startsWith(n) || p.endsWith(n))) return true;
+  if (rank >= 200 && (n === `${p}s` || p === `${n}s`)) return true;
+  const ps = p.split(/[-/.]/), ns = n.split(/[-/.]/);
+  if (ps.length < 2 || ps.length !== ns.length) return false;
+  const diff = ps.map((s, i) => [s, ns[i]]).filter(([a, b]) => a !== b);
+  return diff.length === 1 && distance(diff[0][0], diff[0][1], 2) >= 2;
 }
 
 export interface Signature {

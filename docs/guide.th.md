@@ -294,7 +294,8 @@ malware ส่วนใหญ่มาในรูป package เช่นชื
 | สิ่งที่เจอ | ผล |
 | --- | --- |
 | มีรายงานว่าอันตราย (OSV `MAL-`) | หยุด ถามก่อน |
-| ชื่อห่างจาก package ดังแค่ 1 ตัวอักษร | หยุด ถามก่อน |
+| ชื่อใกล้กับ package ดัง (ดูข้างล่าง) และตัวมันเองยังไม่มีใครใช้ | หยุด ถามก่อน |
+| ชื่อใกล้กับ package ดัง แต่ตัวมันเองก็ใช้กันเยอะและมีมาหลายปีแล้ว | แจ้ง 1 บรรทัด |
 | ไม่มี package ชื่อนี้ แต่คล้ายของดัง | หยุด ถามก่อน |
 | สร้างไม่ถึง 30 วัน คนโหลดน้อย และมีสคริปต์ติดตั้ง | หยุด ถามก่อน |
 | เวอร์ชันที่ออกไม่ถึง 48 ชั่วโมง | เตือนแล้วไปต่อ |
@@ -312,7 +313,20 @@ malware ส่วนใหญ่มาในรูป package เช่นชื
 - ตรวจเองโดยไม่ต้องเปิด guard: `vswarm pkg npm install <ชื่อ>`
 - `npm install` ที่ไม่ระบุชื่อ package จะเช็คทุกเวอร์ชันใน lockfile กับ OSV
 - ข้ามครั้งเดียว: `command npm install …` · ปิด: `vswarm guard off` · ปิดชั่วคราวทั้ง session: `export VSWARM_GUARD=off`
-- ถ้าต่อ registry ไม่ได้ จะติดตั้งต่อพร้อมแจ้งให้รู้
+- ถ้าต่อ registry ไม่ได้ จะติดตั้งต่อพร้อมแจ้งให้รู้ ตั้งใจให้เป็นแบบนี้ เพราะเน็ตกระตุกหรือ registry ล่มไม่ใช่การโจมตี และ guard ที่ขวางงานทุกครั้งที่เน็ตมีปัญหาสุดท้ายก็โดนปิด ถ้าอยากให้เข้มกว่านี้ ใช้ `vswarm guard on --strict` (หรือ `vswarm pkg --strict …`) แล้วการติดตั้งที่ตรวจได้ไม่ครบจะหยุดถามก่อน
+
+**ชื่อเลียนแบบ** vswarm เทียบชื่อกับ npm package ที่มีคนโหลดมากที่สุด 2,000 ตัว และ PyPI 1,000 ตัว (`src/sec/data/popular.json` สร้างด้วย `scripts/popular.ts` จาก npm-high-impact และ top-pypi-packages ในไฟล์บอกวันที่ไว้) รวมกับชื่อที่ผู้โจมตีชอบเลียนแบบ เช่น MCP server, wallet, AI SDK ชื่อที่ถือว่าเลียนแบบคือชื่อที่ต่างจากของดัง 1 ตัวอักษร (ถ้าชื่อยาว 8 ตัวขึ้นไปยอมให้ต่าง 2 ตัว), ชื่อเดียวกันแต่เปลี่ยนตัวคั่น (`cross_env`), เอา scope มาต่อเป็นชื่อ (`solana-web3.js`) หรือเติมท้ายแบบที่เจอบ่อย (`lodash.js`) แต่จะปล่อยผ่านถ้าตัวมันเองก็ดังอยู่แล้ว, เป็นตระกูลเดียวกันจริงๆ (`eventemitter2`, `sass-loader`, `@aws-sdk/client-sts`) หรือชื่อสั้นแค่ 3 ตัวอักษร ทีมอนุญาตชื่อของตัวเองได้ ([team.md](team.md))
+
+**ปิดสคริปต์ติดตั้ง และติดตั้งใน sandbox (เปิดเองถ้าต้องการ)**
+
+```bash
+vswarm guard on --ignore-scripts             # npm, pnpm, yarn, bun ติดตั้งแบบ --ignore-scripts
+vswarm guard on --ignore-scripts --sandbox   # และติดตั้งใน sandbox เดียวกับ try (macOS, Linux)
+```
+
+เมื่อเปิด `--ignore-scripts` vswarm จะรันคำสั่งติดตั้งเองหลังตรวจเสร็จ โดยเติม `--ignore-scripts` ต่อจาก subcommand (yarn 2 ขึ้นไปใช้ `YARN_ENABLE_SCRIPTS=false` แทน) ทำให้ `preinstall`/`postinstall` ของ package ไหนก็ไม่ได้รัน ซึ่งเป็นทางที่ malware บน npm ใช้เริ่มทำงานบ่อยที่สุด สิ่งที่จะพัง: package ที่ต้อง build หรือดาวน์โหลดของตอนติดตั้ง เช่น native module (`sharp`, `bcrypt`, `sqlite3`, `canvas`), browser ของ `puppeteer` และ `playwright`, `esbuild` รุ่นเก่า, hook ของ `husky` ถ้าไว้ใจแล้วค่อยสั่งรันสคริปต์เองทีละตัว: ดูก่อนว่ามันทำอะไรด้วย `vswarm try . -- npm rebuild sharp` แล้วค่อยรันจริงด้วย `command npm rebuild sharp` (pnpm ใช้ `pnpm rebuild`, bun ใช้ `bun pm trust`)
+
+เมื่อเปิด `--sandbox` การติดตั้งจะรันใน sandbox เดียวกับ `vswarm try` แต่ทำงานในโฟลเดอร์โปรเจกต์จริง: เขียนในโฟลเดอร์นั้นได้ ยกเว้น `.git` ส่วนที่เหลือของ home มองไม่เห็น (รวมถึง `~/.npmrc` และ token ของ registry ส่วนตัว) และออกเน็ตได้แค่ package registry การติดตั้งแบบ global (`-g`) ไปแก้ไฟล์ที่อื่นจึงไม่รันใน sandbox ถ้าใช้ registry ส่วนตัว ให้ติดตั้งด้วย `command npm …` บน Windows มี `--ignore-scripts` แต่ยังไม่มี sandbox
 
 ## 9. รันโค้ดที่ไม่ไว้ใจ: try
 
@@ -447,7 +461,7 @@ vswarm trust           # กุญแจที่เครื่องนี้�
 | `vswarm gate ssh <pattern…> [--cert]` · `gate status` · `gate remove` | ด่านใน `~/.ssh/config` |
 | `vswarm ca init [--sk] [--principal a,b] [--ttl 15m]` · `ca server <account>` · `ca status` | CA สำหรับใบรับรอง ssh |
 | `vswarm cert [--host h]` | ขอใบรับรองอายุสั้น (เฉพาะตอนผ่าน) |
-| `vswarm guard on` · `off` · `status` | ด่านตรวจ package ใน shell |
+| `vswarm guard on [--ignore-scripts] [--sandbox] [--strict]` · `off` · `status` | ด่านตรวจ package ใน shell |
 | `vswarm pkg <tool> [--] <args…>` | ตรวจคำสั่งติดตั้งเอง exit 3 เมื่อควรหยุด |
 | `vswarm try <target> [--net none\|registries\|all] [--localhost] [--yes] [-- cmd…]` · `--list` · `--clean [id]` | รันโค้ดใน sandbox |
 | `vswarm respond [--yes] [--force]` | รับมือเหตุการณ์ |

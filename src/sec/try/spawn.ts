@@ -73,3 +73,42 @@ export async function sandboxSpawn(cmd: string[], opt: { net: Net; env?: Record<
     },
   };
 }
+
+/** The sandbox walls for an install in a folder of yours: that folder writable, its .git read-only. */
+export function projectWalls(cwd: string): { dir: string; readOnly: string[] } {
+  const dir = realpathSync(cwd);
+  return { dir, readOnly: [join(dir, ".git")].filter((p) => existsSync(p)) };
+}
+
+/**
+ * Runs a command in the sandbox on your terminal, inside a real folder of yours (an install guarded with
+ * `guard on --sandbox`): that folder is writable except its .git, the rest of your home is out of sight, the network
+ * is the package registries only. Returns the exit code and the hosts it was refused.
+ */
+export async function sandboxRun(cmd: string[], opt: { cwd: string; env?: Record<string, string> }): Promise<{ code: number; refused: string[] }> {
+  mkdirSync(TRY_DIR(), { recursive: true, mode: 0o700 });
+  const dir = realpathSync(mkdtempSync(join(TRY_DIR(), "install-")));
+  const box: Box = { dir, work: join(dir, "work"), home: join(dir, "home"), tmp: join(dir, "tmp"), netlog: join(dir, "tmp", "netlog.jsonl") };
+  for (const d of [box.work, box.home, box.tmp]) mkdirSync(d, { recursive: true, mode: 0o700 });
+  const project = projectWalls(opt.cwd);
+  const linux = process.platform === "linux";
+  const proxy = startProxy(allowedBy("registries"), linux ? { unix: join(box.tmp, "proxy.sock") } : {});
+  let argv: string[];
+  if (linux) {
+    writeFileSync(join(box.tmp, "forwarder.js"), FORWARDER);
+    const hostProc = !(await freshProc(Bun.which("bwrap")!));
+    argv = [Bun.which("bwrap")!, ...bwrapArgs(homedir(), box, { tools: toolchains(homedir()), bun: process.execPath, interactive: true, hostProc, project }), "--", ...inner(box, process.execPath, cmd)];
+  } else {
+    const sb = join(dir, "sandbox.sb");
+    writeFileSync(sb, profile(homedir(), box, proxy.port, [], await listeningPorts(), project));
+    argv = ["/usr/bin/sandbox-exec", "-f", sb, ...cmd];
+  }
+  try {
+    const p = Bun.spawn(argv, { cwd: project.dir, env: { ...cleanEnv(box, linux ? INNER_PORT : proxy.port, homedir()), ...opt.env }, stdin: "inherit", stdout: "inherit", stderr: "inherit" });
+    const code = await p.exited;
+    return { code, refused: [...new Set(proxy.hits.filter((h) => !h.allowed).map((h) => h.host))] };
+  } finally {
+    proxy.stop();
+    rmSync(dir, { recursive: true, force: true });
+  }
+}

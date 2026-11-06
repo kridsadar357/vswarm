@@ -88,7 +88,7 @@ function usage() {
   row('vswarm cert · gate ssh --cert "prod-*"', "15-minute certificate, only when preflight passes");
   row("vswarm accept <id…> | --all | --list", "mark reviewed findings as expected");
   console.log(`\n  ${c.bold("before you install")}`);
-  row("vswarm guard on", "npm, pip, brew … ask vswarm before installing");
+  row("vswarm guard on [--ignore-scripts] [--sandbox] [--strict]", "npm, pip, brew … ask vswarm before installing");
   row("vswarm pkg npm install <name>", "check by hand: malicious, look-alike, brand new, scripts");
   console.log(`\n  ${c.bold("run code you do not trust")}`);
   row("vswarm try <folder|git URL|zip> [-- cmd]", "in a sandbox: no secrets, no network; reports what it tried");
@@ -319,7 +319,7 @@ async function main() {
       return gate(args);
 
     case "guard":
-      noMoreOptions(cmd, args);
+      noMoreOptions(cmd, args, ["--ignore-scripts", "--sandbox", "--strict"]);
       return guard(args);
 
     case "watch": {
@@ -332,12 +332,19 @@ async function main() {
     }
 
     case "pkg": {
-      // vswarm pkg <tool> [--] <the tool's arguments>; the shell wrapper calls this before every install.
+      // vswarm pkg [--run] [--strict] <tool> [--] <the tool's arguments>; the shell wrapper calls this before every install.
+      // With --run (guard on --ignore-scripts / --sandbox) vswarm also runs the install itself.
+      let run = false, strict = false;
+      while (args[0] === "--run" || args[0] === "--strict") (args.shift() === "--run" ? (run = true) : (strict = true));
       const tool = args.shift();
-      if (!tool) throw new Error("usage: vswarm pkg npm|pnpm|yarn|bun|npx|bunx|pip|pip3|uv|uvx|pipx|brew [--] <arguments>   e.g. vswarm pkg npm install axois");
+      if (!tool) throw new Error("usage: vswarm pkg [--strict] npm|pnpm|yarn|bun|npx|bunx|pip|pip3|uv|uvx|pipx|brew [--] <arguments>   e.g. vswarm pkg npm install axois");
       if (args[0] === "--") args.shift();
-      if (process.env.VSWARM_GUARD === "off") return;
-      process.exitCode = await pkgCommand(tool, args, { offline, ask: yes });
+      if (process.env.VSWARM_GUARD === "off") {
+        // Off for this command: no check, but the install the wrapper handed over still runs.
+        if (run && Bun.which(tool)) process.exitCode = await Bun.spawn([Bun.which(tool)!, ...args], { stdin: "inherit", stdout: "inherit", stderr: "inherit" }).exited;
+        return;
+      }
+      process.exitCode = await pkgCommand(tool, args, { offline, strict, run, ask: yes });
       return;
     }
 

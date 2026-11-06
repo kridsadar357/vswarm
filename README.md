@@ -143,7 +143,7 @@ $ npm install axois
 | Signal | Severity |
 | --- | --- |
 | known-malicious version (OSV `MAL-`) | critical, blocks |
-| one edit away from a popular name | high, blocks |
+| close to one of the top 2,000 npm / 1,000 PyPI names, and not established itself | high, blocks |
 | no such package, but it looks like a popular one | high, blocks |
 | package created in the last 30 days, few downloads, with an install script | high, blocks |
 | version published in the last 48 hours | medium, warns |
@@ -152,7 +152,9 @@ $ npm install axois
 
 A bare `npm install` / `npm ci` checks every locked version against OSV. Blocking asks first; skip vswarm once with
 `command npm …`, or turn it off with `vswarm guard off`. Check by hand without the wrapper:
-`vswarm pkg npm install <name>`. If a registry cannot be reached, the install goes ahead with a notice.
+`vswarm pkg npm install <name>`. If a registry cannot be reached, the install goes ahead with a notice (`guard on --strict`
+stops instead). Opt-in: `guard on --ignore-scripts` runs npm/pnpm/yarn/bun installs with their install scripts off, and
+`--sandbox` runs them in the `try` sandbox inside your project folder; see the [guide](docs/guide.md#8-check-packages-before-they-install-guard-and-pkg).
 
 ### Run code you do not trust
 

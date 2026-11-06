@@ -8,7 +8,7 @@ import { dirname, join, resolve } from "node:path";
 import { ensureHome, HOME, paths, VERSION } from "./home";
 import { dq, exec, shq } from "./sec/ctx";
 import { blockRegex, files, forgetKey, loadBaseline, lockState, readBaseline, recordManaged, removeBlock, stateKey } from "./sec/store";
-import { GUARD_END, GUARD_START, guardBlock, psGuardBlock } from "./sec/pkg";
+import { GUARD_END, GUARD_START, guardBlock, loadGuardConfig, psGuardBlock, saveGuardConfig, type GuardConfig } from "./sec/pkg";
 import { fingerprints, PIN, secureUpdate } from "./sec/update";
 
 export const CLI = resolve(import.meta.dir, "cli.ts");
@@ -472,23 +472,39 @@ async function profilesRun(): Promise<{ ok: boolean; policy: string }> {
   return { ok: !/^(Restricted|AllSigned|Undefined|unknown)$/i.test(policy), policy };
 }
 
+/** The guard's shell block for these settings: plain, or routing npm/pnpm/yarn/bun installs through `pkg --run`. */
+export function guardBody(launcher: string, g: GuardConfig, win = WIN): string {
+  return win ? psGuardBlock(process.execPath, CLI, { ignoreScripts: g.ignoreScripts }) : guardBlock(launcher, { run: !!(g.ignoreScripts || g.sandbox) });
+}
+
+/** What the guard settings mean, one line each. */
+function guardSettings(g: GuardConfig) {
+  if (g.ignoreScripts) console.log(`  ${c.dim("· npm, pnpm, yarn and bun installs run with --ignore-scripts; run a package's scripts deliberately with npm rebuild <package>")}`);
+  if (g.sandbox) console.log(`  ${c.dim(WIN ? "· --sandbox is not on Windows yet; installs run as usual" : "· those installs run in the sandbox: this folder writable (not .git), the rest of your home hidden, package registries only")}`);
+  if (g.strict) console.log(`  ${c.dim("· strict: an install is stopped when a registry or OSV does not answer")}`);
+}
+
 export async function guard(args: string[]) {
   const action = args.shift() ?? "status";
+  const want: GuardConfig = { ignoreScripts: args.includes("--ignore-scripts"), sandbox: args.includes("--sandbox"), strict: args.includes("--strict") };
   if (action === "status") {
     if (await guardOn()) ok("install guard is on", (await guardFiles()).join(", "));
     else console.log(`  ${c.dim("·")} install guard is off  ${c.dim("vswarm guard on")}`);
+    guardSettings(loadGuardConfig());
     return;
   }
-  if (action !== "on" && action !== "off") throw new Error("usage: vswarm guard on | off | status");
+  if (action !== "on" && action !== "off") throw new Error("usage: vswarm guard on [--ignore-scripts] [--sandbox] [--strict] | off | status");
   const launcher = existsSync(launcherPath()) ? launcherPath() : undefined;
   if (action === "on" && !launcher) throw new Error("install the launcher first: vswarm install");
-  const body = action === "off" ? null : WIN ? psGuardBlock(process.execPath, CLI) : guardBlock(launcher!);
+  if (action === "on") saveGuardConfig(want);
+  const body = action === "off" ? null : guardBody(launcher!, want);
   for (const f of await guardFiles(action === "on")) {
     const changed = setBlock(f, body, GUARD_START, GUARD_END);
     ok(changed ? `${action === "on" ? "added to" : "removed from"} ${f}` : `already ${action} in ${f}`);
   }
   if (action === "on") {
     console.log(`  ${c.dim(`npm, npx, pnpm, yarn, bun, bunx, pip, pip3, uv, uvx, pipx${WIN ? "" : " and brew"} now ask vswarm before installing`)}`);
+    guardSettings(want);
     if (WIN) {
       const p = await profilesRun();
       if (!p.ok) warn(`PowerShell's execution policy is ${p.policy}: it runs no profile, so the guard stays off`, "allow local scripts for your user: Set-ExecutionPolicy -Scope CurrentUser RemoteSigned");
@@ -506,7 +522,7 @@ export async function guard(args: string[]) {
 export function adoptManagedBlocks() {
   const known: string[] = [];
   for (const { body } of rcFiles()) known.push(`${BLOCK_START}\n${body}\n${BLOCK_END}\n`);
-  if (existsSync(launcherPath())) known.push(guardBlock(launcherPath()) + "\n");
+  if (existsSync(launcherPath())) known.push(guardBody(launcherPath(), loadGuardConfig(), false) + "\n");
   const sshCfg = join(homedir(), ".ssh", "config");
   const cfg = existsSync(sshCfg) ? readFileSync(sshCfg, "utf8") : "";
   const m = /Match originalhost (\S+) !exec "(.+) (preflight|cert) --quiet(?: --host %h)?"/.exec(cfg);

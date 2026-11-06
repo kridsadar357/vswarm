@@ -46,13 +46,16 @@ export async function listeningPorts(): Promise<number[]> {
   return parseListening((await run(["lsof", "-nP", "-iTCP", "-sTCP:LISTEN"], 10_000)) ?? "");
 }
 
-export function profile(realHome: string, box: Box, proxyPort: number, extraRead: string[] = [], denyPorts: number[] = []): string {
+export function profile(realHome: string, box: Box, proxyPort: number, extraRead: string[] = [], denyPorts: number[] = [], project?: { dir: string; readOnly: string[] }): string {
   const tools = [...toolchains(realHome), ...extraRead];
-  const mine = [box.work, box.home, box.tmp];
+  // An install in the sandbox (guard --sandbox) works in your project folder itself; its .git stays read-only.
+  const mine = [box.work, box.home, box.tmp, ...(project ? [project.dir] : [])];
   // The box and the folders above it (~/.vswarm/try, ~/.vswarm) as listings only: runtimes walk up from their working folder
   // at start-up (bun drops its whole environment when it cannot), and a listing shows names, not contents.
   const above: string[] = [];
-  for (let a = box.dir; a !== "/" && a !== "."; a = dirname(a)) if (a.startsWith(realHome + "/") || a.startsWith("/private/var/folders")) above.push(a);
+  for (const start of [box.dir, ...(project ? [project.dir] : [])])
+    for (let a = start; a !== "/" && a !== "."; a = dirname(a)) if (a.startsWith(realHome + "/") || a.startsWith("/private/var/folders")) above.push(a);
+  const keep = project?.readOnly.length ? `\n(deny file-write*${project.readOnly.map((r) => ` (subpath ${q(r)})`).join("")})` : "";
   return `(version 1)
 (deny default)
 (allow process-exec process-fork)
@@ -77,7 +80,7 @@ export function profile(realHome: string, box: Box, proxyPort: number, extraRead
 (deny file-read* (subpath ${q(realHome)}) (subpath "/private/var/folders") (subpath "/Volumes"))
 (allow file-read* (literal ${q(realHome)})${above.map((a) => ` (literal ${q(a)})`).join("")}${tools.map((t) => ` (subpath ${q(t)})`).join("")}${mine.map((m) => ` (subpath ${q(m)})`).join("")})
 (allow file-read-metadata)
-(allow file-write*${mine.map((m) => ` (subpath ${q(m)})`).join("")} (literal "/dev/null") (literal "/dev/zero") (literal "/dev/dtracehelper") (regex #"^/dev/tty") (regex #"^/dev/fd/"))
+(allow file-write*${mine.map((m) => ` (subpath ${q(m)})`).join("")} (literal "/dev/null") (literal "/dev/zero") (literal "/dev/dtracehelper") (regex #"^/dev/tty") (regex #"^/dev/fd/"))${keep}
 (allow file-ioctl (regex #"^/dev/tty"))
 ; network: localhost (servers the code starts itself, the vswarm proxy on port ${proxyPort}); nothing else, not even DNS
 (allow network-bind (local ip "localhost:*"))

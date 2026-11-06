@@ -50,6 +50,38 @@ describe("detection", () => {
     expect(lookAlike("npm", "express-session")).toBeUndefined();
   });
 
+  test("look-alikes from the bundled popularity lists: real typo-squat shapes are caught", () => {
+    const caught: [string, string, string][] = [
+      ["npm", "electorn", "electron"], ["npm", "mongose", "mongoose"], ["npm", "loadsh", "lodash"], ["npm", "webapck", "webpack"], ["npm", "typescirpt", "typescript"],
+      ["npm", "react-domm", "react-dom"], ["npm", "discordi.js", "discord.js"], ["npm", "cross-env.js", "cross-env"], ["npm", "@angluar/core", "@angular/core"],
+      // Two edits in a long name.
+      ["npm", "eslint-config-prettierr", "eslint-config-prettier"], ["npm", "@modelcontextprotocol/server-filesytem", "@modelcontextprotocol/server-filesystem"],
+      ["npm", "jsonwebtokne", "jsonwebtoken"], ["npm", "nodemaler", "nodemailer"],
+      // Separators and scopes.
+      ["npm", "@typescript_eslint/eslint-plugin", "@typescript-eslint/eslint-plugin"], ["npm", "solana-web3.js", "@solana/web3.js"],
+      ["pip", "colourama", "colorama"], ["pip", "python3-dateutil", "python-dateutil"], ["pip", "urlib3", "urllib3"], ["pip", "djanga", "django"],
+      ["pip", "setup-tools", "setuptools"], ["pip", "matplotlb", "matplotlib"], ["pip", "pydantc", "pydantic"], ["pip", "tensorflwo", "tensorflow"],
+    ];
+    expect(caught.map(([k, n]) => [k, n, lookAlike(k, n)])).toEqual(caught);
+  });
+
+  test("look-alikes: popular names never match each other, and real package families are left alone", () => {
+    const data = JSON.parse(readFileSync(join(import.meta.dir, "../src/sec/data/popular.json"), "utf8"));
+    expect(data.npm.length).toBeGreaterThanOrEqual(1000);
+    expect(data.pip.length).toBeGreaterThanOrEqual(1000);
+    expect(data.sources.npm).toContain("npm-high-impact");
+    expect(data.generated).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+    for (const kind of ["npm", "pip"]) for (const n of data[kind]) expect([kind, n, lookAlike(kind, n)]).toEqual([kind, n, undefined]);
+    // Real packages one or two edits from a popular one, that are not typo-squats.
+    const fine: [string, string][] = [
+      ["npm", "sass-loader"], ["npm", "less-loader"], ["npm", "@aws-sdk/client-sts"], ["npm", "@sentry/node"], ["npm", "eventemitter2"], ["npm", "@vue/compiler-ssr"],
+      ["npm", "traverse"], ["npm", "@types/mdx"], ["npm", "@types/q"], ["npm", "preact"], ["npm", "css-loader"], ["npm", "path-case"],
+      ["npm", "@esbuild/linux-arm"], ["npm", "uid"], ["npm", "npm"],
+      ["pip", "mypy-boto3-sqs"], ["pip", "nvidia-cusparselt-cu12"], ["pip", "httpx-ws"], ["pip", "tree-sitter-c"], ["pip", "dataset"], ["pip", "scikit_learn"],
+    ];
+    expect(fine.map(([k, n]) => [k, n, lookAlike(k, n)])).toEqual(fine.map(([k, n]) => [k, n, undefined]));
+  });
+
   test("code running from temp, cache, downloads or unknown hidden folders is unusual; tool folders are not", () => {
     const h = "/Users/a";
     expect(suspiciousLocation("/tmp/x", h)).toBeDefined();
@@ -451,7 +483,9 @@ describe("install guard", () => {
     expect(rules({ eco: "npm", name: "tiny-helper-x" }, { ...old, createdAt: now - 5 * DAY, weeklyDownloads: 12, scripts: ["postinstall: node x.js"] })).toEqual(["pkg-new:high"]);
     expect(rules({ eco: "pip", name: "reqeusts" }, { exists: false })).toEqual(["pkg-missing:high"]);
     expect(rules({ eco: "pip", name: "made-up-zzq" }, { exists: false })).toEqual(["pkg-missing:low"]);
-    expect(rules({ eco: "npm", name: "axois" }, old)).toEqual(["pkg-lookalike:high"]);
+    expect(rules({ eco: "npm", name: "axois" }, { ...old, weeklyDownloads: 40 })).toEqual(["pkg-lookalike:high"]);
+    // Widely used itself: a package of its own that happens to resemble a popular name, said but not stopped.
+    expect(rules({ eco: "npm", name: "lodash.set" }, old)).toEqual(["pkg-lookalike:low"]);
     expect(rules({ eco: "brew", name: "a/b/c", tap: "a/b" }, undefined)).toEqual(["pkg-tap:medium"]);
     expect(rules({ eco: "brew", name: "jq" }, undefined)).toEqual([]);
   });
@@ -464,14 +498,14 @@ describe("install guard", () => {
     const get = async (url: string) => {
       seen.push(new URL(url).host);
       const man = /registry\.npmjs\.org\/([^/]+)\//.exec(url)?.[1];
-      const body = man === "evil-pkg" ? { version: "1.0.0" } : man === "good" ? { version: "2.0.0" } : url.includes("downloads") ? { downloads: 1e6 } : { versions: [{ versionKey: { version: "2.0.0" }, publishedAt: "2020-01-01T00:00:00Z" }, { versionKey: { version: "1.0.0" }, publishedAt: "2019-01-01T00:00:00Z" }] };
+      const body = man === "evil-pkg" ? { version: "1.0.0" } : man === "well-known-tool" ? { version: "2.0.0" } : url.includes("downloads") ? { downloads: 1e6 } : { versions: [{ versionKey: { version: "2.0.0" }, publishedAt: "2020-01-01T00:00:00Z" }, { versionKey: { version: "1.0.0" }, publishedAt: "2019-01-01T00:00:00Z" }] };
       return { status: 200, json: async () => body };
     };
-    const r = await checkInstall(plan("npm", ["install", "evil-pkg", "good"], d), { get, osvCache: cache, offline: false });
+    const r = await checkInstall(plan("npm", ["install", "evil-pkg", "well-known-tool"], d), { get, osvCache: cache, offline: false });
     expect(r.verdict).toBe("block");
     expect(r.findings.map((f: any) => f.rule)).toEqual(["pkg-malicious"]);
     expect(new Set(seen)).toEqual(new Set(["registry.npmjs.org", "api.npmjs.org", "api.deps.dev"]));
-    const down = await checkInstall(plan("npm", ["install", "good"], d), { get: async () => { throw new Error("offline"); }, osvCache: cache });
+    const down = await checkInstall(plan("npm", ["install", "well-known-tool"], d), { get: async () => { throw new Error("offline"); }, osvCache: cache });
     expect(down.verdict).toBe("pass");
     expect(down.notes.join()).toContain("could not ask the registry");
   });

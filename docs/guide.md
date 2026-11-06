@@ -312,7 +312,8 @@ Then `source ~/.zshrc` (or open a new terminal) and try it:
 | Signal | Result |
 | --- | --- |
 | known-malicious version (OSV `MAL-`) | stop and ask |
-| one edit away from a popular name | stop and ask |
+| close to a popular name (see below) and not established itself | stop and ask |
+| close to a popular name, but widely used and years old itself | one line |
 | no such package, but it looks like a popular one | stop and ask |
 | created in the last 30 days, few downloads, with an install script | stop and ask |
 | version published in the last 48 hours | warn, go ahead |
@@ -333,7 +334,39 @@ Then `source ~/.zshrc` (or open a new terminal) and try it:
 - Check by hand without the wrapper: `vswarm pkg npm install <name>`
 - A bare `npm install` / `npm ci` checks every locked version against OSV.
 - Skip once: `command npm install …` · turn off: `vswarm guard off` · for a session: `export VSWARM_GUARD=off`
-- If a registry cannot be reached, the install goes ahead with a notice.
+- If a registry cannot be reached, the install goes ahead with a notice. That is on purpose: a flaky network or a
+  registry outage is not an attack, and a guard that blocks work on every outage gets switched off. With
+  `vswarm guard on --strict` (or `vswarm pkg --strict …`) an install that could not be fully checked stops and asks
+  instead.
+
+**Look-alike names.** vswarm compares the name with the 2,000 most-downloaded npm packages and the 1,000 most
+downloaded on PyPI (`src/sec/data/popular.json`, made by `scripts/popular.ts` from npm-high-impact and
+top-pypi-packages; the file says when), plus names attackers are known to imitate (MCP servers, wallets, AI SDKs).
+A name is a look-alike when it is one edit from a popular one (two edits for names of 8 characters or more), the same
+name with other separators (`cross_env`), a scope folded into the name (`solana-web3.js`), or a popular name with a
+typical suffix (`lodash.js`). It is left alone when it is itself popular, a known package family (`eventemitter2`,
+`sass-loader`, `@aws-sdk/client-sts`), or three letters or fewer. Your team can allow its own names
+([team.md](team.md)).
+
+**Install scripts off, and installs in the sandbox (opt-in).**
+
+```bash
+vswarm guard on --ignore-scripts             # npm, pnpm, yarn, bun installs run with --ignore-scripts
+vswarm guard on --ignore-scripts --sandbox   # and inside the try sandbox (macOS, Linux)
+```
+
+With `--ignore-scripts`, vswarm runs those installs itself after its check, with `--ignore-scripts` added after the
+subcommand (yarn 2 and later: `YARN_ENABLE_SCRIPTS=false`). No package's `preinstall`/`postinstall` runs, which is
+how most npm malware starts. What breaks: packages that build or download something at install time (native modules
+such as `sharp`, `bcrypt`, `sqlite3`, `canvas`; `puppeteer` and `playwright` browsers; older `esbuild`; `husky` hooks).
+Run their scripts deliberately once you trust them: first `vswarm try . -- npm rebuild sharp` to see what they do,
+then `command npm rebuild sharp` (pnpm: `pnpm rebuild`, bun: `bun pm trust`).
+
+With `--sandbox`, the install runs in the same sandbox as `vswarm try`, but in your project folder: that folder is
+writable except its `.git`, the rest of your home is out of sight (so `~/.npmrc` and private-registry tokens too), and
+only package registries are reachable. Global installs (`-g`) change files elsewhere and run without the sandbox. A
+private registry does not work there; install those with `command npm …`. Windows has `--ignore-scripts` but not the
+sandbox yet.
 
 ## 9. Run code you do not trust: try
 
@@ -491,7 +524,7 @@ Maintainers: the steps that switch signing on are in [SECURITY.md](../SECURITY.m
 | `vswarm gate ssh <pattern…> [--cert]` · `gate status` · `gate remove` | the gate in `~/.ssh/config` |
 | `vswarm ca init [--sk] [--principal a,b] [--ttl 15m]` · `ca server <account>` · `ca status` | CA for SSH certificates |
 | `vswarm cert [--host h]` | a short-lived certificate, only when preflight passes |
-| `vswarm guard on` · `off` · `status` | the install guard in your shell |
+| `vswarm guard on [--ignore-scripts] [--sandbox] [--strict]` · `off` · `status` | the install guard in your shell |
 | `vswarm pkg <tool> [--] <args…>` | check an install command; exit 3 when it should stop |
 | `vswarm try <target> [--net none\|registries\|all] [--localhost] [--yes] [-- cmd…]` · `--list` · `--clean [id]` | run code in a sandbox |
 | `vswarm respond [--yes] [--force]` | incident response |
