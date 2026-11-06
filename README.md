@@ -210,6 +210,12 @@ detected 11/11 (100%) · false alarms on the clean parts: 0
 That number covers the cases in [`src/sec/selftest.ts`](src/sec/selftest.ts), not every attack. Adding a case for
 a technique you have seen is the most useful contribution you can make.
 
+## Updates are signed
+
+`vswarm update` installs only release tags signed by the release key pinned on your machine at install time, and
+never an older version. If the repository or the maintainer's account is taken over, installed copies refuse the
+attacker's release and keep running what they have. `vswarm trust` shows the pinned key; see [SECURITY.md](SECURITY.md).
+
 ## Privacy
 
 - Everything stays on your machine, under `~/.vswarm/sec` with owner-only permissions. No telemetry.

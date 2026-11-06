@@ -28,13 +28,26 @@ fi
 
 if [ -d "$APP/.git" ]; then
   say "updating $APP"
-  git -C "$APP" fetch --quiet origin "$REF"
-  git -C "$APP" checkout --quiet "$REF"
-  git -C "$APP" pull --quiet --ff-only origin "$REF"
+  git -C "$APP" fetch --quiet --tags --force origin
 else
   say "downloading vswarm into $APP"
   mkdir -p "$(dirname "$APP")"
-  git clone --quiet --depth 1 --branch "$REF" "$REPO" "$APP"
+  git clone --quiet "$REPO" "$APP"
+fi
+
+# Signed releases: when the repository lists release keys, install the newest release tag, and only if its
+# signature checks out. `vswarm install` then pins those keys; later updates accept nothing else.
+TAG=$(git -C "$APP" tag -l 'v*' --sort=-v:refname | head -n 1)
+if [ -z "${VSWARM_REF:-}" ] && [ -n "$TAG" ] && git -C "$APP" show "$TAG:trust/allowed_signers" 2>/dev/null | grep -q '^[^#[:space:]]'; then
+  git -C "$APP" show "$TAG:trust/allowed_signers" > "$APP/.release-signers"
+  git -C "$APP" -c gpg.format=ssh -c gpg.ssh.allowedSignersFile="$APP/.release-signers" verify-tag "$TAG" >/dev/null 2>&1 \
+    || { rm -f "$APP/.release-signers"; die "release $TAG is not signed by the key it lists; not installing it"; }
+  rm -f "$APP/.release-signers"
+  git -C "$APP" checkout --quiet --detach "$TAG"
+  say "release $TAG, signature checked"
+else
+  git -C "$APP" checkout --quiet "$REF"
+  git -C "$APP" pull --quiet --ff-only origin "$REF" 2>/dev/null || true
 fi
 
 cd "$APP"

@@ -8,6 +8,7 @@ import { dirname, join, resolve } from "node:path";
 import { ensureHome, HOME, paths, VERSION } from "./home";
 import { files, loadBaseline, loadLock } from "./sec/store";
 import { GUARD_END, GUARD_START, guardBlock } from "./sec/pkg";
+import { fingerprints, PIN, secureUpdate } from "./sec/update";
 
 export const CLI = resolve(import.meta.dir, "cli.ts");
 
@@ -181,7 +182,8 @@ export const COMMANDS: [string, string][] = [
   ["shot", "screenshot a localhost page or local file"],
   ["doctor", "check the installation"],
   ["install", "set up launcher, PATH, completions"],
-  ["update", "pull the latest version"],
+  ["update", "move to the newest signed release"],
+  ["trust", "release keys updates must be signed with"],
   ["uninstall", "remove launcher and PATH"],
   ["help", "show help"],
 ];
@@ -389,6 +391,11 @@ export async function install(args: string[]) {
     }
   }
 
+  // Pin the release key this copy ships with, so later updates only accept releases signed by it.
+  if (!existsSync(PIN()) && (await fingerprints(join(ROOT, "trust", "allowed_signers"))).length) {
+    await trust(["pin"]);
+  }
+
   step("3  baseline");
   if (loadBaseline()) ok("baseline exists", files.baseline());
   else if (!auto && (await yes("Is this machine clean as far as you know? Record it as the baseline now", true))) {
@@ -421,7 +428,7 @@ export async function uninstall(args: string[]) {
   console.log(`  ${c.dim("· the app folder stays at " + ROOT)}\n`);
 }
 
-export async function update() {
+export async function update(args: string[] = []) {
   banner("update");
   if (!existsSync(join(ROOT, ".git"))) throw new Error(`${ROOT} is not a git checkout; download the new version and run vswarm install`);
   const run = async (cmd: string[]) => {
@@ -431,15 +438,57 @@ export async function update() {
     return out.trim();
   };
   const before = await run(["git", "rev-parse", "--short", "HEAD"]);
-  await run(["git", "pull", "--ff-only"]);
-  const after = await run(["git", "rev-parse", "--short", "HEAD"]);
-  if (before === after) ok("already up to date", before);
-  else {
-    ok(`updated ${before} → ${after}`);
-    console.log(c.dim((await run(["git", "log", "--oneline", `${before}..${after}`])).split("\n").map((l) => "    " + l).join("\n")));
+  // --unsigned: follow the main branch as it is (for development). Everyone else gets signed releases only.
+  const r = args.includes("--unsigned") ? ({ status: "unsigned-repo" } as const) : await secureUpdate(ROOT, VERSION);
+  if (r.status === "refused") {
+    bad(`not updating to ${r.tag}: ${r.why}`);
+    console.log(`  ${c.dim("Your current version keeps running. If the release key really changed, see: vswarm trust")}\n`);
+    process.exitCode = 3;
+    return;
   }
+  if (r.status === "current") {
+    for (const k of r.pinned ?? []) console.log(`  ${c.amber("!")} trusting release key ${c.bold(k.fp)} (${k.who}) from now on`);
+    return ok(`already on ${r.at}, signed by a trusted release key\n`);
+  }
+  if (r.status === "unsigned-repo") {
+    warn(args.includes("--unsigned") ? "following main without signature checks (--unsigned)" : "this repository has no signed releases yet; following main as before");
+    if ((await run(["git", "rev-parse", "--abbrev-ref", "HEAD"])) === "HEAD") await run(["git", "checkout", "--quiet", "main"]);
+    await run(["git", "pull", "--ff-only", "--quiet", "origin", "main"]);
+  } else {
+    ok(`updated to ${r.to}, signature checked`);
+    for (const k of r.pinned ?? []) console.log(`  ${c.amber("!")} first signed release: trusting release key ${c.bold(k.fp)} (${k.who}) from now on`);
+    if (r.pinned?.length) console.log(`  ${c.dim("  compare that fingerprint with the one the maintainer publishes (README, SECURITY.md, release page)")}`);
+  }
+  const after = await run(["git", "rev-parse", "--short", "HEAD"]);
+  if (before !== after) console.log(c.dim((await run(["git", "log", "--oneline", `${before}..${after}`])).split("\n").slice(0, 15).map((l) => "    " + l).join("\n")));
+  else if (r.status === "unsigned-repo") ok("already up to date", before);
   await run([process.execPath, "install", "--production"]);
   writeLauncher();
   writeCompletions();
   ok("launcher and completions refreshed\n");
+}
+
+/** vswarm trust: which release keys this machine accepts updates from. */
+export async function trust(args: string[]) {
+  const action = args.shift() ?? "status";
+  const shipped = join(ROOT, "trust", "allowed_signers");
+  if (action === "status") {
+    const keys = await fingerprints(PIN());
+    if (!keys.length) {
+      console.log(`  ${c.dim("·")} no release key pinned yet ${c.dim(`(${PIN()})`)}`);
+      console.log(`  ${c.dim("  the first signed release you install or update to is pinned; until then updates follow main")}`);
+    }
+    for (const k of keys) ok(`${k.fp}`, `${k.who} · ${PIN()}`);
+    return;
+  }
+  if (action === "pin") {
+    // Pin the keys this checkout ships with. Used by the installer; by hand only after checking the fingerprint.
+    const keys = await fingerprints(shipped);
+    if (!keys.length) throw new Error(`${shipped} lists no release keys`);
+    mkdirSync(dirname(PIN()), { recursive: true, mode: 0o700 });
+    writeFileSync(PIN(), readFileSync(shipped, "utf8"), { mode: 0o600 });
+    for (const k of keys) ok(`pinned ${k.fp}`, k.who);
+    return;
+  }
+  throw new Error("usage: vswarm trust [status] | trust pin");
 }

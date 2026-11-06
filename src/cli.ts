@@ -14,7 +14,7 @@ import { secrets as findSecrets } from "./sec/secrets";
 import { selftest } from "./sec/selftest";
 import { clearLock, files, loadAccepted, loadBaseline, loadLast, loadLock, saveAccepted, saveBaseline } from "./sec/store";
 import { RANK, type Finding, type Verdict } from "./sec/types";
-import { ask, banner, canAsk, COMMANDS, completion, doctor, gate, guard, install, uninstall, update } from "./setup";
+import { ask, banner, canAsk, COMMANDS, completion, doctor, gate, guard, install, trust, uninstall, update } from "./setup";
 import { checkInstall, plan } from "./sec/pkg";
 import { shot } from "./shot";
 import { loadCanaries, plantAws, plantDns, plantEnv, removeCanary } from "./sec/canary";
@@ -78,7 +78,8 @@ function usage() {
   row("vswarm unlock", "close the incident once the machine is clean");
   console.log(`\n  ${c.bold("trust, but verify")}`);
   row("vswarm selftest", "plant fake threats in a sandbox home, print the detection rate");
-  row("vswarm doctor · install · update · uninstall", "set-up");
+  row("vswarm doctor · install · update · uninstall", "set-up (update installs signed releases only)");
+  row("vswarm trust", "release keys this machine accepts updates from");
   console.log(`\n  ${c.bold("gates for other tools")}`);
   console.log(c.dim("    ~/.aws/config     credential_process = vswarm preflight --quiet --then aws configure export-credentials --profile prod-sso --format process"));
   console.log(c.dim("    kubeconfig user   exec: { command: vswarm, args: [preflight, --quiet, --then, kubelogin, get-token, …] }"));
@@ -393,7 +394,9 @@ async function main() {
       return uninstall(args);
     case "update":
     case "upgrade":
-      return update();
+      return update(args);
+    case "trust":
+      return trust(args);
     case "completions":
       process.stdout.write(completion(args[0] ?? "zsh"));
       return;

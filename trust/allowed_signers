@@ -1,0 +1,3 @@
+# Release keys for vswarm. `vswarm install` pins this file on first install; `vswarm update` then accepts only
+# release tags signed by a key pinned on your machine. Format: git's gpg.ssh.allowedSignersFile.
+#   <principal> namespaces="git" <ssh public key>

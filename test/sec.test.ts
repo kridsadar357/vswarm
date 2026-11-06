@@ -431,3 +431,45 @@ describe("AI agents and MCP", () => {
     expect(await rules(base(["mcp"]))).toEqual(["agent-http", "agent-mcp-new", "agent-mcp-new"]);
   });
 });
+
+describe("signed updates", () => {
+  test("updates only to tags signed by the pinned key; unsigned, other-key and older tags are refused", async () => {
+    const { secureUpdate } = require("../src/sec/update");
+    const root = mkdtempSync(join(tmpdir(), "vs-upd-"));
+    const sh = async (cwd: string, ...cmd: string[]) => {
+      const p = Bun.spawn(cmd, { cwd, stdout: "pipe", stderr: "pipe", env: { ...process.env, GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_SYSTEM: "/dev/null" } });
+      const code = await p.exited;
+      if (code !== 0) throw new Error(`${cmd.join(" ")}: ${await new Response(p.stderr).text()}`);
+    };
+    for (const k of ["a", "b"]) await sh(root, "ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-C", k, "-f", join(root, k));
+    const signer = (k: string) => `${k}@test namespaces="git" ${readFileSync(join(root, `${k}.pub`), "utf8").trim()}\n`;
+    const dev = join(root, "dev"), origin = join(root, "origin.git"), app = join(root, "app");
+    await sh(root, "git", "init", "-q", "--bare", origin);
+    await sh(root, "git", "init", "-q", "-b", "main", dev);
+    const g = (...a: string[]) => sh(dev, "git", "-c", "user.name=t", "-c", "user.email=t@t", "-c", "gpg.format=ssh", ...a);
+    const release = async (v: string, key?: string, signers = signer("a")) => {
+      mkdirSync(join(dev, "trust"), { recursive: true });
+      writeFileSync(join(dev, "trust/allowed_signers"), signers);
+      writeFileSync(join(dev, "v"), v);
+      await g("add", "-A");
+      await g("commit", "-q", "-m", v);
+      await (key ? g("-c", `user.signingkey=${join(root, key)}`, "tag", "-s", v, "-m", v) : g("tag", "-a", v, "-m", v));
+      await g("push", "-q", origin, "main", v);
+    };
+    await release("v1.0.0", "a");
+    await sh(root, "git", "clone", "-q", origin, app);
+    const pin = join(root, "pin", "allowed_signers");
+    const up = (cur: string) => secureUpdate(app, cur, pin);
+
+    // The fresh clone already sits on v1.0.0; the first check pins the key that release lists.
+    expect((await up("0.9.0")).status).toBe("current");
+    expect(readFileSync(pin, "utf8")).toContain("a@test");
+    await release("v1.1.0");                                   // unsigned
+    expect((await up("1.0.0")).status).toBe("refused");
+    await release("v1.2.0", "b", signer("b"));                 // a takeover: new key, and the repo's list swapped to it
+    expect((await up("1.0.0")).status).toBe("refused");
+    await release("v1.3.0", "a");
+    expect(await up("1.0.0")).toMatchObject({ status: "updated", to: "v1.3.0" });
+    expect((await up("2.0.0")).status).toBe("refused");       // never go back
+  }, 60_000);
+});
