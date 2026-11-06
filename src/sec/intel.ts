@@ -1,9 +1,10 @@
 // Outside knowledge about packages: the OSV database (which carries OpenSSF's malicious-packages list as MAL-*
 // records), look-alike names of popular packages, and code signatures of new executables.
 
-import { closeSync, openSync, readSync } from "node:fs";
-import { join } from "node:path";
-import { readJson } from "./ctx";
+import { closeSync, mkdirSync, openSync, readSync, writeFileSync } from "node:fs";
+import { dirname } from "node:path";
+import { exec, readJson } from "./ctx";
+import type { Item } from "./types";
 
 function firstBytes(path: string, n: number): string {
   try {
@@ -16,7 +17,6 @@ function firstBytes(path: string, n: number): string {
     return "";
   }
 }
-import type { Item } from "./types";
 
 const ECOSYSTEM: Record<string, string> = { npm: "npm", pip: "PyPI", cargo: "crates.io" };
 
@@ -54,7 +54,9 @@ export async function osvMalicious(items: Item[], cacheFile: string, opt: { offl
           cache[key(p)] = { at: Date.now(), mal: ids };
         });
       }
-      await Bun.write(cacheFile, JSON.stringify(cache));
+      // Which packages a machine has is nobody else's business: owner-only, like everything under ~/.vswarm/sec.
+      mkdirSync(dirname(cacheFile), { recursive: true, mode: 0o700 });
+      writeFileSync(cacheFile, JSON.stringify(cache), { mode: 0o600 });
     } catch (e: any) {
       error = `could not reach OSV (${e.message ?? e}); known-malicious check used the cache only`;
     }
@@ -110,8 +112,7 @@ export async function signature(path: string): Promise<Signature> {
   if (firstBytes(path, 2) === "#!") return { kind: "script" };
   if (process.platform !== "darwin") return { kind: "unknown" };
   try {
-    const p = Bun.spawn(["codesign", "-dv", "--verbose=2", path], { stdout: "ignore", stderr: "pipe" });
-    const [err, code] = await Promise.all([new Response(p.stderr).text(), p.exited]);
+    const { err, code } = await exec(["codesign", "-dv", "--verbose=2", path]);
     if (/not signed at all/.test(err)) return { kind: "unsigned" };
     if (code !== 0) return { kind: "unknown" };
     if (/Signature=adhoc/.test(err)) return { kind: "adhoc" };

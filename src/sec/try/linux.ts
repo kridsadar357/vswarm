@@ -9,6 +9,7 @@
 
 import { existsSync, readFileSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
+import { exec, shq } from "../ctx";
 import type { Box } from "./sandbox";
 import type { Denial } from "./watch";
 
@@ -34,8 +35,7 @@ require("fs").writeFileSync(ready, "1");
  * sandbox then shows the host's /proc read-only, which still keeps its pid namespace.
  */
 export async function freshProc(bwrap: string): Promise<boolean> {
-  const p = Bun.spawn([bwrap, "--unshare-pid", "--unshare-net", "--ro-bind", "/", "/", "--dev", "/dev", "--proc", "/proc", "true"], { stdout: "ignore", stderr: "ignore" });
-  return (await p.exited) === 0;
+  return (await exec([bwrap, "--unshare-pid", "--unshare-net", "--ro-bind", "/", "/", "--dev", "/dev", "--proc", "/proc", "true"])).code === 0;
 }
 
 export function bwrapArgs(realHome: string, box: Box, opt: { tools: string[]; bun: string; interactive: boolean; hostProc?: boolean }): string[] {
@@ -60,14 +60,15 @@ export function bwrapArgs(realHome: string, box: Box, opt: { tools: string[]; bu
  * the background; those end with the sandbox's pid namespace instead. strace gets TERM first so its log is complete.
  */
 export function inner(box: Box, bun: string, command: string[], strace?: string): string[] {
-  const t = (f: string) => `"${join(box.tmp, f)}"`;
-  const trace = strace ? `"${strace}" -f -qq -I 1 -s 300 -e trace=%file,connect,setsid -e signal=none -o ${t("trace.log")} --` : "";
+  const t = (f: string) => shq(join(box.tmp, f));
+  const trace = strace ? `${shq(strace)} -f -qq -I 1 -s 300 -e trace=%file,connect,setsid -e signal=none -o ${t("trace.log")} --` : "";
   const script = [
     `"$0" ${t("forwarder.js")} ${INNER_PORT} ${t("proxy.sock")} ${t("forwarder.ready")} &`,
     `i=0; while [ ! -e ${t("forwarder.ready")} ] && [ $i -lt 100 ]; do sleep 0.05; i=$((i+1)); done`,
     // A background job gets /dev/null as stdin; fd 3 keeps the terminal for an interactive shell.
     `exec 3<&0`,
-    `${trace} /bin/sh -c '"$@"; echo $? > ${t("exit")}' sh "$@" <&3 & S=$!`,
+    // The exit file is the inner shell's $0, so its path never has to sit inside the quoted script.
+    `${trace} /bin/sh -c '"$@"; echo $? > "$0"' ${t("exit")} "$@" <&3 & S=$!`,
     `while [ ! -e ${t("exit")} ] && kill -0 $S 2>/dev/null; do sleep 0.1; done`,
     `sleep 0.2; kill -TERM $S 2>/dev/null; wait $S 2>/dev/null`,
     `exit $(cat ${t("exit")} 2>/dev/null || echo 1)`,

@@ -2,11 +2,11 @@
 // Runs code you do not trust (an interview "assignment", a repo from a stranger, an installer) in a sandbox, then
 // reports what it tried. Your original files are never touched: the code runs on a copy.
 
-import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, readdirSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, join, resolve } from "node:path";
 import { HOME } from "../../home";
-import { run } from "../ctx";
+import { readJson, run } from "../ctx";
 import { c, finding as printFinding, line } from "../print";
 import { RANK, verdictOf, type Finding, type Verdict } from "../types";
 import { allowedBy, startProxy } from "./proxy";
@@ -237,17 +237,15 @@ export function writeTryReport(r: TryResult) {
 export function listTries(): { id: string; verdict?: string; source?: string }[] {
   if (!existsSync(TRY_DIR())) return [];
   return readdirSync(TRY_DIR()).sort().map((id) => {
-    try {
-      const j = JSON.parse(readFileSync(join(TRY_DIR(), id, "report.json"), "utf8"));
-      return { id, verdict: j.verdict, source: j.source };
-    } catch {
-      return { id };
-    }
+    const j = readJson(join(TRY_DIR(), id, "report.json"));
+    return { id, verdict: j?.verdict, source: j?.source };
   });
 }
 
 export function cleanTries(id?: string) {
   if (!existsSync(TRY_DIR())) return 0;
+  // Only a name from --list: `--clean ..` must not remove the folder above.
+  if (id !== undefined && (!/^[A-Za-z0-9._-]+$/.test(id) || id.startsWith(".") || !existsSync(join(TRY_DIR(), id)))) throw new Error(`no try ${id} · vswarm try --list`);
   const ids = id ? [id] : readdirSync(TRY_DIR());
   for (const x of ids) rmSync(join(TRY_DIR(), x), { recursive: true, force: true });
   return ids.length;

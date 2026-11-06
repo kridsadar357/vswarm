@@ -187,13 +187,14 @@ export async function secrets(ctx: Ctx): Promise<Finding[]> {
 
   // .env files in code folders (one level deep)
   const envHits: string[] = [];
+  const decoyFiles = canaryWhere();
   for (const base of CODE_DIRS) {
     const root = join(h, base);
     if (!isDir(root)) continue;
     for (const proj of ls(root)) {
       for (const f of ls(join(root, proj))) {
         if (!/^\.env(\.|$)/.test(f) || /\.(example|sample|template)$/.test(f)) continue;
-        if (canaryWhere().has(join(root, proj, f))) continue;
+        if (decoyFiles.has(join(root, proj, f))) continue;
         const t = readText(join(root, proj, f), 200_000);
         const names = t ? secretNames(t) : [];
         if (names.length) envHits.push(`~/${base}/${proj}/${f} (${names.length})`);

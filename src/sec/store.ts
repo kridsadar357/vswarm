@@ -7,9 +7,10 @@
 //   osv-cache.json  answers from the known-malicious database
 
 import { createHash } from "node:crypto";
-import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { HOME } from "../home";
+import { readJson, reEscape } from "./ctx";
 import type { Finding, Scan, Verdict } from "./types";
 
 export const SEC = () => process.env.VSWARM_SEC_DIR ?? join(HOME, "sec");
@@ -40,13 +41,7 @@ export function writePrivate(path: string, data: unknown) {
   } catch {}
 }
 
-function read<T>(path: string): T | undefined {
-  try {
-    return JSON.parse(readFileSync(path, "utf8"));
-  } catch {
-    return;
-  }
-}
+const read = readJson;
 
 export const loadBaseline = () => read<Scan>(files.baseline());
 export const saveBaseline = (s: Scan) => writePrivate(files.baseline(), s);
@@ -74,6 +69,15 @@ export interface Lock {
 export const loadLock = () => read<Lock>(files.lock());
 export const setLock = (l: Lock) => writePrivate(files.lock(), l);
 export const clearLock = () => rmSync(files.lock(), { force: true });
+
+/** The block between two marker lines, with the newline before it, as setBlock, the ssh gate and canaries write them. */
+export function blockRegex(start: string, end: string): RegExp {
+  return new RegExp(`\\n?${reEscape(start)}[\\s\\S]*?${reEscape(end)}\\n?`, "g");
+}
+
+export function removeBlock(text: string, start: string, end: string): string {
+  return text.replace(blockRegex(start, end), "\n").replace(/\n{3,}/g, "\n\n");
+}
 
 // Blocks vswarm writes into your files (PATH in ~/.zshrc, the ssh gate, the install guard, canaries). Their hashes
 // are kept so a scan does not report vswarm's own lines as a change. A block that differs by one character from what

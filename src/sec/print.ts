@@ -20,8 +20,16 @@ export const VERDICT: Record<Verdict, string> = {
   block: c.red(c.bold("BLOCK")),
 };
 
+// Names, paths and descriptions found on the machine are printed as they are. A control character in one could move
+// the cursor or erase the line that reports it, so only vswarm's own colour codes get through.
+const OWN_SGR_OR_CONTROL = /\x1b\[(?:0|1|2|38;2;\d{1,3};\d{1,3};\d{1,3})m|[\x00-\x08\x0b-\x1f\x7f-\x9f]/g;
+
+export function clean(t: string): string {
+  return t.replace(OWN_SGR_OR_CONTROL, (m) => (m.length > 1 ? m : ""));
+}
+
 export function line(t = "") {
-  process.stderr.write(t + "\n");
+  process.stderr.write(clean(t) + "\n");
 }
 
 export function finding(f: Finding, verbose = true) {

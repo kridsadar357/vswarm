@@ -6,10 +6,11 @@
 //   --no-sandbox. Remote servers are asked over HTTP. Every tool's definition is hashed and pinned, so a later
 //   change (a "rug pull") is reported even when the new text looks harmless.
 
-import { existsSync, readFileSync } from "node:fs";
 import { createHash } from "node:crypto";
+import { homedir } from "node:os";
 import { join } from "node:path";
 import { VERSION } from "../home";
+import { readJson } from "./ctx";
 import { canSandbox, sandboxSpawn } from "./try/spawn";
 import { SEC, writePrivate } from "./store";
 import type { Finding, Item, Severity } from "./types";
@@ -101,13 +102,7 @@ export function pinTools(i: Item, tools: Tool[], pins: Pins): Finding[] {
   return out;
 }
 
-export const loadPins = (): Pins => {
-  try {
-    return JSON.parse(readFileSync(pinFile(), "utf8"));
-  } catch {
-    return {};
-  }
-};
+export const loadPins = (): Pins => readJson<Pins>(pinFile()) ?? {};
 export const savePins = (p: Pins) => writePrivate(pinFile(), p);
 
 // ── talking MCP
@@ -213,13 +208,13 @@ async function inspectStdio(cmd: string[], env: Record<string, string>, sandbox:
 
 /** Reads the server definition back from the agent's config (the scan keeps only a summary). */
 function definition(i: Item): { command?: string; args?: string[]; url?: string; env?: Record<string, string>; headers?: Record<string, string> } | undefined {
-  if (!i.path || !existsSync(i.path) || !i.path.endsWith(".json")) {
+  const j = i.path?.endsWith(".json") ? readJson(i.path) : undefined;
+  if (!j) {
     const cmd = String(i.meta?.command ?? "").split(" ").filter(Boolean);
     return cmd.length ? { command: cmd[0], args: cmd.slice(1) } : i.meta?.url ? { url: String(i.meta.url) } : undefined;
   }
-  const j = JSON.parse(readFileSync(i.path, "utf8"));
   const [proj, name] = i.name.includes(" › ") ? i.name.split(" › ") : [undefined, i.name];
-  const home = process.env.HOME ?? "";
+  const home = homedir();
   const maps = [j.mcpServers, j.servers, j.mcp?.servers, j["mcp.servers"], ...(proj ? [j.projects?.[proj.replace(/^~/, home)]?.mcpServers] : [])];
   for (const m of maps) if (m?.[name]) return { ...m[name], url: m[name].url ?? m[name].httpUrl ?? m[name].serverUrl };
 }

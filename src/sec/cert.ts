@@ -8,7 +8,7 @@
 import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { HOME } from "../home";
-import { whoami } from "./ctx";
+import { exec, readJson, whoami } from "./ctx";
 
 export const CA_DIR = () => process.env.VSWARM_CA_DIR ?? join(HOME, "ca");
 
@@ -28,26 +28,19 @@ export interface CaConfig {
 }
 
 export function loadCaConfig(): CaConfig {
-  try {
-    return { principals: [whoami()], ttl: "15m", ...JSON.parse(readFileSync(caFiles.config(), "utf8")) };
-  } catch {
-    return { principals: [whoami()], ttl: "15m" };
-  }
+  return { principals: [whoami()], ttl: "15m", ...(readJson(caFiles.config()) ?? {}) };
 }
 
-async function sh(cmd: string[], opt: { tty?: boolean } = {}): Promise<{ code: number; out: string; err: string }> {
-  const p = Bun.spawn(cmd, {
-    stdin: opt.tty ? "inherit" : "ignore",
-    stdout: "pipe",
-    stderr: opt.tty ? "inherit" : "pipe",
-  });
-  const [out, err, code] = await Promise.all([new Response(p.stdout).text(), opt.tty ? Promise.resolve("") : new Response(p.stderr as ReadableStream).text(), p.exited]);
-  return { code, out, err };
-}
+const sh = (cmd: string[], opt: { tty?: boolean } = {}) => exec(cmd, { tty: opt.tty });
+
+// Principals and account names end up in commands printed for a server (ca server) and in ssh-keygen -n.
+const NAME = /^[A-Za-z0-9][A-Za-z0-9._@+-]{0,63}$/;
 
 /** Creates the CA. Interactive: ssh-keygen asks for the passphrase (or a touch, for --sk). */
 export async function caInit(opt: { sk?: boolean; noPassphrase?: boolean; principals?: string[]; ttl?: string }) {
   if (existsSync(caFiles.key())) throw new Error(`a CA already exists: ${caFiles.key()}`);
+  for (const p of opt.principals ?? []) if (!NAME.test(p)) throw new Error(`"${p}" is not a usable principal name (letters, digits, . _ @ + -)`);
+  if (opt.ttl && !/^\d+[smhdw]?$/.test(opt.ttl)) throw new Error(`--ttl takes a time like 15m or 1h, not "${opt.ttl}"`);
   mkdirSync(CA_DIR(), { recursive: true, mode: 0o700 });
   const cmd = ["ssh-keygen", "-t", opt.sk ? "ed25519-sk" : "ed25519", "-f", caFiles.key(), "-C", `vswarm CA ${whoami()} ${new Date().toISOString().slice(0, 10)}`];
   // Without a passphrase anyone who can read the file can sign; only for tests and throwaway setups.
@@ -109,6 +102,9 @@ export async function issue(opt: { host?: string; minLeft?: number; quiet?: bool
 
 /** Commands to run on a server, as root, to trust this CA. Printed for you to review and run; vswarm never logs in. */
 export function serverSetup(account: string, cfg: CaConfig): string {
+  if (!/^[a-z_][a-z0-9_-]{0,31}$/i.test(account)) throw new Error(`"${account}" is not a unix account name`);
+  const bad = cfg.principals.find((p) => !NAME.test(p));
+  if (bad) throw new Error(`principal "${bad}" in ${caFiles.config()} is not a usable name`);
   const pub = readFileSync(caFiles.pub(), "utf8").trim();
   return `# 1. trust the vswarm CA for user logins
 install -d -m 755 /etc/ssh/auth_principals

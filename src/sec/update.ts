@@ -8,16 +8,16 @@
 //     the repository, and refuses an unsigned tag, a tag signed by another key, or a version older than this one
 // Changing the release key therefore needs you: vswarm trust shows the pinned fingerprints.
 
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { HOME } from "../home";
+import { exec, type Exec } from "./ctx";
 
 export const PIN = () => process.env.VSWARM_TRUST_FILE ?? join(HOME, "trust", "allowed_signers");
 
-async function git(root: string, args: string[], extra: string[] = []): Promise<{ code: number; out: string; err: string }> {
-  const p = Bun.spawn(["git", ...extra, "-C", root, ...args], { stdout: "pipe", stderr: "pipe", stdin: "ignore", env: { ...process.env, GIT_TERMINAL_PROMPT: "0" } });
-  const [out, err, code] = await Promise.all([new Response(p.stdout).text(), new Response(p.stderr).text(), p.exited]);
-  return { code, out: out.trim(), err: err.trim() };
+async function git(root: string, args: string[], extra: string[] = []): Promise<Exec> {
+  const r = await exec(["git", ...extra, "-C", root, ...args], { env: { ...process.env, GIT_TERMINAL_PROMPT: "0" } });
+  return { code: r.code, out: r.out.trim(), err: r.err.trim() };
 }
 
 /** -1, 0, 1 for dotted versions ("2.10.0" > "2.9.3"). */
@@ -74,7 +74,13 @@ export async function secureUpdate(root: string, current: string, pin = PIN()): 
     const tmp = `${pin}.candidate`;
     mkdirSync(dirname(pin), { recursive: true, mode: 0o700 });
     writeFileSync(tmp, shipped.out + "\n", { mode: 0o600 });
-    if (!(await verify(root, tag, tmp))) return { status: "refused", tag, why: "the tag is not signed by the key the release itself lists" };
+    let good: boolean;
+    try {
+      good = await verify(root, tag, tmp);
+    } finally {
+      rmSync(tmp, { force: true });
+    }
+    if (!good) return { status: "refused", tag, why: "the tag is not signed by the key the release itself lists" };
     writeFileSync(pin, shipped.out + "\n", { mode: 0o600 });
     pinnedNow = await fingerprints(pin);
   } else if (!(await verify(root, tag, pin))) {

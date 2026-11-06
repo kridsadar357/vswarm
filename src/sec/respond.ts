@@ -7,7 +7,7 @@
 
 import { copyFileSync, existsSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { basename, join } from "node:path";
-import { fileHash, run, type Ctx } from "./ctx";
+import { dq, fileHash, run, shq, type Ctx } from "./ctx";
 import type { Check } from "./engine";
 import { writeReport } from "./report";
 import { files, setLock, writePrivate } from "./store";
@@ -94,7 +94,11 @@ async function collectEvidence(inc: Incident) {
 
 type Ask = (q: string) => Promise<boolean>;
 
-/** Containment steps for one finding, as (description, action) pairs. Nothing runs unless the user says yes. */
+/**
+ * Containment steps for one finding, as (description, action) pairs. Nothing runs unless the user says yes. Names
+ * and paths in the `manual` commands come from the thing being contained, so they are quoted for the shell the user
+ * will paste them into.
+ */
 function containment(f: Finding, ctx: Ctx, inc: Incident): { what: string; act?: () => Promise<string>; manual?: string }[] {
   const i = f.item;
   const quarantine = join(inc.dir, "quarantine");
@@ -110,7 +114,7 @@ function containment(f: Finding, ctx: Ctx, inc: Incident): { what: string; act?:
       const systemd = /\.(service|timer)$/.test(i.name);
       if (systemd || i.name.endsWith(".desktop")) {
         // Linux: systemd unit or XDG autostart entry.
-        if (i.source !== "user") return [{ what: `stop and quarantine system unit ${i.name}`, manual: `sudo systemctl disable --now ${i.name} && sudo mv "${i.path}" "${quarantine}/" && sudo systemctl daemon-reload` }];
+        if (i.source !== "user") return [{ what: `stop and quarantine system unit ${i.name}`, manual: `sudo systemctl disable --now ${shq(i.name)} && sudo mv ${dq(i.path ?? "")} ${dq(quarantine + "/")} && sudo systemctl daemon-reload` }];
         return [{
           what: `stop ${systemd ? "user unit" : "autostart entry"} ${i.name} and move it to quarantine`,
           act: async () => {
@@ -121,7 +125,7 @@ function containment(f: Finding, ctx: Ctx, inc: Incident): { what: string; act?:
           },
         }];
       }
-      if (i.source !== "user") return [{ what: `unload system job ${i.name}`, manual: `sudo launchctl bootout system "${i.path}" && sudo mv "${i.path}" "${quarantine}/"` }];
+      if (i.source !== "user") return [{ what: `unload system job ${i.name}`, manual: `sudo launchctl bootout system ${dq(i.path ?? "")} && sudo mv ${dq(i.path ?? "")} ${dq(quarantine + "/")}` }];
       const uid = process.getuid?.() ?? 501;
       return [{
         what: `unload login job ${i.name} and move its plist to quarantine`,
@@ -157,14 +161,14 @@ function containment(f: Finding, ctx: Ctx, inc: Incident): { what: string; act?:
     }
     case "brew-tap": {
       const formulas = f.detail.find((d) => d.startsWith("installed from it:"))?.replace("installed from it: ", "").split(", ").map((x) => x.split(" ")[0]) ?? [];
-      return [{ what: `uninstall ${formulas.join(", ") || "its packages"} and untap ${i.name}`, manual: `${formulas.map((x) => `brew uninstall ${x}`).join(" && ")}${formulas.length ? " && " : ""}brew untap ${i.name}` }];
+      return [{ what: `uninstall ${formulas.join(", ") || "its packages"} and untap ${i.name}`, manual: `${formulas.map((x) => `brew uninstall ${shq(x)}`).join(" && ")}${formulas.length ? " && " : ""}brew untap ${shq(i.name)}` }];
     }
     case "brew":
-      return [{ what: `uninstall ${i.name}`, manual: `brew uninstall ${i.name}` }];
+      return [{ what: `uninstall ${i.name}`, manual: `brew uninstall ${shq(i.name)}` }];
     case "npm":
-      return [{ what: `uninstall global npm package ${i.name}`, manual: i.source === "bun-global" ? `bun remove -g ${i.name}` : `npm uninstall -g ${i.name}` }];
+      return [{ what: `uninstall global npm package ${i.name}`, manual: i.source === "bun-global" ? `bun remove -g ${shq(i.name)}` : `npm uninstall -g ${shq(i.name)}` }];
     case "pip":
-      return [{ what: `uninstall Python package ${i.name}`, manual: `python3 -m pip uninstall ${i.name}` }];
+      return [{ what: `uninstall Python package ${i.name}`, manual: `python3 -m pip uninstall ${shq(i.name)}` }];
     case "mcp": {
       // Take the server out of the agent's config; the whole file before the change goes to the evidence.
       const name = i.name.includes(" › ") ? undefined : i.name;
@@ -174,6 +178,7 @@ function containment(f: Finding, ctx: Ctx, inc: Incident): { what: string; act?:
         act: async () => {
           copyFileSync(i.path!, join(inc.dir, "evidence", `${basename(i.path!)}.before-cleanup`));
           const j = JSON.parse(readFileSync(i.path!, "utf8"));
+          if (!["mcpServers", "servers"].some((key) => j[key]?.[name])) throw new Error(`${name} is not in ${i.path} any more`);
           for (const key of ["mcpServers", "servers"]) if (j[key]?.[name]) delete j[key][name];
           writeFileSync(i.path!, JSON.stringify(j, null, 2) + "\n");
           return `removed ${name} from ${i.path}`;

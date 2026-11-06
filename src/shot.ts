@@ -6,6 +6,7 @@ import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
+import { exec } from "./sec/ctx";
 
 const CHROMES = [
   "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
@@ -27,7 +28,16 @@ export function findChrome(): string | undefined {
 /** A local page as a URL, or undefined when the target is not on this machine. */
 export function localTarget(target: string, cwd: string): string | undefined {
   if (/^https?:\/\//i.test(target)) {
-    return /^https?:\/\/(localhost|127\.0\.0\.1|\[::1\]|0\.0\.0\.0)([:/?#]|$)/i.test(target) ? target.replace("0.0.0.0", "localhost") : undefined;
+    // Parsed, not matched: in http://localhost:80@evil.example the host is evil.example.
+    let u: URL;
+    try {
+      u = new URL(target);
+    } catch {
+      return;
+    }
+    if (!/^(localhost|127\.0\.0\.1|\[::1\]|0\.0\.0\.0)$/i.test(u.hostname)) return;
+    if (u.hostname === "0.0.0.0") u.hostname = "localhost";
+    return u.href;
   }
   if (/^file:\/\//i.test(target)) return target;
   if (/^[a-z][\w+.-]*:/i.test(target)) return;
@@ -45,15 +55,12 @@ export async function shot(target: string, out: string, opt: { size?: string; wa
   const file = resolve(opt.cwd ?? process.cwd(), out);
   try {
     // SwiftShader gives WebGL without a GPU, so three.js scenes render instead of coming out blank.
-    const p = Bun.spawn([
+    const { err, code } = await exec([
       chrome, "--headless=new", "--hide-scrollbars", "--mute-audio", "--no-first-run", "--no-default-browser-check",
       "--use-angle=swiftshader", "--enable-unsafe-swiftshader", "--ignore-gpu-blocklist",
       `--user-data-dir=${profile}`, `--window-size=${w || 1280},${h || 800}`,
       `--virtual-time-budget=${opt.wait ?? 5000}`, `--screenshot=${file}`, url,
-    ], { stdout: "pipe", stderr: "pipe" });
-    const timer = setTimeout(() => p.kill(), 60_000);
-    const [, err, code] = await Promise.all([new Response(p.stdout).text(), new Response(p.stderr).text(), p.exited]);
-    clearTimeout(timer);
+    ], { timeoutMs: 60_000 });
     if (code !== 0 || !existsSync(file)) {
       const sandboxed = /ProcessSingleton|socket directory|Operation not permitted/.test(err);
       throw new Error(sandboxed

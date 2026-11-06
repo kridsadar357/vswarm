@@ -4,7 +4,7 @@
 
 import { lstatSync, readlinkSync } from "node:fs";
 import { join } from "node:path";
-import { fileHash, ls, mtime, readText, sha256, type Ctx } from "../ctx";
+import { fileHash, ls, readText, sha256, type Ctx } from "../ctx";
 import { isManagedFile, stripManaged } from "../store";
 import type { Item } from "../types";
 
@@ -233,5 +233,3 @@ export async function running(ctx: Ctx): Promise<Item[]> {
   }
   return [...out.values()];
 }
-
-export { mtime };

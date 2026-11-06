@@ -1,10 +1,10 @@
 #!/usr/bin/env bun
 // vswarm — check your own machine before it touches production.
 
-import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { VERSION } from "./home";
-import { realCtx } from "./sec/ctx";
+import { readJson, realCtx } from "./sec/ctx";
 import { check } from "./sec/engine";
 import { c, finding as printFinding, line, summary, VERDICT } from "./sec/print";
 import { writeReport } from "./sec/report";
@@ -14,7 +14,7 @@ import { secrets as findSecrets } from "./sec/secrets";
 import { selftest } from "./sec/selftest";
 import { clearLock, files, loadAccepted, loadBaseline, loadLast, loadLock, saveAccepted, saveBaseline } from "./sec/store";
 import { RANK, type Finding, type Verdict } from "./sec/types";
-import { ask, banner, canAsk, COMMANDS, completion, doctor, gate, guard, install, trust, uninstall, update } from "./setup";
+import { ask, banner, COMMANDS, completion, doctor, gate, guard, install, trust, uninstall, update, yes } from "./setup";
 import { checkInstall, plan } from "./sec/pkg";
 import { shot } from "./shot";
 import { loadCanaries, plantAws, plantDns, plantEnv, removeCanary } from "./sec/canary";
@@ -23,10 +23,16 @@ import { verdictNow } from "./sec/gate";
 import { caFiles, caInit, certInfo, issue, loadCaConfig, serverSetup } from "./sec/cert";
 import { cleanTries, listTries, tryIt, type Net } from "./sec/try";
 
+/** Where vswarm's own options end: what follows `--` or `--then` belongs to the command being wrapped. */
+function own(args: string[]): number {
+  const i = args.findIndex((a) => a === "--" || a === "--then");
+  return i < 0 ? args.length : i;
+}
+
 function flag(args: string[], ...names: string[]): string | undefined {
   for (const name of names) {
     const i = args.indexOf(name);
-    if (i >= 0) return args.splice(i, 2)[1];
+    if (i >= 0 && i < own(args)) return args.splice(i, 2)[1];
   }
 }
 
@@ -34,19 +40,13 @@ function has(args: string[], ...names: string[]): boolean {
   let found = false;
   for (const name of names) {
     const i = args.indexOf(name);
-    if (i >= 0) {
+    if (i >= 0 && i < own(args)) {
       args.splice(i, 1);
       found = true;
     }
   }
   return found;
 }
-
-const yes = async (q: string, def = false) => {
-  if (!canAsk()) return def;
-  const a = (await ask(`${q} ${c.dim(def ? "[Y/n]" : "[y/N]")}`)).toLowerCase();
-  return a ? a.startsWith("y") : def;
-};
 
 function usage() {
   banner("check your machine before it touches production");
@@ -223,6 +223,7 @@ async function main() {
       }
       const rm = flag(args, "--remove");
       if (rm) {
+        if (!acc[rm]) throw new Error(`${rm} is not an accepted finding · vswarm accept --list`);
         delete acc[rm];
         saveAccepted(acc);
         return line(`${c.green("✔")} no longer accepted: ${rm}`);
@@ -259,7 +260,8 @@ async function main() {
       const dir = files.incidents();
       const id = args[0] ?? (existsSync(dir) ? readdirSync(dir).sort().at(-1) : undefined);
       if (!id) throw new Error("no incidents yet");
-      const inc = JSON.parse(readFileSync(join(dir, id, "incident.json"), "utf8"));
+      const inc = readJson(join(dir, id, "incident.json"));
+      if (!inc) throw new Error(`no incident ${id} in ${dir}`);
       for (const w of writeReport(inc)) line(`${c.green("✔")} ${w}`);
       return;
     }
@@ -293,6 +295,7 @@ async function main() {
         const launcher = join(homedir(), ".vswarm", "bin", "vswarm");
         if (!existsSync(launcher)) throw new Error("install the launcher first: vswarm install");
         const every = Number(flag(args, "--every") ?? 60);
+        if (!Number.isInteger(every) || every < 1) throw new Error("--every takes a whole number of minutes");
         for (const f of await watchOn(launcher, every)) line(`${c.green("✔")} ${f.replace(homedir(), "~")}`);
         line(`  ${c.dim(`checks every ${every} minutes and notifies you about anything new · vswarm watch off to stop`)}`);
         await notify("vswarm watch is on", `This machine is checked every ${every} minutes.`);
@@ -421,7 +424,7 @@ async function main() {
         return;
       }
       const cleanAt = args.indexOf("--clean");
-      if (cleanAt >= 0) {
+      if (cleanAt >= 0 && cleanAt < own(args)) {
         const id = args[cleanAt + 1];
         return line(`${c.green("✔")} removed ${cleanTries(id)} tr${id ? "y" : "ies"}`);
       }

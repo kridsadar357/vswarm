@@ -102,7 +102,7 @@ export function cleanEnv(box: Box, proxyPort: number, realHome: string): Record<
     NO_PROXY: "localhost,127.0.0.1,::1", no_proxy: "localhost,127.0.0.1,::1",
     npm_config_proxy: proxy, npm_config_https_proxy: proxy,
     NODE_USE_ENV_PROXY: "1",
-    NODE_OPTIONS: `--require ${shim}`,
+    NODE_OPTIONS: `--require ${/\s/.test(shim) ? `"${shim}"` : shim}`,
     VSWARM_TRY_NETLOG: box.netlog,
     VSWARM_TRY: "1",
     // Toolchains whose state lives in the real home keep working, read-only.

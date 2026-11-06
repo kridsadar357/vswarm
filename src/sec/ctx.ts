@@ -43,17 +43,49 @@ export function whoami(): string {
   return u;
 }
 
+export interface Exec {
+  code: number;
+  out: string;
+  err: string;
+}
+
+/**
+ * Runs a command and waits for it. `tty` hands the terminal to the command (ssh-keygen asking for a passphrase);
+ * its stderr is then not captured. Throws when the program cannot be started at all.
+ */
+export async function exec(cmd: string[], opt: { cwd?: string; env?: Record<string, string | undefined>; timeoutMs?: number; tty?: boolean } = {}): Promise<Exec> {
+  const p = Bun.spawn(cmd, { cwd: opt.cwd, env: opt.env, stdin: opt.tty ? "inherit" : "ignore", stdout: "pipe", stderr: opt.tty ? "inherit" : "pipe" });
+  const timer = opt.timeoutMs ? setTimeout(() => p.kill(), opt.timeoutMs) : undefined;
+  const [out, err, code] = await Promise.all([new Response(p.stdout).text(), opt.tty ? Promise.resolve("") : new Response(p.stderr as ReadableStream).text(), p.exited]);
+  clearTimeout(timer);
+  return { code, out, err };
+}
+
+/** stdout of a command that exits 0; undefined when it is missing, fails or times out. */
 export async function run(cmd: string[], timeoutMs = 15_000): Promise<string | undefined> {
   try {
     if (!Bun.which(cmd[0]) && !existsSync(cmd[0])) return;
-    const p = Bun.spawn(cmd, { stdout: "pipe", stderr: "ignore", stdin: "ignore" });
-    const timer = setTimeout(() => p.kill(), timeoutMs);
-    const [out, code] = await Promise.all([new Response(p.stdout).text(), p.exited]);
-    clearTimeout(timer);
-    return code === 0 ? out : undefined;
+    const r = await exec(cmd, { timeoutMs });
+    return r.code === 0 ? r.out : undefined;
   } catch {
     return;
   }
+}
+
+// ── text that ends up in shells, regexes
+
+/** One word for /bin/sh: plain names stay as they are, anything else is single-quoted. */
+export function shq(s: string): string {
+  return /^[A-Za-z0-9_@%+=:,./-]+$/.test(s) ? s : `'${s.replace(/'/g, "'\\''")}'`;
+}
+
+/** The same inside "…", where $ and ` would still expand. */
+export function dq(s: string): string {
+  return `"${s.replace(/[\\"$`]/g, "\\$&")}"`;
+}
+
+export function reEscape(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 export function realCtx(): Ctx {

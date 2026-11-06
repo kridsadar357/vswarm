@@ -6,7 +6,8 @@ import { ReadStream } from "node:tty";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { ensureHome, HOME, paths, VERSION } from "./home";
-import { files, loadBaseline, loadLock, recordManaged } from "./sec/store";
+import { dq, exec, shq } from "./sec/ctx";
+import { blockRegex, files, loadBaseline, loadLock, recordManaged, removeBlock } from "./sec/store";
 import { GUARD_END, GUARD_START, guardBlock } from "./sec/pkg";
 import { fingerprints, PIN, secureUpdate } from "./sec/update";
 
@@ -99,7 +100,9 @@ export async function ask(question: string, { secret = false } = {}): Promise<st
   });
 }
 
-const yes = async (q: string, def = false) => {
+/** A yes/no question; the default answer when there is no terminal to ask on. */
+export const yes = async (q: string, def = false) => {
+  if (!canAsk()) return def;
   const a = (await ask(`${q} ${c.dim(def ? "[Y/n]" : "[y/N]")}`)).toLowerCase();
   return a ? a.startsWith("y") : def;
 };
@@ -115,7 +118,7 @@ function writeLauncher() {
   if (WIN) {
     writeFileSync(launcherPath(), `@echo off\r\n"${bun}" "${CLI}" %*\r\n`);
   } else {
-    writeFileSync(launcherPath(), `#!/bin/sh\n# vswarm launcher, written by \`vswarm install\`\nexec "${bun}" "${CLI}" "$@"\n`);
+    writeFileSync(launcherPath(), `#!/bin/sh\n# vswarm launcher, written by \`vswarm install\`\nexec ${dq(bun)} ${dq(CLI)} "$@"\n`);
     chmodSync(launcherPath(), 0o755);
   }
 }
@@ -142,8 +145,7 @@ function setBlock(file: string, body: string | null, start = BLOCK_START, end = 
   // body may carry its own markers (guardBlock does); the managed block is always start…end.
   const block = body?.startsWith(start) ? `${body}\n` : `${start}\n${body}\n${end}\n`;
   if (body !== null && old.includes(block)) return false;
-  const re = new RegExp(`\\n?${start}[\\s\\S]*?${end}\\n?`, "g");
-  const rest = old.replace(re, "\n").replace(/\n{3,}/g, "\n\n");
+  const rest = removeBlock(old, start, end);
   const next = body === null ? rest : rest.trimEnd() + (rest.trim() ? "\n\n" : "") + block;
   if (next === old) return false;
   mkdirSync(dirname(file), { recursive: true });
@@ -239,9 +241,8 @@ function writeCompletions() {
 // ── Checks
 async function version(cmd: string[]): Promise<string | undefined> {
   try {
-    const p = Bun.spawn(cmd, { stdout: "pipe", stderr: "ignore" });
-    const out = await new Response(p.stdout).text();
-    return (await p.exited) === 0 ? out.trim().split("\n")[0] : undefined;
+    const r = await exec(cmd);
+    return r.code === 0 ? r.out.trim().split("\n")[0] : undefined;
   } catch {
     return;
   }
@@ -302,8 +303,12 @@ const GATE_END = "# <<< vswarm gate <<<";
 
 /** The ~/.ssh/config block: hosts matching the patterns connect only when preflight passes. */
 export function sshGate(patterns: string[], launcher: string[], opt: { cert?: { key: string; cert: string } } = {}): string {
-  // The command sits inside ssh's double quotes; a part with spaces gets single quotes of its own.
-  const q = launcher.map((p) => (/\s/.test(p) ? `'${p}'` : p)).join(" ");
+  // Both end up on one line of ~/.ssh/config: a space, quote or newline in a pattern would change what the line means.
+  const bad = patterns.find((p) => !/^[\w*?!.:\[\]-]+$/.test(p));
+  if (bad !== undefined) throw new Error(`"${bad}" is not an ssh host pattern (letters, digits, . - * ? and !)`);
+  if (launcher.some((p) => /["\n]/.test(p))) throw new Error(`cannot put ${launcher.join(" ")} in ~/.ssh/config: it contains a double quote`);
+  // The command sits inside ssh's double quotes; a part with spaces or shell characters gets single quotes of its own.
+  const q = launcher.map(shq).join(" ");
   return [
     GATE_START,
     `# Hosts below connect only after \`vswarm preflight\` passes. Remove with: vswarm gate remove`,
@@ -320,24 +325,24 @@ export async function gate(args: string[]) {
   const action = args.shift() ?? "status";
   const cfgPath = join(homedir(), ".ssh", "config");
   const old = existsSync(cfgPath) ? readFileSync(cfgPath, "utf8") : "";
-  const re = new RegExp(`\\n?${GATE_START}[\\s\\S]*?${GATE_END}\\n?`, "g");
   if (action === "status") {
-    const block = old.match(re)?.[0];
+    const block = old.match(blockRegex(GATE_START, GATE_END))?.[0];
     console.log(block ? block.trim() : "no vswarm gate in ~/.ssh/config · add one: vswarm gate ssh \"prod-*\" \"*.internal\"");
     return;
   }
   if (action !== "ssh" && action !== "remove") throw new Error('usage: vswarm gate ssh "<host pattern>" [...] | gate status | gate remove');
-  if (action === "ssh" && !args.length) throw new Error('name the hosts to guard, e.g. vswarm gate ssh "prod-*" "*.wallet.internal"');
-  const backup = `${cfgPath}.bak-vswarm-${Date.now()}`;
-  if (old) writeFileSync(backup, old, { mode: 0o600 });
-  const rest = old.replace(re, "\n").replace(/\n{3,}/g, "\n\n").trimEnd();
-  // ssh uses the first value it sees for most options, so the gate goes first in the file.
+  // Everything that can refuse comes before the backup and the write, so a refused command changes nothing.
   const certAt = args.indexOf("--cert");
   const withCert = certAt >= 0;
   if (withCert) args.splice(certAt, 1);
+  if (action === "ssh" && !args.length) throw new Error('name the hosts to guard, e.g. vswarm gate ssh "prod-*" "*.wallet.internal"');
   if (withCert && !existsSync(join(HOME, "ca", "ca_key"))) throw new Error("no CA yet: vswarm ca init");
   const cert = withCert ? { key: join(HOME, "ca", "session"), cert: join(HOME, "ca", "session-cert.pub") } : undefined;
+  const rest = removeBlock(old, GATE_START, GATE_END).trimEnd();
+  // ssh uses the first value it sees for most options, so the gate goes first in the file.
   const next = action === "ssh" ? `${sshGate(args, existsSync(launcherPath()) ? [launcherPath()] : [process.execPath, CLI], { cert })}\n\n${rest}\n` : `${rest}\n`;
+  const backup = `${cfgPath}.bak-vswarm-${Date.now()}`;
+  if (old) writeFileSync(backup, old, { mode: 0o600 });
   mkdirSync(dirname(cfgPath), { recursive: true, mode: 0o700 });
   writeFileSync(cfgPath, next, { mode: 0o600 });
   recordManaged(next);
@@ -389,7 +394,10 @@ export function adoptManagedBlocks() {
   const m = /Match originalhost (\S+) !exec "(.+) (preflight|cert) --quiet --host %h"/.exec(cfg);
   if (m && existsSync(launcherPath())) {
     const cert = m[3] === "cert" ? { key: join(HOME, "ca", "session"), cert: join(HOME, "ca", "session-cert.pub") } : undefined;
-    known.push(sshGate(m[1].split(","), [launcherPath()], { cert }));
+    // A pattern sshGate would refuse today was not written by vswarm; that block simply stays visible to scans.
+    try {
+      known.push(sshGate(m[1].split(","), [launcherPath()], { cert }));
+    } catch {}
   }
   const texts = [...rcFiles().map((r) => r.file), sshCfg].filter((f) => existsSync(f)).map((f) => readFileSync(f, "utf8"));
   for (const block of known) if (texts.some((t) => t.includes(block.trimEnd()))) recordManaged(block);
@@ -460,8 +468,7 @@ export async function update(args: string[] = []) {
   banner("update");
   if (!existsSync(join(ROOT, ".git"))) throw new Error(`${ROOT} is not a git checkout; download the new version and run vswarm install`);
   const run = async (cmd: string[]) => {
-    const p = Bun.spawn(cmd, { cwd: ROOT, stdout: "pipe", stderr: "pipe" });
-    const [out, err, code] = await Promise.all([new Response(p.stdout).text(), new Response(p.stderr).text(), p.exited]);
+    const { code, out, err } = await exec(cmd, { cwd: ROOT });
     if (code !== 0) throw new Error(`${cmd.join(" ")}: ${err.trim() || out.trim()}`);
     return out.trim();
   };

@@ -4,11 +4,10 @@
 //   Linux  a systemd user timer (~/.config/systemd/user/vswarm-watch.{service,timer}), notifications through notify-send
 // The job's files are recorded as vswarm's own, so the scan does not report them as a new login job.
 
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
-import { run } from "./ctx";
-import { realCtx } from "./ctx";
+import { readJson, realCtx, run } from "./ctx";
 import { check } from "./engine";
 import { recordManagedFile, SEC, writePrivate } from "./store";
 import { RANK, type Finding } from "./types";
@@ -28,6 +27,8 @@ interface State {
 }
 
 const xml = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;");
+// systemd splits ExecStart on whitespace and expands %-specifiers; a plain path needs neither quotes nor escapes.
+const unitWord = (s: string) => (/^[A-Za-z0-9_./-]+$/.test(s) ? s : `"${s.replace(/[\\"]/g, "\\$&").replace(/%/g, "%%")}"`);
 
 export function jobFiles(launcher: string, everyMinutes = 60, home = homedir()): Record<string, string> {
   if (mac())
@@ -46,7 +47,7 @@ export function jobFiles(launcher: string, everyMinutes = 60, home = homedir()):
 `,
     };
   return {
-    [join(unitDir(home), "vswarm-watch.service")]: `[Unit]\nDescription=vswarm: check this machine\n\n[Service]\nType=oneshot\nNice=10\nExecStart=${launcher} watch run\n`,
+    [join(unitDir(home), "vswarm-watch.service")]: `[Unit]\nDescription=vswarm: check this machine\n\n[Service]\nType=oneshot\nNice=10\nExecStart=${unitWord(launcher)} watch run\n`,
     [join(unitDir(home), "vswarm-watch.timer")]: `[Unit]\nDescription=vswarm: check this machine every ${everyMinutes} minutes\n\n[Timer]\nOnBootSec=5min\nOnUnitActiveSec=${everyMinutes}min\n\n[Install]\nWantedBy=timers.target\n`,
   };
 }
@@ -85,11 +86,7 @@ export async function watchOff(): Promise<string[]> {
 
 export function watchState(): { on: boolean; state?: State } {
   const on = mac() ? existsSync(plistPath()) : existsSync(join(unitDir(), "vswarm-watch.timer"));
-  try {
-    return { on, state: JSON.parse(readFileSync(stateFile(), "utf8")) };
-  } catch {
-    return { on };
-  }
+  return { on, state: readJson<State>(stateFile()) };
 }
 
 /** A desktop notification; silently nothing where there is no desktop. */

@@ -9,7 +9,8 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
-import { files, recordManaged, writePrivate } from "./store";
+import { readJson, reEscape } from "./ctx";
+import { files, recordManaged, removeBlock, writePrivate } from "./store";
 
 export interface Canary {
   id: string;
@@ -26,11 +27,7 @@ export interface Canary {
 const canaryFile = () => join(dirname(files.baseline()), "canaries.json");
 
 export function loadCanaries(): Canary[] {
-  try {
-    return JSON.parse(readFileSync(canaryFile(), "utf8"));
-  } catch {
-    return [];
-  }
+  return readJson<Canary[]>(canaryFile()) ?? [];
 }
 
 function save(list: Canary[]) {
@@ -52,8 +49,7 @@ function append(path: string, id: string, body: string, opt: { top?: boolean } =
 
 function strip(path: string, id: string) {
   if (!existsSync(path)) return;
-  const re = new RegExp(`\\n?${START(id).replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}[\\s\\S]*?${END(id).replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\n?`, "g");
-  writeFileSync(path, readFileSync(path, "utf8").replace(re, "\n").replace(/\n{3,}/g, "\n\n"));
+  writeFileSync(path, removeBlock(readFileSync(path, "utf8"), START(id), END(id)));
 }
 
 const newId = () => Math.random().toString(36).slice(2, 8);
@@ -64,8 +60,9 @@ export function plantAws(keyId: string, secret: string, opt: { profile?: string;
   const home = opt.home ?? homedir();
   const path = join(home, ".aws", "credentials");
   const profile = opt.profile ?? "prod-backup-admin";
+  if (!/^[\w.-]+$/.test(profile)) throw new Error(`"${profile}" is not a usable profile name`);
   const existing = existsSync(path) ? readFileSync(path, "utf8") : "";
-  if (new RegExp(`^\\s*\\[${profile}\\]`, "m").test(existing)) throw new Error(`profile [${profile}] already exists in ${path}`);
+  if (new RegExp(`^\\s*\\[${reEscape(profile)}\\]`, "m").test(existing)) throw new Error(`profile [${profile}] already exists in ${path}`);
   const id = newId();
   append(path, id, `[${profile}]\naws_access_key_id = ${keyId}\naws_secret_access_key = ${secret}\nregion = ap-southeast-1`);
   const c: Canary = { id, kind: "aws", where: path, label: `[${profile}]`, token: keyId, at: Date.now() };
@@ -78,6 +75,7 @@ export function plantDns(tokenHost: string, opt: { alias?: string; home?: string
   const home = opt.home ?? homedir();
   const path = join(home, ".ssh", "config");
   const alias = opt.alias ?? "prod-bastion-old";
+  if (!/^[\w.-]+$/.test(alias)) throw new Error(`"${alias}" is not a usable host alias`);
   const id = newId();
   // At the top, so it is the first thing anyone reading the file sees, and it does not depend on Host * rules below.
   append(path, id, `Host ${alias}\n    HostName ${tokenHost}\n    User root\n    IdentityFile ~/.ssh/id_ed25519`, { top: true });

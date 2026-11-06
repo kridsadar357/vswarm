@@ -17,6 +17,7 @@
 
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
+import { shq } from "./ctx";
 import { lookAlike, osvMalicious } from "./intel";
 import { files } from "./store";
 import { RANK, verdictOf, type Finding, type Item, type Severity, type Verdict } from "./types";
@@ -404,7 +405,7 @@ const INSTALLS: Record<string, string> = {
 const SFW = new Set(["npm", "pnpm", "yarn", "pip", "pip3", "uv"]);
 
 export function guardBlock(launcher: string): string {
-  const q = /\s/.test(launcher) ? `'${launcher}'` : launcher;
+  const q = shq(launcher);
   const run = (tool: string) => (SFW.has(tool) ? `__vswarm_run ${tool} "$@"` : `command ${tool} "$@"`);
   const fn = (tool: string, subs?: string) => subs === undefined
     ? `function ${tool} { ${q} pkg ${tool} -- "$@" && command ${tool} "$@"; }`

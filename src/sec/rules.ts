@@ -10,9 +10,9 @@ import { ADDED_KINDS, type Finding, type Item, type Scan, type Severity } from "
 const RISKY_LINE = /\b(curl|wget|nc|ncat|socat|base64|openssl\s+enc|eval|osascript|python3?\s+-c|node\s+-e|perl\s+-e|ruby\s+-e|nohup|launchctl|chmod\s+\+x)\b|&\s*$|\|\s*(ba|z)?sh\b|\/tmp\/|\.cache\//;
 
 /** The program an MCP server or hook runs, and the package it pulls when it is started through npx/uvx/bunx. */
-function launcher(cmd: string): { exe?: string; pkg?: { eco: "npm" | "pip"; name: string } } {
+function launcher(cmd: string, home: string): { exe?: string; pkg?: { eco: "npm" | "pip"; name: string } } {
   const parts = cmd.split(/\s+/).filter(Boolean);
-  const exe = parts.find((p) => p.startsWith("/") || p.startsWith("~/"))?.replace(/^~/, process.env.HOME ?? "~");
+  const exe = parts.find((p) => p.startsWith("/") || p.startsWith("~/"))?.replace(/^~/, home);
   const runner = parts.findIndex((p) => /(^|\/)(npx|bunx|pnpx|uvx|pipx)$/.test(p) || p === "dlx");
   if (runner < 0) return { exe };
   const eco = /uvx|pipx/.test(parts[runner]) ? "pip" : "npm";
@@ -96,7 +96,7 @@ export async function evaluate(input: RuleInput): Promise<Finding[]> {
     if (i.kind === "mcp" || i.kind === "agent-hook") {
       const cmd = String(i.meta?.command ?? "");
       const what = i.kind === "mcp" ? `MCP server ${i.name} (${i.source})` : `Agent hook ${i.name}`;
-      const l = launcher(cmd);
+      const l = launcher(cmd, home);
       const where = l.exe ? suspiciousLocation(l.exe, home) : undefined;
       const like = l.pkg ? lookAlike(l.pkg.eco, l.pkg.name) : undefined;
       if (where || like || (cmd && RISKY_LINE.test(cmd.replace(/\.cache\//g, "")))) {
@@ -105,8 +105,13 @@ export async function evaluate(input: RuleInput): Promise<Finding[]> {
           detail: [cmd.slice(0, 200), i.path ?? ""], fix: "An agent runs this with your access. Remove it unless you set it up yourself; then vswarm respond", item: i });
       }
       const url = String(i.meta?.url ?? "");
-      if (/^http:\/\//.test(url) && !/^http:\/\/(localhost|127\.|\[::1\])/.test(url))
-        add({ id: `agent-http:${i.id}`, rule: "agent-http", severity: "medium", title: `${what} talks to ${new URL(url).host} without TLS`, detail: [url], fix: "Anyone on the network path can read or change what the agent sends and gets; use https", item: i });
+      if (/^http:\/\//.test(url) && !/^http:\/\/(localhost|127\.|\[::1\])/.test(url)) {
+        let host = url;
+        try {
+          host = new URL(url).host;
+        } catch {}
+        add({ id: `agent-http:${i.id}`, rule: "agent-http", severity: "medium", title: `${what} talks to ${host} without TLS`, detail: [url], fix: "Anyone on the network path can read or change what the agent sends and gets; use https", item: i });
+      }
       if (i.meta?.secrets)
         add({ id: `agent-secret:${i.id}`, rule: "secret", severity: "medium", title: `${what} keeps a token in plain text: ${i.meta.secrets}`, detail: [i.path ?? ""],
           fix: "Reference an environment variable or the OS keychain instead of pasting the value into the config", item: i });
