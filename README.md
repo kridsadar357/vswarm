@@ -212,11 +212,12 @@ anywhere; you review and send.
 | Homebrew | taps, formulae, casks; third-party taps | tampered formulae from unofficial taps |
 | npm / bun globals, Python, Cargo | new packages, install scripts, look-alike names | install-time malware, typosquats |
 | Known-malicious | exact versions against [OSV](https://osv.dev) `MAL-` records | packages already reported |
-| Login jobs | LaunchAgents / LaunchDaemons, crontab | persistence |
-| Startup files | `.zshrc`, `.bashrc`, `.profile`, `.gitconfig`, `~/.ssh/config`, `authorized_keys`, `/etc/hosts` | persistence, backdoors, redirection |
+| Login jobs | LaunchAgents / LaunchDaemons, login items inside apps, crontab | persistence |
+| System extensions | network / endpoint-security system extensions, kernel extensions (macOS) | traffic and file interception |
+| Startup files | `.zshrc`, `.bashrc`, `.profile`, fish `conf.d`, `/etc/profile.d`, `.gitconfig`, `~/.ssh/config`, `authorized_keys`, `/etc/hosts` | persistence, backdoors, redirection |
 | Executables | new programs on PATH and their code signature | dropped binaries |
-| Right now | programs running from temp/cache/hidden folders; who they talk to | active implants |
-| Credentials | SSH keys without a passphrase, AWS `AKIA` keys, static kube tokens, plain docker/gh/npm/pypi tokens, `.env` files | what a thief would take |
+| Right now | programs running from temp/cache/hidden folders; unsigned or ad-hoc signed programs holding outside connections | active implants |
+| Credentials | SSH keys without a passphrase, AWS `AKIA` keys, static kube tokens, plain docker/gh/npm/pypi tokens, Azure, gcloud, Vault and Terraform token files, `.env` files | what a thief would take |
 | Editors, browsers | VS Code / Cursor extensions; Chrome / Brave / Edge / Arc extensions and their permissions | extension malware |
 
 ## Measured, not claimed
@@ -225,7 +226,7 @@ anywhere; you review and send.
 and prints what was caught:
 
 ```
-detected 11/11 (100%) · false alarms on the clean parts: 0
+detected 20/20 (100%) · false alarms on the clean parts: 0
 ```
 
 That number covers the cases in [`src/sec/selftest.ts`](src/sec/selftest.ts), not every attack. Adding a case for
@@ -284,7 +285,7 @@ The same commands, with Linux's own places to hide:
 | running programs | `ps`, `lsof` | `/proc`, `ss` |
 | `vswarm try` walls | Seatbelt (`sandbox-exec`) | bubblewrap: every home hidden, system read-only, `/run` hidden (Docker, D-Bus, keyring and agent sockets), own network and pid namespace |
 | `vswarm try` record | the sandbox's deny log | strace: every path it tried and every address it tried to connect to |
-| code signatures | `codesign` | not checked; new programs on PATH are reported as unverified |
+| code signatures | `codesign` | not checked; new programs on PATH are reported as unverified, and loose programs in your home folder holding outside connections are named |
 
 Things that differ: on Linux the code's background processes end with the sandbox (reported as "detaches from the
 terminal"); a hidden home is an empty writable folder, so writes there are recorded and thrown away. Ubuntu 24.04

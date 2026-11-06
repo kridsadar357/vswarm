@@ -98,11 +98,19 @@ Everything that can run code, persist, or hold access. Takes under a second.
 | packages | Homebrew taps, formulae, casks; npm/bun globals; pip, pipx; cargo | the same (Linuxbrew if present) |
 | extensions | VS Code, Cursor, Windsurf; Chrome, Brave, Edge, Arc | VS Code, Cursor; Chrome, Chromium |
 | AI agents | MCP servers, hooks, permissions, plugins ([§5](#5-ai-agents-and-mcp-agents)) | the same |
-| login jobs | LaunchAgents, LaunchDaemons | systemd units (user and system, `*.wants` links), XDG autostart |
-| start-up files | `.zshrc`, `.bashrc`, `.profile` …, `~/.ssh/config`, `authorized_keys`, `~/.ssh/rc`, crontab, global git hooks, `/etc/hosts` | the same, plus `/etc/crontab`, `/etc/cron.d`, `/etc/ld.so.preload` |
+| login jobs | LaunchAgents, LaunchDaemons; login items apps carry in their bundle (SMAppService) | systemd units (user and system, `*.wants` links), XDG autostart |
+| extensions of the system | system extensions (`systemextensionsctl list`: network, endpoint security, drivers), kernel extensions in `/Library/Extensions` | |
+| start-up files | `.zshrc`, `.bashrc`, `.profile` …, fish `config.fish` and `conf.d`, `~/.ssh/config`, `authorized_keys`, `~/.ssh/rc`, crontab, global git hooks, `/etc/hosts` | the same, plus `/etc/profile.d`, `/etc/crontab`, `/etc/cron.d`, `/etc/ld.so.preload` |
 | new programs on PATH | code signature (codesign) | reported as unverified |
-| what runs now | programs running from temp, cache or hidden folders and their connections (`ps`, `lsof`) | `/proc`, `ss` |
+| what runs now | programs running from temp, cache or hidden folders; programs holding outside connections that are unsigned or ad-hoc signed (`ps`, `lsof`, `codesign`) | `/proc`, `ss`; loose programs in your home folder holding outside connections |
 | known bad packages | OSV `MAL-` records, look-alike names | the same |
+
+What is not covered, honestly: macOS keeps which login items are switched on (Background Task Management) in a
+database only root can read (`sfltool dumpbtm` asks for an administrator), so vswarm lists what each app in
+`/Applications` and `~/Applications` *can* start at login from its bundle, not what is switched on. Old-style "Open at
+Login" items are not read either, because asking System Events would pop up an Automation permission prompt. A
+connection from a program you built yourself (in `~/develop`, `~/code` …), from Homebrew or from a language toolchain
+is not reported as unsigned: those are ad-hoc signed for ordinary reasons.
 
 | Severity | Meaning | Verdict |
 | --- | --- | --- |
@@ -150,7 +158,9 @@ vswarm watch on [--every 60]     # vswarm watch status · vswarm watch off
 ![vswarm secrets](img/secrets.png)
 
 It looks for SSH keys without a passphrase (from the key header), AWS `AKIA` keys, kubeconfigs with static tokens,
-docker/gh/npm/pypi/netrc tokens, GCP service-account keys, secrets in `.zshrc`, and `.env` files in code folders.
+docker/gh/npm/pypi/netrc tokens, GCP service-account keys, gcloud `credentials.db` / `access_tokens.db`, Azure CLI token
+caches and service-principal secrets in `~/.azure`, `~/.vault-token`, Terraform Cloud tokens
+(`~/.terraform.d/credentials.tfrc.json`), secrets in `.zshrc`, and `.env` files in code folders.
 
 ```bash
 ssh-keygen -p -f ~/.ssh/<key>                    # add a passphrase

@@ -1,12 +1,20 @@
 // Long-lived credentials sitting on this machine: what anyone who gets a copy of the disk, or code running as
 // this user, could take and use from anywhere. Values are never printed or stored; only where, what kind, how old.
 
+import { statSync } from "node:fs";
 import { delimiter, join } from "node:path";
 import { isDir, ls, mtime, readJson, readText, type Ctx } from "./ctx";
 import type { Finding, Severity } from "./types";
 import { canaryKeyIds, canaryWhere } from "./canary";
 
 const day = 86_400_000;
+const statSize = (p: string) => {
+  try {
+    return statSync(p).isFile() ? statSync(p).size : 0;
+  } catch {
+    return 0;
+  }
+};
 const age = (path: string) => {
   const t = mtime(path);
   return t ? `${Math.max(0, Math.round((Date.now() - t) / day))} days old` : "";
@@ -184,6 +192,23 @@ export async function secrets(ctx: Ctx): Promise<Finding[]> {
   if (gcp?.type === "service_account") {
     out.push(finding("gcp-sa", "medium", "Google Cloud service-account key file as application default credentials",
       ["~/.config/gcloud/application_default_credentials.json", "Service-account keys do not expire."], "Use gcloud auth application-default login or workload identity, and delete the key."));
+  }
+
+  // More CLIs that keep sign-ins in files of their own. Only that the file exists and what kind it is; never read out.
+  const tokenFiles: [string, string, Severity, string][] = [
+    [".vault-token", "HashiCorp Vault token in ~/.vault-token", "medium", "Use short TTLs (vault login -no-store, or a token helper), and revoke this one: vault token revoke -self"],
+    [".terraform.d/credentials.tfrc.json", "Terraform Cloud / Enterprise API token in ~/.terraform.d/credentials.tfrc.json", "medium", "Use a credentials helper or TF_TOKEN_* in a secrets manager; revoke the token in your Terraform Cloud user settings"],
+    [".azure/service_principal_entries.json", "Azure service-principal secrets in ~/.azure/service_principal_entries.json", "medium", "Use az login with your own account or a managed identity; rotate the service principal's secret"],
+    [".azure/msal_token_cache.json", "Azure CLI sign-in tokens in ~/.azure/msal_token_cache.json (refresh tokens, plain JSON)", "low", "az logout when you are done; refresh tokens stay valid for weeks"],
+    [".azure/accessTokens.json", "Azure CLI access tokens in ~/.azure/accessTokens.json (old CLI)", "low", "Update the Azure CLI and az logout; the old CLI kept tokens in plain JSON"],
+    [".config/gcloud/credentials.db", "gcloud user credentials (refresh tokens) in ~/.config/gcloud/credentials.db", "low", "gcloud auth revoke when you no longer need them; prefer short-lived impersonation for production"],
+    [".config/gcloud/access_tokens.db", "gcloud access tokens in ~/.config/gcloud/access_tokens.db", "low", "gcloud auth revoke clears them; they expire within an hour but are refreshed from credentials.db"],
+  ];
+  for (const [rel, title, sev, fix] of tokenFiles) {
+    const p = join(h, rel);
+    // Size only: an empty cache holds nothing worth taking.
+    const t = statSize(p);
+    if (t > 2) out.push(finding(rel, sev, title, [`~/${rel}`, age(p)], fix));
   }
 
   // Secrets exported from shell startup files

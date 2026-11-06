@@ -36,6 +36,7 @@ export interface Scan {
 export const ADDED_KINDS: Record<string, string> = {
   mcp: "AI agents and MCP", "agent-hook": "AI agents and MCP", "agent-perm": "AI agents and MCP", "agent-plugin": "AI agents and MCP",
   wmi: "Windows WMI subscriptions",
+  "shell-d": "shell start-up folders (fish conf.d, /etc/profile.d)", "app-agent": "login items inside apps", sysext: "system and kernel extensions",
 };
 
 export type Severity = "critical" | "high" | "medium" | "low" | "info";

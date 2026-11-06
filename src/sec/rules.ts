@@ -4,7 +4,7 @@
 
 import { redact } from "./ctx";
 import { lookAlike, signature, type Malicious, type Signature } from "./intel";
-import { suspiciousLocation } from "./collect/system";
+import { buildPlace, suspiciousLocation } from "./collect/system";
 import { stockWmi, winLaunchRisk } from "./collect/windows";
 import { ADDED_KINDS, type Finding, type Item, type Scan, type Severity } from "./types";
 
@@ -104,6 +104,11 @@ export async function evaluate(input: RuleInput): Promise<Finding[]> {
         add({ id: `conn:${i.id}`, rule: "conn", severity: "high",
           title: `${i.name} is connected to other machines${where ? ` and ${where}` : " and is new since the baseline"}`,
           detail: [`remotes: ${i.meta?.remotes}`, i.path ?? ""], fix: "If you do not recognise it, disconnect from the network and run vswarm respond", item: i });
+      } else if (i.path && !buildPlace(i.path, home) && (i.meta?.signed === "unsigned" || i.meta?.signed === "adhoc" || i.meta?.loose)) {
+        // Implants are rarely signed by a developer; real apps are. Builds of your own and toolchains are left out.
+        const how = i.meta?.signed === "unsigned" ? "is not code-signed" : i.meta?.signed === "adhoc" ? "is only ad-hoc signed (by nobody)" : "is a loose program in your home folder that no package manager installed";
+        add({ id: `conn-unsigned:${i.id}`, rule: "conn-unsigned", severity: "medium", title: `${i.name} is connected to other machines, and its program ${how}`,
+          detail: [`remotes: ${i.meta?.remotes}`, i.path], fix: "Fine if you built or downloaded it yourself (vswarm accept it); if you do not know it, find what started it and run vswarm respond", item: i });
       }
     }
     if (i.kind === "mcp" || i.kind === "agent-hook") {
@@ -215,6 +220,7 @@ export async function evaluate(input: RuleInput): Promise<Finding[]> {
             fix: "If you did not install software that needs this, vswarm respond", item: i });
           break;
         case "rc":
+        case "shell-d":
         case "ssh":
         case "cron":
         case "hosts": {
@@ -255,6 +261,24 @@ export async function evaluate(input: RuleInput): Promise<Finding[]> {
           break;
         case "git-hooks":
           if (fresh) add({ id: `hook:${i.id}`, rule: "git-hook", severity: "medium", title: `New global git hook: ${i.name}`, detail: [i.path ?? ""], item: i });
+          break;
+        case "app-agent": {
+          if (!fresh) break;
+          // Many signed apps ship a helper that starts at login; one from an app nobody signed is how fake installers persist.
+          const sig = i.meta?.app ? await sign(String(i.meta.app)) : { kind: "unknown" as const };
+          const signedBy = sig.kind === "developer-id" || sig.kind === "apple" ? sig.who : undefined;
+          add({ id: `app-agent:${i.id}`, rule: "app-agent", severity: signedBy ? "low" : "high", title: `${i.source} can start ${signedBy ? "a helper" : "a program"} at login${signedBy ? "" : `, and ${i.source} is ${sig.kind === "adhoc" ? "only ad-hoc signed" : sig.kind === "unsigned" ? "not signed" : "not signed by a known developer"}`}`,
+            detail: [`runs: ${i.meta?.program ?? "?"}`, signedBy ? `signed by ${signedBy}` : "", "Turn it off in System Settings → General → Login Items & Extensions"].filter(Boolean),
+            fix: signedBy ? undefined : "Unless you installed this app on purpose from a source you trust, move it to the Trash and run vswarm respond", item: i });
+          break;
+        }
+        case "sysext":
+          if (fresh) {
+            const kext = i.source === "kext";
+            add({ id: `sysext:${i.id}`, rule: "sysext", severity: kext ? "high" : "medium", title: `New ${kext ? "kernel extension" : `system extension${i.meta?.category ? ` (${i.meta.category})` : ""}`}: ${i.name}`,
+              detail: [kext ? String(i.path) : `team ${i.source} · ${i.meta?.bundle} ${i.version ?? ""} · ${i.meta?.state ?? ""}`, kext ? "Kernel code sees and can change everything on the machine." : "A network or endpoint extension sees every connection or file event."],
+              fix: "Keep it only if you installed its app on purpose (a VPN, a security tool); otherwise remove the app and vswarm respond", item: i });
+          }
           break;
         case "bin": {
           if (!fresh) break;

@@ -44,6 +44,8 @@ export function credentialChecklist(ctx: Ctx, findings: Finding[]): string[] {
   if (has(".kube")) out.push("Kubernetes: revoke tokens and certificates in ~/.kube/config; rotate service-account tokens it could reach");
   if (has(".config/gcloud")) out.push("Google Cloud: gcloud auth revoke --all; delete service-account keys used here");
   if (has(".azure")) out.push("Azure: az logout; revoke refresh tokens for this user");
+  if (has(".vault-token")) out.push("Vault: revoke the token in ~/.vault-token (vault token revoke) and any tokens it created");
+  if (has(".terraform.d/credentials.tfrc.json")) out.push("Terraform Cloud / Enterprise: revoke the API token in your user settings");
   if (has(".config/gh") || has(".git-credentials")) out.push("GitHub: revoke personal access tokens and OAuth apps; sign out all sessions; check SSH and deploy keys on your repos");
   if (has(".docker")) out.push("Container registries: change passwords / tokens used by docker login");
   if (has(".npmrc") || has(".pypirc")) out.push("Package registries: revoke npm / PyPI publish tokens; check recent publishes of your packages");
@@ -216,6 +218,10 @@ function containment(f: Finding, ctx: Ctx, inc: Incident): { what: string; act?:
     }
     case "agent-hook":
       return [{ what: `remove the hook ${i.name}`, manual: `edit ${i.path} and delete: ${redact(String(i.meta?.command ?? "")).slice(0, 80)}` }];
+    case "app-agent":
+      return [{ what: `stop ${i.name} from starting at login`, manual: `System Settings → General → Login Items & Extensions: switch it off, or move ${dq(String(i.meta?.app ?? i.path ?? ""))} to the Trash` }];
+    case "sysext":
+      return [{ what: `remove ${i.source === "kext" ? "kernel" : "system"} extension ${i.name}`, manual: i.source === "kext" ? `sudo rm -rf ${dq(i.path ?? "")} (then restart)` : "remove the app that installed it (System Settings → General → Login Items & Extensions shows which), then restart" }];
     case "browser-ext":
     case "editor-ext":
       return [{ what: `remove ${i.name} from ${i.source}`, manual: `remove it in ${i.source}'s extension settings` }];
