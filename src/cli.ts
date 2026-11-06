@@ -55,6 +55,7 @@ function usage() {
   row("vswarm scan [--all] [--json]", "everything that can run code, persist or hold access");
   row("vswarm baseline", "record this machine as clean (after a scan you trust)");
   row("vswarm diff", "only what changed since the baseline");
+  row("vswarm watch on", "check every hour in the background, notify on anything new");
   row("vswarm secrets", "long-lived credentials on this machine (never prints values)");
   row("vswarm agents", "MCP servers, hooks and permissions of AI coding agents");
   row("vswarm agents --inspect [--show]", "start each MCP server sandboxed, read its tools for hidden instructions");
@@ -279,6 +280,36 @@ async function main() {
 
     case "guard":
       return guard(args);
+
+    case "watch": {
+      const { notify, watchOff, watchOn, watchRun, watchState } = await import("./sec/schedule");
+      const action = args.shift() ?? "status";
+      if (action === "run") {
+        const r = await watchRun();
+        line(`${VERDICT[r.verdict as Verdict]} ${c.dim(r.fresh.length ? `${r.fresh.length} new finding${r.fresh.length > 1 ? "s" : ""}, notified` : "nothing new")}`);
+        return;
+      }
+      if (action === "on") {
+        const launcher = join(homedir(), ".vswarm", "bin", "vswarm");
+        if (!existsSync(launcher)) throw new Error("install the launcher first: vswarm install");
+        const every = Number(flag(args, "--every") ?? 60);
+        for (const f of await watchOn(launcher, every)) line(`${c.green("✔")} ${f.replace(homedir(), "~")}`);
+        line(`  ${c.dim(`checks every ${every} minutes and notifies you about anything new · vswarm watch off to stop`)}`);
+        await notify("vswarm watch is on", `This machine is checked every ${every} minutes.`);
+        return;
+      }
+      if (action === "off") {
+        for (const f of await watchOff()) line(`${c.green("✔")} removed ${f.replace(homedir(), "~")}`);
+        return;
+      }
+      if (action === "status") {
+        const s = watchState();
+        line(s.on ? `${c.green("●")} watch is on` : `${c.dim("○")} watch is off · vswarm watch on`);
+        if (s.state) line(`  ${c.dim(`last check ${new Date(s.state.at).toLocaleString()} · ${s.state.verdict.toUpperCase()}${s.state.last ? ` · last notified: ${s.state.last}` : ""}`)}`);
+        return;
+      }
+      throw new Error("usage: vswarm watch on [--every minutes] | off | status | run");
+    }
 
     case "pkg": {
       // vswarm pkg <tool> [--] <the tool's arguments>; the shell wrapper calls this before every install.

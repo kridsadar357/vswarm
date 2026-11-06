@@ -165,6 +165,7 @@ export const COMMANDS: [string, string][] = [
   ["scan", "check this machine now"],
   ["baseline", "remember this machine as clean"],
   ["diff", "what changed since the baseline"],
+  ["watch", "check in the background and notify"],
   ["secrets", "long-lived credentials on this machine"],
   ["agents", "MCP servers, hooks and permissions of AI agents"],
   ["preflight", "gate before production access (ssh/aws/kubectl)"],
@@ -285,6 +286,10 @@ export async function doctor(): Promise<boolean> {
   const sshCfg = existsSync(sshCfgPath) ? readFileSync(sshCfgPath, "utf8") : "";
   if (sshCfg.includes(GATE_START)) ok("ssh gate installed", "~/.ssh/config");
   else console.log(`  ${c.dim("·")} ssh gate not installed  ${c.dim('vswarm gate ssh "prod-*"')}`);
+  const { watchState } = await import("./sec/schedule");
+  const w = watchState();
+  if (w.on) ok("background watch on", w.state ? `last check ${new Date(w.state.at).toLocaleString()}` : "no check yet");
+  else console.log(`  ${c.dim("·")} background watch off  ${c.dim("vswarm watch on")}`);
   if (guardOn()) ok("install guard on", "npm, pip, brew … are checked before installing");
   else console.log(`  ${c.dim("·")} install guard off  ${c.dim("vswarm guard on")}`);
   console.log();
