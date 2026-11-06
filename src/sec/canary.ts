@@ -10,6 +10,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { readJson, reEscape } from "./ctx";
+import { c, line } from "./print";
 import { files, recordManaged, removeBlock, writePrivate } from "./store";
 
 export interface Canary {
@@ -111,4 +112,35 @@ export function canaryKeyIds(): Set<string> {
 
 export function canaryWhere(): Set<string> {
   return new Set(loadCanaries().map((c) => c.where));
+}
+
+/** `vswarm canary plant|list|remove`. The token values are typed on the terminal, never passed as arguments. */
+export async function canaryCommand(action: string, args: string[], opt: { ask: (q: string, o?: { secret?: boolean }) => Promise<string>; profile?: string; alias?: string }) {
+  if (action === "list") {
+    const list = loadCanaries();
+    if (!list.length) return line(`no canaries yet · ${c.dim("vswarm canary plant aws|dns|env")}`);
+    for (const k of list) line(`  ${c.amber("◆")} ${k.id}  ${k.kind.padEnd(4)} ${k.label.padEnd(22)} ${c.dim(k.where.replace(homedir(), "~"))}  ${c.dim(k.token)}`);
+    line(c.dim("\n  Never use these yourself: any use sends you an alert. Remove one with vswarm canary remove <id>."));
+    return;
+  }
+  if (action === "remove") {
+    for (const k of removeCanary(args[0] ?? "")) line(`${c.green("✔")} removed ${k.kind} canary ${k.label} from ${k.where.replace(homedir(), "~")}`);
+    return;
+  }
+  if (action !== "plant") throw new Error("usage: vswarm canary plant aws|dns|env … | canary list | canary remove <id|all>");
+  const kind = args.shift();
+  line(c.dim("  Make the token at https://canarytokens.org with your e-mail (free, by Thinkst). vswarm only plants it."));
+  let k: Canary;
+  if (kind === "aws" || kind === "env") {
+    const dir = kind === "env" ? args.shift() : undefined;
+    if (kind === "env" && !dir) throw new Error("usage: vswarm canary plant env <folder>");
+    const keyId = (await opt.ask("Canary AWS access key id (AKIA…):")).trim();
+    const secret = (await opt.ask("Canary AWS secret access key:", { secret: true })).trim();
+    k = kind === "aws" ? plantAws(keyId, secret, { profile: opt.profile }) : plantEnv(dir!, keyId, secret);
+  } else if (kind === "dns") {
+    const host = args.shift() ?? (await opt.ask("DNS token hostname (…canarytokens.com):")).trim();
+    k = plantDns(host, { alias: opt.alias });
+  } else throw new Error("usage: vswarm canary plant aws [--profile name] | dns <token-host> [--alias name] | env <folder>");
+  line(`${c.green("✔")} planted ${k.kind} canary ${c.bold(k.label)} in ${k.where.replace(homedir(), "~")} ${c.dim(`(id ${k.id})`)}`);
+  line(c.dim(k.kind === "dns" ? `  test it once: dscacheutil -q host -a name ${k.token}  → you should get an e-mail` : `  test it once: aws sts get-caller-identity --profile ${k.label.replace(/[\[\]]/g, "")}  → you should get an e-mail`));
 }

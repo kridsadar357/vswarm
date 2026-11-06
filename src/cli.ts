@@ -6,21 +6,21 @@ import { join } from "node:path";
 import { VERSION } from "./home";
 import { readJson, realCtx } from "./sec/ctx";
 import { check } from "./sec/engine";
-import { c, finding as printFinding, line, summary, VERDICT } from "./sec/print";
+import { c, finding as printFinding, line, summary } from "./sec/print";
 import { writeReport } from "./sec/report";
 import { respond } from "./sec/respond";
 import { forBaseline } from "./sec/scan";
 import { secrets as findSecrets } from "./sec/secrets";
 import { selftest } from "./sec/selftest";
 import { clearLock, files, loadAccepted, loadBaseline, loadLast, loadLock, saveAccepted, saveBaseline } from "./sec/store";
-import { RANK, type Finding, type Verdict } from "./sec/types";
+import { RANK } from "./sec/types";
 import { ask, banner, COMMANDS, completion, doctor, gate, guard, install, trust, uninstall, update, yes } from "./setup";
-import { checkInstall, plan } from "./sec/pkg";
+import { pkgCommand } from "./sec/pkg";
 import { shot } from "./shot";
-import { loadCanaries, plantAws, plantDns, plantEnv, removeCanary } from "./sec/canary";
+import { canaryCommand } from "./sec/canary";
 import { homedir } from "node:os";
 import { verdictNow } from "./sec/gate";
-import { caFiles, caInit, certInfo, issue, loadCaConfig, serverSetup } from "./sec/cert";
+import { caCommand, certCommand } from "./sec/cert";
 import { cleanTries, listTries, tryIt, type Net } from "./sec/try";
 
 /** Where vswarm's own options end: what follows `--` or `--then` belongs to the command being wrapped. */
@@ -128,44 +128,8 @@ async function main() {
       const { agents } = await import("./sec/collect/agents");
       const list = await agents(realCtx());
       if (has(args, "--inspect")) {
-        const { inspect, judgeTools, loadPins, pinTools, savePins } = await import("./sec/mcp");
-        const sandbox = !has(args, "--no-sandbox");
-        const show = has(args, "--show");
-        const servers = list.filter((i) => i.kind === "mcp");
-        line(`${c.violet("▼ vswarm agents --inspect")} ${c.dim(`· ${servers.length} MCP servers · ${sandbox ? "stdio servers run in the sandbox (no home, registries only)" : "stdio servers run directly (--no-sandbox)"}`)}`);
-        // The same server is often configured in several agents; start it once.
-        const byDef = new Map<string, Promise<Awaited<ReturnType<typeof inspect>>>>();
-        const results = await Promise.all(servers.map((i) => {
-          const k = String(i.meta?.url ?? i.meta?.command ?? i.id);
-          if (!byDef.has(k)) byDef.set(k, inspect(i, { sandbox }));
-          return byDef.get(k)!.then((r) => ({ ...r, item: i }));
-        }));
-        const allTools = new Map<string, string>();
-        for (const r of results) for (const t of r.tools ?? []) allTools.set(t.name, r.item.id);
-        const pins = loadPins();
-        const findings: Finding[] = [];
-        for (const r of results) {
-          const label = `${r.item.name} ${c.dim(`(${r.item.source})`)}`;
-          if (!r.tools) {
-            line(`  ${c.dim("·")} ${label}  ${c.dim(`not inspected: ${r.error}`)}`);
-            continue;
-          }
-          const others = new Set([...allTools].filter(([, id]) => id !== r.item.id).map(([n]) => n));
-          const fs = [...judgeTools(r.item, r.tools, others), ...pinTools(r.item, r.tools, pins)];
-          findings.push(...fs);
-          line(`  ${fs.some((f) => RANK[f.severity] >= RANK.high) ? c.red("✖") : fs.length ? c.amber("!") : c.green("✔")} ${label}  ${c.dim(`${r.tools.length} tool${r.tools.length === 1 ? "" : "s"}${r.sandboxed ? " · sandboxed" : ""}${r.hosts?.length ? ` · reached ${r.hosts.join(", ")}` : ""}`)}`);
-          if (show) for (const t of r.tools) line(`      ${c.cyan(t.name)}  ${c.dim((t.description ?? "").replace(/\s+/g, " ").slice(0, 300))}`);
-        }
-        savePins(pins);
-        const failed = results.filter((r) => !r.tools && /exited|no answer/.test(r.error ?? "")).length;
-        if (sandbox && failed) line(c.dim(`  ${failed} could not start in the sandbox (they need files in your home or a local service). --no-sandbox starts them as your agent does, with your access.`));
-        line("");
-        const shown = findings.filter((f) => RANK[f.severity] >= RANK.medium);
-        if (!shown.length) line(`  ${c.green("✔")} no hidden instructions, secret lookups or changed tools in what the agents will read`);
-        for (const f of shown.sort((a, b) => RANK[b.severity] - RANK[a.severity])) printFinding({ ...f, id: "" });
-        if (findings.length > shown.length) line(c.dim(`  … ${findings.length - shown.length} low finding${findings.length - shown.length > 1 ? "s" : ""} (a URL in a description and the like) · --show prints every description`));
-        line(c.dim("\n  Tool definitions are pinned now; the next --inspect reports any change (rug pulls). --show prints every description."));
-        process.exitCode = findings.some((f) => RANK[f.severity] >= RANK.high) ? 3 : 0;
+        const { inspectAll } = await import("./sec/mcp");
+        process.exitCode = await inspectAll(list.filter((i) => i.kind === "mcp"), { sandbox: !has(args, "--no-sandbox"), show: has(args, "--show") });
         return;
       }
       line(`${c.violet("▼ vswarm agents")} ${c.dim("· MCP servers, hooks and permissions of AI coding agents on this machine")}`);
@@ -284,34 +248,11 @@ async function main() {
       return guard(args);
 
     case "watch": {
-      const { notify, watchOff, watchOn, watchRun, watchState } = await import("./sec/schedule");
+      const { watchCommand } = await import("./sec/schedule");
       const action = args.shift() ?? "status";
-      if (action === "run") {
-        const r = await watchRun();
-        line(`${VERDICT[r.verdict as Verdict]} ${c.dim(r.fresh.length ? `${r.fresh.length} new finding${r.fresh.length > 1 ? "s" : ""}, notified` : "nothing new")}`);
-        return;
-      }
-      if (action === "on") {
-        const launcher = join(homedir(), ".vswarm", "bin", "vswarm");
-        if (!existsSync(launcher)) throw new Error("install the launcher first: vswarm install");
-        const every = Number(flag(args, "--every") ?? 60);
-        if (!Number.isInteger(every) || every < 1) throw new Error("--every takes a whole number of minutes");
-        for (const f of await watchOn(launcher, every)) line(`${c.green("✔")} ${f.replace(homedir(), "~")}`);
-        line(`  ${c.dim(`checks every ${every} minutes and notifies you about anything new · vswarm watch off to stop`)}`);
-        await notify("vswarm watch is on", `This machine is checked every ${every} minutes.`);
-        return;
-      }
-      if (action === "off") {
-        for (const f of await watchOff()) line(`${c.green("✔")} removed ${f.replace(homedir(), "~")}`);
-        return;
-      }
-      if (action === "status") {
-        const s = watchState();
-        line(s.on ? `${c.green("●")} watch is on` : `${c.dim("○")} watch is off · vswarm watch on`);
-        if (s.state) line(`  ${c.dim(`last check ${new Date(s.state.at).toLocaleString()} · ${s.state.verdict.toUpperCase()}${s.state.last ? ` · last notified: ${s.state.last}` : ""}`)}`);
-        return;
-      }
-      throw new Error("usage: vswarm watch on [--every minutes] | off | status | run");
+      const every = Number(flag(args, "--every") ?? 60);
+      if (!Number.isInteger(every) || every < 1) throw new Error("--every takes a whole number of minutes");
+      return watchCommand(action, { every });
     }
 
     case "pkg": {
@@ -320,101 +261,23 @@ async function main() {
       if (!tool) throw new Error("usage: vswarm pkg npm|pnpm|yarn|bun|npx|bunx|pip|pip3|uv|uvx|pipx|brew [--] <arguments>   e.g. vswarm pkg npm install axois");
       if (args[0] === "--") args.shift();
       if (process.env.VSWARM_GUARD === "off") return;
-      const p = plan(tool, args);
-      if (p.skip) return;
-      const r = await checkInstall(p, { offline });
-      const quietPass = !r.findings.some((f) => f.severity !== "info") && !r.notes.length;
-      if (quietPass) {
-        if (process.stderr.isTTY) line(c.dim(`vswarm ✔ ${p.wants.length > 1 ? `${p.wants.length} packages` : p.from}${r.deps ? ` and ${r.deps} dependencies` : ""} checked · ${r.ms} ms`));
-        return;
-      }
-      line(`${c.violet("▼ vswarm")} checked ${p.from.startsWith(tool) ? p.from : `${tool} ${p.from}`} ${c.dim(`${r.deps ? `and ${r.deps} dependencies ` : ""}· ${r.ms} ms`)}`);
-      for (const f of r.findings.filter((x) => x.severity !== "info")) printFinding({ ...f, id: "" }, f.severity !== "low");
-      for (const n of r.notes) line(c.dim(`  · ${n}`));
-      if (r.verdict !== "block") {
-        if (r.findings.length) line(c.dim(`  ${VERDICT[r.verdict]} · going ahead`));
-        return;
-      }
-      if (await yes(`${c.red("Stop here.")} Install anyway?`, false)) return line(c.dim("  going ahead, as you said"));
-      line(c.dim(`  not installed · skip vswarm once with: command ${tool} …`));
-      process.exitCode = 3;
+      process.exitCode = await pkgCommand(tool, args, { offline, ask: yes });
       return;
     }
 
     case "ca": {
       const action = args.shift() ?? "status";
-      if (action === "init") {
-        const principals = flag(args, "--principal")?.split(",");
-        const ttl = flag(args, "--ttl");
-        const sk = has(args, "--sk");
-        const noPass = has(args, "--no-passphrase");
-        line(c.dim(sk ? "  touch your security key when it blinks" : "  choose a CA passphrase; vswarm asks for it each time it signs a certificate"));
-        const cfg = await caInit({ sk, noPassphrase: noPass, principals, ttl });
-        line(`${c.green("✔")} CA created ${c.dim(caFiles.key())} · principals ${cfg.principals.join(",")} · certificates last ${cfg.ttl}`);
-        line(c.dim(`  next: vswarm ca server <account>   (commands to make a server trust this CA)`));
-        return;
-      }
-      if (action === "server") {
-        if (!existsSync(caFiles.pub())) throw new Error("no CA yet: vswarm ca init");
-        console.log(serverSetup(args[0] ?? "root", loadCaConfig()));
-        return;
-      }
-      if (action === "status") {
-        if (!existsSync(caFiles.key())) return line("no CA yet · vswarm ca init");
-        const cfg = loadCaConfig();
-        const info = await certInfo();
-        line(`CA ${c.dim(caFiles.key())} · principals ${cfg.principals.join(",")} · ttl ${cfg.ttl}`);
-        line(info.valid ? `${c.green("●")} certificate valid for ${Math.floor((info.left ?? 0) / 60)} min more · ${c.dim(info.id ?? "")}` : `${c.dim("○")} no valid certificate · vswarm cert`);
-        return;
-      }
-      throw new Error("usage: vswarm ca init [--sk] [--principal a,b] [--ttl 15m] | ca server <account> | ca status");
+      return caCommand(action, args, { principals: flag(args, "--principal")?.split(","), ttl: flag(args, "--ttl"), sk: has(args, "--sk"), noPassphrase: has(args, "--no-passphrase") });
     }
 
     case "canary": {
       const action = args.shift() ?? "list";
-      if (action === "list") {
-        const list = loadCanaries();
-        if (!list.length) return line(`no canaries yet · ${c.dim("vswarm canary plant aws|dns|env")}`);
-        for (const k of list) line(`  ${c.amber("◆")} ${k.id}  ${k.kind.padEnd(4)} ${k.label.padEnd(22)} ${c.dim(k.where.replace(homedir(), "~"))}  ${c.dim(k.token)}`);
-        line(c.dim("\n  Never use these yourself: any use sends you an alert. Remove one with vswarm canary remove <id>."));
-        return;
-      }
-      if (action === "remove") {
-        for (const k of removeCanary(args[0] ?? "")) line(`${c.green("✔")} removed ${k.kind} canary ${k.label} from ${k.where.replace(homedir(), "~")}`);
-        return;
-      }
-      if (action !== "plant") throw new Error("usage: vswarm canary plant aws|dns|env … | canary list | canary remove <id|all>");
-      const kind = args.shift();
-      line(c.dim("  Make the token at https://canarytokens.org with your e-mail (free, by Thinkst). vswarm only plants it."));
-      let k;
-      if (kind === "aws" || kind === "env") {
-        const dir = kind === "env" ? args.shift() : undefined;
-        if (kind === "env" && !dir) throw new Error("usage: vswarm canary plant env <folder>");
-        const keyId = (await ask("Canary AWS access key id (AKIA…):")).trim();
-        const secret = (await ask("Canary AWS secret access key:", { secret: true })).trim();
-        k = kind === "aws" ? plantAws(keyId, secret, { profile: flag(args, "--profile") }) : plantEnv(dir!, keyId, secret);
-      } else if (kind === "dns") {
-        const host = args.shift() ?? (await ask("DNS token hostname (…canarytokens.com):")).trim();
-        k = plantDns(host, { alias: flag(args, "--alias") });
-      } else throw new Error("usage: vswarm canary plant aws [--profile name] | dns <token-host> [--alias name] | env <folder>");
-      line(`${c.green("✔")} planted ${k.kind} canary ${c.bold(k.label)} in ${k.where.replace(homedir(), "~")} ${c.dim(`(id ${k.id})`)}`);
-      line(c.dim(k.kind === "dns" ? `  test it once: dscacheutil -q host -a name ${k.token}  → you should get an e-mail` : `  test it once: aws sts get-caller-identity --profile ${k.label.replace(/[\[\]]/g, "")}  → you should get an e-mail`));
-      return;
+      return canaryCommand(action, args, { ask, profile: flag(args, "--profile"), alias: flag(args, "--alias") });
     }
 
-    case "cert": {
-      const quiet = has(args, "--quiet", "-q");
-      const host = flag(args, "--host");
-      const verdict = await verdictNow({ fresh: has(args, "--fresh"), quiet, offline });
-      if (verdict === "block") {
-        line(c.red("vswarm: no certificate for a machine that does not pass preflight"));
-        process.exitCode = 3;
-        return;
-      }
-      const r = await issue({ host });
-      if (!quiet || !r.reused) line(`${c.green("✔")} ${r.reused ? "certificate still valid" : "certificate issued"} for ${Math.floor((r.info.left ?? 0) / 60)} min · ${c.dim(r.info.principals.join(","))}`);
+    case "cert":
+      process.exitCode = await certCommand({ quiet: has(args, "--quiet", "-q"), fresh: has(args, "--fresh"), offline, host: flag(args, "--host") });
       return;
-    }
 
     case "try": {
       if (has(args, "--list")) {

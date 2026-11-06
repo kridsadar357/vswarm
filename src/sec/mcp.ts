@@ -11,9 +11,10 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { VERSION } from "../home";
 import { readJson } from "./ctx";
+import { c, finding as printFinding, line } from "./print";
 import { canSandbox, sandboxSpawn } from "./try/spawn";
 import { SEC, writePrivate } from "./store";
-import type { Finding, Item, Severity } from "./types";
+import { RANK, type Finding, type Item, type Severity } from "./types";
 
 export interface Tool {
   name: string;
@@ -242,4 +243,43 @@ export async function inspect(i: Item, opt: { sandbox: boolean }): Promise<Inspe
   } catch (e: any) {
     return { item: i, error: String(e?.message ?? e) };
   }
+}
+
+/** `vswarm agents --inspect`: every MCP server the scan found, inspected, judged and pinned. Returns the exit code. */
+export async function inspectAll(servers: Item[], opt: { sandbox: boolean; show: boolean }): Promise<number> {
+  const { sandbox, show } = opt;
+  line(`${c.violet("▼ vswarm agents --inspect")} ${c.dim(`· ${servers.length} MCP servers · ${sandbox ? "stdio servers run in the sandbox (no home, registries only)" : "stdio servers run directly (--no-sandbox)"}`)}`);
+  // The same server is often configured in several agents; start it once.
+  const byDef = new Map<string, Promise<Inspection>>();
+  const results = await Promise.all(servers.map((i) => {
+    const k = String(i.meta?.url ?? i.meta?.command ?? i.id);
+    if (!byDef.has(k)) byDef.set(k, inspect(i, { sandbox }));
+    return byDef.get(k)!.then((r) => ({ ...r, item: i }));
+  }));
+  const allTools = new Map<string, string>();
+  for (const r of results) for (const t of r.tools ?? []) allTools.set(t.name, r.item.id);
+  const pins = loadPins();
+  const findings: Finding[] = [];
+  for (const r of results) {
+    const label = `${r.item.name} ${c.dim(`(${r.item.source})`)}`;
+    if (!r.tools) {
+      line(`  ${c.dim("·")} ${label}  ${c.dim(`not inspected: ${r.error}`)}`);
+      continue;
+    }
+    const others = new Set([...allTools].filter(([, id]) => id !== r.item.id).map(([n]) => n));
+    const fs = [...judgeTools(r.item, r.tools, others), ...pinTools(r.item, r.tools, pins)];
+    findings.push(...fs);
+    line(`  ${fs.some((f) => RANK[f.severity] >= RANK.high) ? c.red("✖") : fs.length ? c.amber("!") : c.green("✔")} ${label}  ${c.dim(`${r.tools.length} tool${r.tools.length === 1 ? "" : "s"}${r.sandboxed ? " · sandboxed" : ""}${r.hosts?.length ? ` · reached ${r.hosts.join(", ")}` : ""}`)}`);
+    if (show) for (const t of r.tools) line(`      ${c.cyan(t.name)}  ${c.dim((t.description ?? "").replace(/\s+/g, " ").slice(0, 300))}`);
+  }
+  savePins(pins);
+  const failed = results.filter((r) => !r.tools && /exited|no answer/.test(r.error ?? "")).length;
+  if (sandbox && failed) line(c.dim(`  ${failed} could not start in the sandbox (they need files in your home or a local service). --no-sandbox starts them as your agent does, with your access.`));
+  line("");
+  const shown = findings.filter((f) => RANK[f.severity] >= RANK.medium);
+  if (!shown.length) line(`  ${c.green("✔")} no hidden instructions, secret lookups or changed tools in what the agents will read`);
+  for (const f of shown.sort((a, b) => RANK[b.severity] - RANK[a.severity])) printFinding({ ...f, id: "" });
+  if (findings.length > shown.length) line(c.dim(`  … ${findings.length - shown.length} low finding${findings.length - shown.length > 1 ? "s" : ""} (a URL in a description and the like) · --show prints every description`));
+  line(c.dim("\n  Tool definitions are pinned now; the next --inspect reports any change (rug pulls). --show prints every description."));
+  return findings.some((f) => RANK[f.severity] >= RANK.high) ? 3 : 0;
 }

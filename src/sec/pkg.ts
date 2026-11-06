@@ -19,6 +19,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { shq } from "./ctx";
 import { lookAlike, osvMalicious } from "./intel";
+import { c, finding as printFinding, line, VERDICT } from "./print";
 import { files } from "./store";
 import { RANK, verdictOf, type Finding, type Item, type Severity, type Verdict } from "./types";
 
@@ -383,6 +384,34 @@ export async function checkInstall(p: Plan, opt: { get?: Fetcher; offline?: bool
   }
   findings.sort((a, b) => RANK[b.severity] - RANK[a.severity]);
   return { plan: p, findings, verdict: verdictOf(findings), notes, ms: Date.now() - t0, deps };
+}
+
+/**
+ * `vswarm pkg <tool> <arguments>`: the check the shell wrapper runs before every install. Prints only when there is
+ * something to say (one dim line on a terminal otherwise) and returns the exit code: 3 stops the install.
+ */
+export async function pkgCommand(tool: string, args: string[], opt: { offline: boolean; ask: (q: string, def?: boolean) => Promise<boolean> }): Promise<number> {
+  const p = plan(tool, args);
+  if (p.skip) return 0;
+  const r = await checkInstall(p, { offline: opt.offline });
+  const quietPass = !r.findings.some((f) => f.severity !== "info") && !r.notes.length;
+  if (quietPass) {
+    if (process.stderr.isTTY) line(c.dim(`vswarm ✔ ${p.wants.length > 1 ? `${p.wants.length} packages` : p.from}${r.deps ? ` and ${r.deps} dependencies` : ""} checked · ${r.ms} ms`));
+    return 0;
+  }
+  line(`${c.violet("▼ vswarm")} checked ${p.from.startsWith(tool) ? p.from : `${tool} ${p.from}`} ${c.dim(`${r.deps ? `and ${r.deps} dependencies ` : ""}· ${r.ms} ms`)}`);
+  for (const f of r.findings.filter((x) => x.severity !== "info")) printFinding({ ...f, id: "" }, f.severity !== "low");
+  for (const n of r.notes) line(c.dim(`  · ${n}`));
+  if (r.verdict !== "block") {
+    if (r.findings.length) line(c.dim(`  ${VERDICT[r.verdict]} · going ahead`));
+    return 0;
+  }
+  if (await opt.ask(`${c.red("Stop here.")} Install anyway?`, false)) {
+    line(c.dim("  going ahead, as you said"));
+    return 0;
+  }
+  line(c.dim(`  not installed · skip vswarm once with: command ${tool} …`));
+  return 3;
 }
 
 // ── The shell wrapper

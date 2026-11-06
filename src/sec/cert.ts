@@ -9,6 +9,8 @@ import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync }
 import { join } from "node:path";
 import { HOME } from "../home";
 import { exec, readJson, whoami } from "./ctx";
+import { verdictNow } from "./gate";
+import { c, line } from "./print";
 
 export const CA_DIR = () => process.env.VSWARM_CA_DIR ?? join(HOME, "ca");
 
@@ -98,6 +100,43 @@ export async function issue(opt: { host?: string; minLeft?: number; quiet?: bool
   ], { tty: true });
   if (sign.code !== 0 || !existsSync(caFiles.cert())) throw new Error("the CA did not sign (wrong passphrase, or no touch on the hardware key)");
   return { reused: false, info: await certInfo() };
+}
+
+/** `vswarm ca init|server|status`. */
+export async function caCommand(action: string, args: string[], opt: { sk: boolean; noPassphrase: boolean; principals?: string[]; ttl?: string }) {
+  if (action === "init") {
+    line(c.dim(opt.sk ? "  touch your security key when it blinks" : "  choose a CA passphrase; vswarm asks for it each time it signs a certificate"));
+    const cfg = await caInit(opt);
+    line(`${c.green("✔")} CA created ${c.dim(caFiles.key())} · principals ${cfg.principals.join(",")} · certificates last ${cfg.ttl}`);
+    line(c.dim(`  next: vswarm ca server <account>   (commands to make a server trust this CA)`));
+    return;
+  }
+  if (action === "server") {
+    if (!existsSync(caFiles.pub())) throw new Error("no CA yet: vswarm ca init");
+    console.log(serverSetup(args[0] ?? "root", loadCaConfig()));
+    return;
+  }
+  if (action === "status") {
+    if (!existsSync(caFiles.key())) return line("no CA yet · vswarm ca init");
+    const cfg = loadCaConfig();
+    const info = await certInfo();
+    line(`CA ${c.dim(caFiles.key())} · principals ${cfg.principals.join(",")} · ttl ${cfg.ttl}`);
+    line(info.valid ? `${c.green("●")} certificate valid for ${Math.floor((info.left ?? 0) / 60)} min more · ${c.dim(info.id ?? "")}` : `${c.dim("○")} no valid certificate · vswarm cert`);
+    return;
+  }
+  throw new Error("usage: vswarm ca init [--sk] [--principal a,b] [--ttl 15m] | ca server <account> | ca status");
+}
+
+/** `vswarm cert`: a certificate, but only for a machine that passes preflight. Returns the exit code. */
+export async function certCommand(opt: { quiet: boolean; fresh: boolean; offline: boolean; host?: string }): Promise<number> {
+  const verdict = await verdictNow({ fresh: opt.fresh, quiet: opt.quiet, offline: opt.offline });
+  if (verdict === "block") {
+    line(c.red("vswarm: no certificate for a machine that does not pass preflight"));
+    return 3;
+  }
+  const r = await issue({ host: opt.host });
+  if (!opt.quiet || !r.reused) line(`${c.green("✔")} ${r.reused ? "certificate still valid" : "certificate issued"} for ${Math.floor((r.info.left ?? 0) / 60)} min · ${c.dim(r.info.principals.join(","))}`);
+  return 0;
 }
 
 /** Commands to run on a server, as root, to trust this CA. Printed for you to review and run; vswarm never logs in. */

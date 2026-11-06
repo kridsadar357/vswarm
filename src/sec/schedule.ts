@@ -9,8 +9,9 @@ import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { readJson, realCtx, run } from "./ctx";
 import { check } from "./engine";
+import { c, line, VERDICT } from "./print";
 import { recordManagedFile, SEC, writePrivate } from "./store";
-import { RANK, type Finding } from "./types";
+import { RANK, type Finding, type Verdict } from "./types";
 
 const LABEL = "dev.vswarm.watch";
 const mac = () => process.platform === "darwin";
@@ -115,4 +116,33 @@ export async function watchRun(): Promise<{ fresh: Finding[]; verdict: string }>
   const state: State = { at: Date.now(), verdict: r.verdict, told: [...new Set([...told, ...fresh.map((f) => f.id)])].slice(-500), last: fresh[0]?.title ?? prev?.last };
   writePrivate(stateFile(), state);
   return { fresh, verdict: r.verdict };
+}
+
+/** `vswarm watch on|off|status|run`. */
+export async function watchCommand(action: string, opt: { every: number }) {
+  if (action === "run") {
+    const r = await watchRun();
+    line(`${VERDICT[r.verdict as Verdict]} ${c.dim(r.fresh.length ? `${r.fresh.length} new finding${r.fresh.length > 1 ? "s" : ""}, notified` : "nothing new")}`);
+    return;
+  }
+  if (action === "on") {
+    const launcher = join(homedir(), ".vswarm", "bin", "vswarm");
+    if (!existsSync(launcher)) throw new Error("install the launcher first: vswarm install");
+    const every = opt.every;
+    for (const f of await watchOn(launcher, every)) line(`${c.green("✔")} ${f.replace(homedir(), "~")}`);
+    line(`  ${c.dim(`checks every ${every} minutes and notifies you about anything new · vswarm watch off to stop`)}`);
+    await notify("vswarm watch is on", `This machine is checked every ${every} minutes.`);
+    return;
+  }
+  if (action === "off") {
+    for (const f of await watchOff()) line(`${c.green("✔")} removed ${f.replace(homedir(), "~")}`);
+    return;
+  }
+  if (action === "status") {
+    const s = watchState();
+    line(s.on ? `${c.green("●")} watch is on` : `${c.dim("○")} watch is off · vswarm watch on`);
+    if (s.state) line(`  ${c.dim(`last check ${new Date(s.state.at).toLocaleString()} · ${s.state.verdict.toUpperCase()}${s.state.last ? ` · last notified: ${s.state.last}` : ""}`)}`);
+    return;
+  }
+  throw new Error("usage: vswarm watch on [--every minutes] | off | status | run");
 }
