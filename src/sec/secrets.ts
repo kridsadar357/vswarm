@@ -52,21 +52,27 @@ export function kubeUsers(yaml: string): { name: string; how: string; expires?: 
   if (start < 0) return out;
   const block = yaml.slice(start).split("\n").slice(1);
   let cur: { name: string; how: string; expires?: number } | undefined;
+  // The list may sit at any indentation; the first item sets it, so `- name:` deeper down (an exec env entry) is not a user.
+  let indent: number | undefined;
   for (const line of block) {
     if (/^[A-Za-z]/.test(line)) break; // next top-level key; list items may start at column 0
-    const name = /^- name:\s*(.+)$/.exec(line.trim());
-    if (name && /^\s{0,2}- /.test(line)) {
-      cur = { name: name[1].replace(/["']/g, ""), how: "unknown" };
+    const item = /^(\s*)- name:\s*(.+)$/.exec(line);
+    if (item && (indent === undefined || item[1].length === indent)) {
+      indent = item[1].length;
+      cur = { name: item[2].trim().replace(/["']/g, ""), how: "unknown" };
       out.push(cur);
       continue;
     }
     if (!cur) continue;
-    const kv = /^\s+(token|client-key-data|client-key|password|exec|auth-provider|tokenFile):\s*(.*)$/.exec(line);
+    const kv = /^\s+(token|client-key-data|client-key|client-certificate-data|client-certificate|password|exec|auth-provider|tokenFile):\s*(.*)$/.exec(line);
     if (!kv) continue;
     const [, key, val] = kv;
     if (key === "exec" || key === "auth-provider") cur.how = key;
     else if (cur.how !== "exec") {
-      cur.how = key === "client-key-data" || key === "client-key" ? "client certificate" : key === "password" ? "password" : "token";
+      // Key material pasted into the file, or a path to it: both are long-lived credentials on disk.
+      cur.how = key === "client-key-data" || key === "client-certificate-data" ? "client certificate"
+        : key === "client-key" || key === "client-certificate" ? "client certificate (file)"
+        : key === "password" ? "password" : "token";
       if (key === "token") cur.expires = jwtExpiry(val.trim().replace(/["']/g, ""));
     }
   }

@@ -8,7 +8,7 @@
 // the macOS sandbox log gives on a Mac.
 
 import { existsSync, readFileSync } from "node:fs";
-import { basename, dirname, join } from "node:path";
+import { basename, dirname, join, posix } from "node:path";
 import { exec, shq } from "../ctx";
 import type { Box } from "./sandbox";
 import type { Denial } from "./watch";
@@ -79,6 +79,9 @@ export function inner(box: Box, bun: string, command: string[], strace?: string)
 /** In the fake home, only what nothing but a thief reads. */
 const FAKE_HOME_LOOT = /^\/\.ssh\/id_|^\/\.ssh\/.*\.pem$|^\/\.aws\/credentials$|^\/\.config\/(google-chrome|chromium|BraveSoftware|microsoft-edge)\/|^\/\.mozilla\/|^\/\.config\/(Exodus|Electrum|atomic)\/|^\/\.electrum\/|^\/\.local\/share\/keyrings\/|^\/\.gnupg\/private|^\/\.(bash|zsh)_history$|^\/Library\/(Keychains|Application Support\/(Google|BraveSoftware|Exodus))/;
 
+/** Calls that read a file or ask about it, including following a symlink (readlink), which is how some loaders find a key. */
+const READS = /^(open|openat|openat2|access|faccessat2?|stat|lstat|newfstatat|statx|readlink|readlinkat)$/;
+
 /** A string as strace prints it: non-ASCII bytes as \ooo, quotes and backslashes escaped. Decoded, so paths compare equal. */
 const STR = /"((?:[^"\\]|\\.)*)"/;
 const cstr = (s: string) =>
@@ -143,14 +146,15 @@ export function traceDenials(log: string, realHome: string, box: Box): Denial[] 
       continue;
     }
     // The first quoted argument is the path for every %file call strace prints.
-    const path = quoted(args);
-    if (!path || !path.startsWith("/")) continue;
+    const raw = quoted(args);
+    if (!raw || !raw.startsWith("/")) continue;
+    // /home/u/x/../.ssh/id_rsa is /home/u/.ssh/id_rsa; the prefixes below compare the plain form.
+    const path = posix.normalize(raw);
     if (path.startsWith(box.home + "/")) {
       // The code cannot tell the home is fake: going for keys, cloud credentials, browser or wallet data there is the
       // same intent. Config files every tool reads (.npmrc, .netrc, .ssh/config, .gitconfig) are left out.
       const rel = path.slice(box.home.length);
-      if (/^\/(open|openat|openat2|access|faccessat2?|stat|lstat|newfstatat|statx)$/.test("/" + call) && FAKE_HOME_LOOT.test(rel))
-        add({ proc: `${proc}, via $HOME`, pid, op: "file-read", target: realHome + rel });
+      if (READS.test(call) && FAKE_HOME_LOOT.test(rel)) add({ proc: `${proc}, via $HOME`, pid, op: "file-read", target: realHome + rel });
       continue;
     }
     if (path.startsWith(box.dir)) continue;
@@ -166,7 +170,7 @@ export function traceDenials(log: string, realHome: string, box: Box): Denial[] 
       continue;
     }
     // A program that looks for your keys by their real path, not through $HOME, is looking past the fake home.
-    if (path.startsWith(realHome + "/") && /^(open|openat|openat2|access|faccessat2?|stat|lstat|newfstatat|statx)$/.test(call)) add({ proc, pid, op: "file-read", target: path });
+    if (path.startsWith(realHome + "/") && READS.test(call)) add({ proc, pid, op: "file-read", target: path });
   }
   // A process usually detaches (setsid) before it runs its program; name it by what it ran next.
   for (const d of out) if (d.op === "setsid" && d.proc === "?") d.proc = d.target = names.get(d.pid) ?? "?";

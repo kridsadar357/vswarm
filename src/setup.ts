@@ -126,17 +126,21 @@ function writeLauncher() {
 const BLOCK_START = "# >>> vswarm >>>";
 const BLOCK_END = "# <<< vswarm <<<";
 
-function rcFiles(): { file: string; body: string }[] {
-  const bin = paths.bin();
-  const comp = paths.completions();
+/** A path inside the double quotes of a shell line. Plain paths pass through unchanged: the managed-block hashes depend on the exact text. */
+const inDq = (p: string) => p.replace(/[\\"$`]/g, "\\$&");
+/** The same for fish, where a backtick is an ordinary character. */
+const inFishDq = (p: string) => p.replace(/[\\"$]/g, "\\$&");
+
+export function rcFiles(home = homedir(), bin = paths.bin(), comp = paths.completions()): { file: string; body: string }[] {
   const shell = (process.env.SHELL ?? "").split("/").pop();
   const out: { file: string; body: string }[] = [];
-  const zsh = `export PATH="${bin}:$PATH"\nfpath=("${comp}" $fpath)\nautoload -Uz compinit 2>/dev/null && compinit -C 2>/dev/null`;
-  const bash = `export PATH="${bin}:$PATH"\n[ -f "${comp}/vswarm.bash" ] && . "${comp}/vswarm.bash"`;
-  if (shell === "zsh" || existsSync(join(homedir(), ".zshrc"))) out.push({ file: join(homedir(), ".zshrc"), body: zsh });
-  if (shell === "bash" || existsSync(join(homedir(), ".bashrc"))) out.push({ file: join(homedir(), ".bashrc"), body: bash });
-  if (shell === "fish") out.push({ file: join(homedir(), ".config", "fish", "conf.d", "vswarm.fish"), body: `fish_add_path "${bin}"` });
-  if (!out.length) out.push({ file: join(homedir(), ".profile"), body: `export PATH="${bin}:$PATH"` });
+  const [b, c] = [inDq(bin), inDq(comp)];
+  const zsh = `export PATH="${b}:$PATH"\nfpath=("${c}" $fpath)\nautoload -Uz compinit 2>/dev/null && compinit -C 2>/dev/null`;
+  const bash = `export PATH="${b}:$PATH"\n[ -f "${c}/vswarm.bash" ] && . "${c}/vswarm.bash"`;
+  if (shell === "zsh" || existsSync(join(home, ".zshrc"))) out.push({ file: join(home, ".zshrc"), body: zsh });
+  if (shell === "bash" || existsSync(join(home, ".bashrc"))) out.push({ file: join(home, ".bashrc"), body: bash });
+  if (shell === "fish") out.push({ file: join(home, ".config", "fish", "conf.d", "vswarm.fish"), body: `fish_add_path "${inFishDq(bin)}"` });
+  if (!out.length) out.push({ file: join(home, ".profile"), body: `export PATH="${b}:$PATH"` });
   return out;
 }
 

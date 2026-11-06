@@ -34,6 +34,8 @@ export interface Want {
   outside?: string;
   /** Homebrew tap, for user/tap/formula. */
   tap?: string;
+  /** Code already on this machine (link:, portal:, workspace:, ./folder): nothing to download, nothing to ask a registry. */
+  local?: boolean;
 }
 
 export interface Plan {
@@ -79,9 +81,12 @@ function execSpecs(args: string[]): string[] {
   return first ? [first] : [];
 }
 
-/** npm name[@version] → Want. Scoped names keep their leading @. */
+/** npm name[@version] → Want. Scoped names keep their leading @; local folders come back marked `local`, and npmWants drops them. */
 export function npmSpec(spec: string): Want {
-  if (/^(git\+|git:|github:|gitlab:|bitbucket:|https?:|file:|\.{0,2}\/|~\/)/.test(spec) || /\.(tgz|tar\.gz)$/.test(spec) || /^[\w-]+\/[\w.-]+(#.*)?$/.test(spec))
+  if (/\.(tgz|tar\.gz)$/.test(spec)) return { eco: "npm", name: spec, outside: spec };
+  // A folder of the user's own code: nothing is downloaded, and there is no registry to ask about it.
+  if (/^(link:|portal:|workspace:)/.test(spec) || /^\.\.?(\/|$)/.test(spec)) return { eco: "npm", name: spec, local: true };
+  if (/^(git\+|git:|github:|gitlab:|bitbucket:|https?:|file:|\/|~\/)/.test(spec) || /^[\w-]+\/[\w.-]+(#.*)?$/.test(spec))
     return { eco: "npm", name: spec, outside: spec };
   // An alias (name@npm:real-name@1) installs the real name.
   const alias = /^@?[^@]+@npm:(.+)$/.exec(spec);
@@ -90,6 +95,8 @@ export function npmSpec(spec: string): Want {
   const [name, range] = at > 0 ? [spec.slice(0, at), spec.slice(at + 1)] : [spec, ""];
   return { eco: "npm", name, version: /^\d+\.\d+\.\d+(-[\w.-]+)?(\+[\w.-]+)?$/.test(range) ? range : undefined };
 }
+
+const npmWants = (specs: string[]): Want[] => specs.map(npmSpec).filter((w) => !w.local);
 
 /** pip requirement → Want, or nothing for local paths and editable installs of the project itself. */
 export function pipSpec(spec: string): Want | undefined {
@@ -156,8 +163,13 @@ export function npmProject(dir: string): Want[] {
   }
   try {
     const pj = JSON.parse(readFileSync(join(dir, "package.json"), "utf8"));
-    return Object.entries({ ...pj.dependencies, ...pj.devDependencies, ...pj.optionalDependencies }).map(([n, r]) =>
-      String(r).startsWith("npm:") ? npmSpec(String(r).slice(4)) : /^(git|github:|https?:|file:)/.test(String(r)) ? { eco: "npm" as const, name: n, outside: String(r) } : { eco: "npm" as const, name: n });
+    return Object.entries({ ...pj.dependencies, ...pj.devDependencies, ...pj.optionalDependencies }).flatMap(([n, r]): Want[] => {
+      const v = String(r);
+      // Workspace and linked packages are folders of this project, not downloads.
+      if (/^(link:|portal:|workspace:|\.\.?\/)/.test(v)) return [];
+      if (v.startsWith("npm:")) return npmWants([v.slice(4)]);
+      return [/^(git|github:|https?:|file:)/.test(v) ? { eco: "npm", name: n, outside: v } : { eco: "npm", name: n }];
+    });
   } catch {
     return [];
   }
@@ -169,13 +181,20 @@ export function plan(tool: string, args: string[], cwd = process.cwd()): Plan {
   const sub = args[0];
   if (tool === "npx" || tool === "bunx" || tool === "uvx") {
     const specs = execSpecs(args);
-    const wants = specs.map((s) => (tool === "uvx" ? pipSpec(s) : npmSpec(s))).filter((w): w is Want => !!w);
+    const wants = tool === "uvx" ? specs.map(pipSpec).filter((w): w is Want => !!w) : npmWants(specs);
     return wants.length ? { wants, skip: false, from: `${tool} ${specs.join(" ")}` } : none;
   }
   if (["npm", "pnpm", "yarn", "bun"].includes(tool)) {
     if (sub && NPM_RUN_PKG.has(sub)) {
       const specs = execSpecs(args.slice(1));
-      return specs.length ? { wants: specs.map(npmSpec), skip: false, from: `${tool} ${sub} ${specs.join(" ")}` } : none;
+      const wants = npmWants(specs);
+      return wants.length ? { wants, skip: false, from: `${tool} ${sub} ${specs.join(" ")}` } : none;
+    }
+    // yarn global add|upgrade <names>: the names are what gets installed; a bare `yarn global upgrade` has no project to read.
+    if (tool === "yarn" && sub === "global") {
+      const specs = NPM_INSTALL.has(args[1] ?? "") ? names(args.slice(2)) : [];
+      const wants = npmWants(specs);
+      return wants.length ? { wants, skip: false, from: specs.join(" ") } : none;
     }
     // yarn with no arguments installs; `yarn <script>` runs a script.
     const installs = (sub && NPM_INSTALL.has(sub)) || sub === "ci" || (tool === "yarn" && !sub);
@@ -186,7 +205,8 @@ export function plan(tool: string, args: string[], cwd = process.cwd()): Plan {
       const wants = npmProject(cwd);
       return { wants, skip: !wants.length, from: `${wants.length} packages in this project` };
     }
-    return { wants: specs.map(npmSpec), skip: false, from: specs.join(" ") };
+    const wants = npmWants(specs);
+    return { wants, skip: !wants.length, from: specs.join(" ") };
   }
   if (["pip", "pip3", "uv", "pipx"].includes(tool)) {
     let rest = args;
@@ -218,6 +238,8 @@ export function plan(tool: string, args: string[], cwd = process.cwd()): Plan {
     if (!["install", "reinstall", "upgrade"].includes(sub ?? "")) return none;
     const specs = names(args.slice(1));
     const wants = specs.map((s): Want => {
+      // A formula file (./x.rb, /abs/x.rb, https://…/x.rb) comes from outside any tap.
+      if (/^(\.{0,2}\/|~\/|https?:\/\/)/.test(s) || s.endsWith(".rb")) return { eco: "brew", name: s, outside: s };
       const parts = s.split("/");
       return parts.length === 3 ? { eco: "brew", name: s, tap: `${parts[0]}/${parts[1]}` } : { eco: "brew", name: s };
     });
@@ -296,15 +318,15 @@ export function judge(w: Want, f: Facts | undefined, now = Date.now()): Finding[
   const out: Finding[] = [];
   const add = (rule: string, severity: Severity, title: string, detail: string[], fix?: string) =>
     out.push({ id: `pkg:${rule}:${w.eco}:${w.name}`, rule: `pkg-${rule}`, severity, title, detail, fix });
+  if (w.outside) {
+    add("outside", "medium", `${w.name}: installs code from outside the registry`, [`source: ${w.outside}`, "Nothing here was checked by the registry or by vswarm; it can run install scripts."],
+      "read it first, or try it in the sandbox: vswarm try <url>");
+    return out;
+  }
   if (w.eco === "brew") {
     if (w.tap && !/^homebrew\//i.test(w.tap))
       add("tap", "medium", `${w.name}: from the third-party tap ${w.tap}`, ["A tap is someone's git repository; its formulae run their own install code, outside Homebrew's review."],
         `check who owns github.com/${w.tap.split("/")[0]}/homebrew-${w.tap.split("/")[1]} before trusting it`);
-    return out;
-  }
-  if (w.outside) {
-    add("outside", "medium", `${w.name}: installs code from outside the registry`, [`source: ${w.outside}`, "Nothing here was checked by the registry or by vswarm; it can run install scripts."],
-      "read it first, or try it in the sandbox: vswarm try <url>");
     return out;
   }
   const near = lookAlike(w.eco, w.name);
@@ -464,7 +486,7 @@ export const GUARD_END = "# <<< vswarm guard <<<";
 const INSTALLS: Record<string, string> = {
   npm: "install|i|in|ins|inst|insta|instal|isntall|add|ci|update|up|upgrade|exec|x",
   pnpm: "install|i|add|update|up|upgrade|dlx|exec",
-  yarn: '""|install|add|upgrade|up|dlx',
+  yarn: '""|install|add|upgrade|up|dlx|global',
   bun: "install|i|add|a|update|x",
   pip: "install", pip3: "install", uv: "pip|add|tool", pipx: "install|inject|run",
   brew: "install|reinstall|upgrade|tap",

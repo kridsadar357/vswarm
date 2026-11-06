@@ -48,10 +48,14 @@ function append(path: string, id: string, body: string, opt: { top?: boolean } =
   recordManaged(block);
 }
 
-function strip(path: string, id: string) {
-  if (!existsSync(path)) return;
+/** Takes the block out. False when its end marker is gone: where the block ends is anyone's guess, so the file is left alone. */
+function strip(path: string, id: string): boolean {
+  if (!existsSync(path)) return true;
+  const text = readFileSync(path, "utf8");
+  if (text.includes(START(id)) && !text.includes(END(id))) return false;
   // A canary planted at the top of the file leaves no blank lines behind.
-  writeFileSync(path, removeBlock(readFileSync(path, "utf8"), START(id), END(id)).replace(/^\n+/, ""));
+  writeFileSync(path, removeBlock(text, START(id), END(id)).replace(/^\n+/, ""));
+  return true;
 }
 
 
@@ -90,7 +94,11 @@ export function plantDns(tokenHost: string, opt: { alias?: string; home?: string
 export function plantEnv(dir: string, keyId: string, secret: string): Canary {
   if (!/^AKIA[0-9A-Z]{16}$/.test(keyId)) throw new Error("that does not look like an AWS access key id (AKIA…)");
   const path = join(resolve(dir), ".env.production");
-  if (existsSync(path) && !readFileSync(path, "utf8").includes("vswarm canary")) throw new Error(`${path} already exists; pick another folder`);
+  const existing = existsSync(path) ? readFileSync(path, "utf8") : "";
+  // One decoy per file: a second block would only make the file look odd to whoever reads it.
+  const planted = /^# >>> vswarm canary (\w+) >>>/m.exec(existing)?.[1];
+  if (planted) throw new Error(`${path} already has canary ${planted}`);
+  if (existing) throw new Error(`${path} already exists; pick another folder`);
   const id = newId();
   append(path, id, `# deploy credentials\nAWS_ACCESS_KEY_ID=${keyId}\nAWS_SECRET_ACCESS_KEY=${secret}\nAWS_REGION=ap-southeast-1`);
   const c: Canary = { id, kind: "env", where: path, label: ".env.production", token: keyId, at: Date.now() };
@@ -98,13 +106,20 @@ export function plantEnv(dir: string, keyId: string, secret: string): Canary {
   return c;
 }
 
-export function removeCanary(id: string): Canary[] {
+/**
+ * Removes one canary, or all of them. A decoy whose end marker was edited away stays in the file and on the list
+ * (so the secrets scan keeps treating it as a decoy); for one id that is an error, for `all` it is reported in `problems`.
+ */
+export function removeCanary(id: string): { removed: Canary[]; problems: string[] } {
   const list = loadCanaries();
-  const gone = id === "all" ? list : list.filter((c) => c.id === id);
-  if (!gone.length) throw new Error(`no canary ${id} · vswarm canary list`);
-  for (const c of gone) strip(c.where, c.id);
-  save(list.filter((c) => !gone.includes(c)));
-  return gone;
+  const pick = id === "all" ? list : list.filter((c) => c.id === id);
+  if (!pick.length) throw new Error(`no canary ${id} · vswarm canary list`);
+  const removed = pick.filter((c) => strip(c.where, c.id));
+  const problems = pick.filter((c) => !removed.includes(c)).map((c) =>
+    `canary ${c.id}: its end marker in ${c.where} was edited; remove the ${c.label} block by hand, then vswarm canary remove ${c.id}`);
+  if (id !== "all" && problems.length) throw new Error(problems[0]);
+  save(list.filter((c) => !removed.includes(c)));
+  return { removed, problems };
 }
 
 /** Canary key ids, so the credential scan does not report your own decoys as a problem. */
@@ -126,7 +141,10 @@ export async function canaryCommand(action: string, args: string[], opt: { ask: 
     return;
   }
   if (action === "remove") {
-    for (const k of removeCanary(args[0] ?? "")) line(`${c.green("✔")} removed ${k.kind} canary ${k.label} from ${k.where.replace(homedir(), "~")}`);
+    const r = removeCanary(args[0] ?? "");
+    for (const k of r.removed) line(`${c.green("✔")} removed ${k.kind} canary ${k.label} from ${k.where.replace(homedir(), "~")}`);
+    for (const p of r.problems) line(`${c.red("✖")} ${p.replace(homedir(), "~")}`);
+    if (r.problems.length) process.exitCode = 1;
     return;
   }
   if (action !== "plant") throw new Error("usage: vswarm canary plant aws|dns|env … | canary list | canary remove <id|all>");

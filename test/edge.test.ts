@@ -19,7 +19,7 @@ import { files, loadLock, recordManaged, saveBaseline, stripManaged } from "../s
 import { check } from "../src/sec/engine";
 import { forBaseline, scan } from "../src/sec/scan";
 import { respond } from "../src/sec/respond";
-import { plantAws, plantDns, plantEnv, removeCanary } from "../src/sec/canary";
+import { loadCanaries, plantAws, plantDns, plantEnv, removeCanary } from "../src/sec/canary";
 import { jobFiles } from "../src/sec/schedule";
 import { loadCaConfig } from "../src/sec/cert";
 import { compareVersions, secureUpdate } from "../src/sec/update";
@@ -237,7 +237,7 @@ describe("credentials: odd file shapes", () => {
     expect(kubeUsers(crlf).map((u) => `${u.name}:${u.how}`)).toEqual(["ci user:token", "sso:exec"]);
     const jwt = (exp: number) => ["eyJhbGciOiJub25lIn0", Buffer.from(JSON.stringify({ exp })).toString("base64url"), "sig"].join(".");
     const u = kubeUsers(`users:\n- name: old\n  user:\n    token: ${jwt(1)}\n- name: forever\n  user:\n    token: ${jwt(4e9)}\n- name: cert\n  user:\n    client-certificate: a.crt\n    client-key: a.key\n`);
-    expect(u.map((x) => `${x.name}:${x.how}:${x.expires ?? "-"}`)).toEqual(["old:token:1000", "forever:token:4000000000000", "cert:client certificate:-"]);
+    expect(u.map((x) => `${x.name}:${x.how}:${x.expires ?? "-"}`)).toEqual(["old:token:1000", "forever:token:4000000000000", "cert:client certificate (file):-"]);
     expect(kubeUsers("users: []\n")).toEqual([]);
     expect(kubeUsers("")).toEqual([]);
     expect(kubeUsers("# users:\nusers:\n")).toEqual([]);
@@ -436,6 +436,7 @@ describe("strace log shapes", () => {
       "node|network-outbound 2606:4700::1111:443",
       "node|unix-connect /tmp/.X11-unix/X0",
       "node|file-read /home/u/.aws/credentials",
+      "node|file-read /home/u/.ssh/id_ed25519",
       "?|file-write /etc/passwd",
     ]);
     expect(traceDenials(join(tmp("none"), "missing.log"), "/home/u", box)).toEqual([]);
@@ -549,17 +550,21 @@ describe("canaries", () => {
       mkdirSync(folder);
       const e = plantEnv(folder, key("ENV"), "s".repeat(40));
       expect(readFileSync(join(folder, ".env.production"), "utf8")).toContain(key("ENV"));
-      // A second decoy in a file that already is one is allowed; any other existing file is refused.
-      const e2 = plantEnv(folder, key("ENV"), "s".repeat(40));
+      // A second decoy in a file that already is one is refused, naming the first; any other existing file is refused too.
+      expect(() => plantEnv(folder, key("ENV"), "s".repeat(40))).toThrow(`already has canary ${e.id}`);
       mkdirSync(join(folder, "other"));
       writeFileSync(join(folder, "other/.env.production"), "REAL=1\n");
       expect(() => plantEnv(join(folder, "other"), key("ENV"), "s".repeat(40))).toThrow("already exists");
-      // The end marker was edited away: nothing to strip there, the list is still cleaned.
+      // The end marker was edited away: that decoy stays in the file and on the list, the others are removed.
       writeFileSync(join(home, ".aws/credentials"), readFileSync(join(home, ".aws/credentials"), "utf8").replace("# <<< vswarm canary", "# <<< gone"));
-      expect(removeCanary("all").map((c) => c.id).sort()).toEqual([a.id, e.id, e2.id].sort());
-      expect(() => removeCanary("all")).toThrow("no canary");
-      // The end marker was edited away: the decoy is left where it is (and reported by the next scan).
+      const r = removeCanary("all");
+      expect(r.removed.map((c) => c.id)).toEqual([e.id]);
+      expect(r.problems).toEqual([`canary ${a.id}: its end marker in ${join(home, ".aws/credentials")} was edited; remove the [prod.backup] block by hand, then vswarm canary remove ${a.id}`]);
+      expect(() => removeCanary(a.id)).toThrow("end marker");
+      expect(() => removeCanary(e.id)).toThrow("no canary");
+      // The decoy is left where it is, and still known as a decoy.
       expect(readFileSync(join(home, ".aws/credentials"), "utf8")).toContain(key("ONE"));
+      expect(loadCanaries().map((c) => c.id)).toEqual([a.id]);
     });
   });
 });
@@ -805,4 +810,195 @@ describe("command line: exit codes and argument parsing", () => {
     expect((await vswarm({ tryDir }, "try", "--list")).err).toContain(id);
     expect((await vswarm({ tryDir }, "try", "--clean", id)).err).toContain("removed 1 try");
   }, 120_000);
+});
+
+describe("parsing, CLI and collectors", () => {
+  const names = (tool: string, args: string[], cwd = "/nonexistent") => plan(tool, args, cwd).wants.map((w) => w.name + (w.version ? "@" + w.version : "") + (w.outside ? " outside" : ""));
+
+  test("CLI: --opt=value is split for vswarm's own options; an option vswarm does not know is an error, except behind pkg <tool> and try --", async () => {
+    const sec = tmp("sec");
+    writeFileSync(join(sec, "last.json"), JSON.stringify({ verdict: "pass", findings: [], at: Date.now(), scan: {} }));
+    expect((await vswarm({ sec }, "preflight", "--quiet", "--max-age=30")).code).toBe(0);
+    expect((await vswarm({}, "try", "--net=registries", "--list")).err).toContain("no tries yet");
+    // Documented options still reach their commands, spaced or with =.
+    expect((await vswarm({ sec }, "preflight", "-q", "--strict", "--max-age", "30", "--host=prod-1", "--offline")).err).not.toContain("unknown option");
+    expect((await vswarm({}, "try", "--clean=nope")).err).toContain("no try nope");
+    expect((await vswarm({}, "accept", "--remove=nope")).err).toContain("nope is not an accepted finding");
+    expect((await vswarm({}, "watch", "status", "--every=5")).code).toBe(0);
+    expect((await vswarm({}, "watch", "status", "--every=0")).err).toContain("--every takes a whole number");
+    expect((await vswarm({}, "ca", "status", "--principal=a,b", "--ttl=15m", "--sk", "--no-passphrase")).err).not.toContain("unknown option");
+    expect((await vswarm({}, "canary", "list", "--profile=p", "--alias=a")).err).toContain("no canaries yet");
+    expect((await vswarm({}, "selftest", "--bogus")).code).toBe(4);
+    const bad = await vswarm({ sec }, "preflight", "--quiet", "--bogus");
+    expect(bad.code).toBe(4);
+    expect(bad.err.trim()).toBe("✖ unknown option --bogus for vswarm preflight · vswarm help");
+    expect((await vswarm({}, "secrets", "-x")).err).toContain("unknown option -x for vswarm secrets");
+    expect((await vswarm({}, "accept", "--list", "--wat=1")).err).toContain("unknown option --wat for vswarm accept");
+    expect((await vswarm({}, "canary", "list", "--profile", "p", "--nope")).err).toContain("unknown option --nope for vswarm canary");
+    expect((await vswarm({}, "try", "--bogus", "x")).err).toContain("unknown option --bogus for vswarm try");
+    // Behind -- the flags are the command's; behind pkg <tool> they are the package manager's (and = stays as typed).
+    const after = await vswarm({}, "try", join(tmp("none"), "missing"), "--", "sh", "--bogus");
+    expect(after.err).not.toContain("unknown option");
+    writeFileSync(join(sec, "osv-cache.json"), "{}");
+    const pkg = await vswarm({ sec }, "pkg", "npm", "--offline", "--", "install", "--registry=https://r.example", "--bogus", "harmless-pkg@1.0.0");
+    expect(pkg.code).toBe(0);
+    expect(pkg.err).toBe("");
+  }, 60_000);
+
+  test("pkg plan: yarn global, Homebrew formula files, and npm specs that are local code", () => {
+    const { judge } = require("../src/sec/pkg");
+    expect(names("yarn", ["global", "add", "typescript@5.0.0", "--prefix", "/usr/local"])).toEqual(["typescript@5.0.0"]);
+    expect(names("yarn", ["global", "upgrade", "typescript"])).toEqual(["typescript"]);
+    expect(plan("yarn", ["global", "upgrade"]).skip).toBe(true);
+    expect(plan("yarn", ["global", "remove", "typescript"]).skip).toBe(true);
+    expect(plan("yarn", ["global", "list"]).skip).toBe(true);
+    expect(guardBlock("/x/vswarm")).toContain("|global)");
+    const brew = plan("brew", ["install", "./formula.rb", "/abs/x.rb", "https://h.example/x.rb", "wget", "user/tap/tool"]);
+    expect(brew.wants.map((w) => `${w.name}${w.outside ? " outside" : ""}${w.tap ? " tap" : ""}`)).toEqual(["./formula.rb outside", "/abs/x.rb outside", "https://h.example/x.rb outside", "wget", "user/tap/tool tap"]);
+    expect(judge(brew.wants[0]).map((f: any) => `${f.rule}:${f.severity}`)).toEqual(["pkg-outside:medium"]);
+    expect(judge(brew.wants[3])).toEqual([]);
+    expect(judge(brew.wants[4]).map((f: any) => f.rule)).toEqual(["pkg-tap"]);
+    expect(names("npm", ["install", "link:../a", "portal:../b", "workspace:*", "./here", "../up", ".", "file:../tar.tgz", "file:../local", "chalk"])).toEqual(["file:../tar.tgz outside", "file:../local outside", "chalk"]);
+    expect(plan("npm", ["install", "./here"]).skip).toBe(true);
+    expect(plan("npx", ["./local-tool"]).skip).toBe(true);
+    const d = tmp("ws");
+    writeFileSync(join(d, "package.json"), JSON.stringify({ dependencies: { a: "workspace:*", b: "link:../b", c: "file:../c", d: "^1", e: "./e" } }));
+    expect(names("npm", ["install"], d)).toEqual(["c outside", "d"]);
+  });
+
+  test("canary: an edited end marker is reported and the decoy stays known; a second env decoy in the same file is refused", () => {
+    return withSec(() => {
+      const home = tmp("home");
+      const key = (tag: string) => "AKIA" + tag.padEnd(16, "0");
+      const a = plantAws(key("A"), "s".repeat(40), { home });
+      const cred = join(home, ".aws/credentials");
+      writeFileSync(cred, readFileSync(cred, "utf8").replace(`# <<< vswarm canary ${a.id} <<<`, "# my notes"));
+      expect(() => removeCanary(a.id)).toThrow(`canary ${a.id}: its end marker in ${cred} was edited; remove the [prod-backup-admin] block by hand, then vswarm canary remove ${a.id}`);
+      expect(loadCanaries().map((c) => c.id)).toEqual([a.id]);
+      expect(readFileSync(cred, "utf8")).toContain(key("A"));
+      // Fixed by hand: the marker is back, removal works and the file is clean.
+      writeFileSync(cred, readFileSync(cred, "utf8").replace("# my notes", `# <<< vswarm canary ${a.id} <<<`));
+      expect(removeCanary(a.id)).toEqual({ removed: [a], problems: [] });
+      expect(readFileSync(cred, "utf8")).toBe("");
+      const folder = join(home, "proj");
+      mkdirSync(folder);
+      const e = plantEnv(folder, key("E"), "s".repeat(40));
+      expect(() => plantEnv(folder, key("F"), "s".repeat(40))).toThrow(`already has canary ${e.id}`);
+      expect(readFileSync(join(folder, ".env.production"), "utf8").match(/vswarm canary/g)?.length).toBe(2);
+      expect(loadCanaries().map((c) => c.id)).toEqual([e.id]);
+    });
+  });
+
+  test("Codex TOML: quoted table names, literal strings, multi-line args and inline tables", async () => {
+    const home = tmp("home");
+    mkdirSync(join(home, ".codex"), { recursive: true });
+    writeFileSync(join(home, ".codex/config.toml"), [
+      `model = "o3"`,
+      `[mcp_servers]`,
+      `inline = { command = "uvx", args = ["mcp-server-git", "--repo", "x"], env = { A = "1" } }`,
+      `"spaced inline" = { url = 'https://y.example/mcp' }`,
+      ``,
+      `[mcp_servers."name with spaces"]`,
+      `command = 'npx'`,
+      `args = [`,
+      `  "-y",   # the usual; "not-an-arg"`,
+      `  # '--also-not'`,
+      `  'some-mcp',`,
+      `]`,
+      ``,
+      `[mcp_servers."name with spaces".env]`,
+      `TOKEN = "abc"`,
+      ``,
+      `[mcp_servers.'quoted']`,
+      `url = "https://x.example/mcp"`,
+      `[mcp_servers.quoted.headers]`,
+      `Authorization = "Bearer x"`,
+      ``,
+      `[mcp_servers.plain]  # comment after the header`,
+      `command = "node"`,
+      `args = ["s.js", "--flag=\\"q\\""]`,
+      `env.X = "1"`,
+      ``,
+      `[other]`,
+      `command = "ignored"`,
+      `matrix = [`,
+      `  ["[mcp_servers.fake]", "x"],`,
+      `]`,
+    ].join("\n"));
+    const items = await agents(ctxFor(home));
+    expect(items.map((i) => `${i.source}:${i.name}`).sort()).toEqual(["codex:inline", "codex:name with spaces", "codex:plain", "codex:quoted", "codex:spaced inline"]);
+    const by = (n: string) => items.find((i) => i.name === n)!.meta!;
+    expect(by("inline").command).toBe("uvx mcp-server-git --repo x");
+    expect(by("spaced inline").url).toBe("https://y.example/mcp");
+    expect(by("name with spaces").command).toBe("npx -y some-mcp");
+    expect(by("quoted").url).toBe("https://x.example/mcp");
+    expect(by("plain").command).toBe('node s.js --flag="q"');
+  });
+
+  test("kubeconfig: users indented further than two spaces, exec env entries that are not users, and certificate files", () => {
+    const y = [
+      "apiVersion: v1", "users:",
+      "    - name: deep", "      user:", "        client-certificate: /c.crt", "        client-key: /c.key",
+      "    - name: sso", "      user:", "        exec:", "          command: aws", "          env:", "          - name: AWS_PROFILE", "            value: prod",
+      "    - name: inline", "      user:", "        client-certificate-data: Zm9v", "        client-key-data: Zm9v",
+      "contexts: []", "",
+    ].join("\r\n");
+    expect(kubeUsers(y).map((u) => `${u.name}:${u.how}`)).toEqual(["deep:client certificate (file)", "sso:exec", "inline:client certificate"]);
+    expect(kubeUsers("users:\n- name: sso\n  user:\n    exec:\n      env:\n      - name: X\n        value: y\n- name: t\n  user:\n    token: abc\n").map((u) => `${u.name}:${u.how}`)).toEqual(["sso:exec", "t:token"]);
+  });
+
+  test("strace: paths with . and .. are normalised before matching; readlink on the real home is a read", () => {
+    const box = { dir: "/home/u/.vswarm/try/x", work: "/home/u/.vswarm/try/x/work", home: "/home/u/.vswarm/try/x/home", tmp: "/home/u/.vswarm/try/x/tmp", netlog: "" };
+    const log = join(tmp("trace"), "trace.log");
+    writeFileSync(log, [
+      `7 execve("/usr/bin/node", ["node"], 0x1 /* 0 vars */) = 0`,
+      `7 openat(AT_FDCWD, "/home/u/./proj/../.ssh/id_rsa", O_RDONLY) = -1 ENOENT (No such file or directory)`,
+      `7 readlinkat(AT_FDCWD, "/home/u/.aws/credentials", 0x7ffd, 4096) = -1 ENOENT (No such file or directory)`,
+      `7 readlink("/home/u/.vswarm/try/x/home/../../../../.ssh/id_ed25519", 0x7ffd, 4096) = -1 ENOENT (No such file or directory)`,
+      `7 readlink("/home/u/.vswarm/try/x/home/.ssh/id_ecdsa", 0x7ffd, 4096) = -1 ENOENT (No such file or directory)`,
+      `7 openat(AT_FDCWD, "/home/u/.vswarm/try/x/work/../work/a.js", O_RDONLY) = 3`,
+      `7 openat(AT_FDCWD, "/home/u/x/../.config/autostart/evil.desktop", O_WRONLY|O_CREAT|O_TRUNC, 0644) = 4`,
+      `7 readlink("/etc/passwd", 0x7ffd, 4096) = -1 EINVAL (Invalid argument)`,
+    ].join("\n"));
+    expect(traceDenials(log, "/home/u", box).map((x) => `${x.proc}|${x.op} ${x.target}`)).toEqual([
+      "node|file-read /home/u/.ssh/id_rsa",
+      "node|file-read /home/u/.aws/credentials",
+      "node|file-read /home/u/.ssh/id_ed25519",
+      "node, via $HOME|file-read /home/u/.ssh/id_ecdsa",
+      "node|file-write /home/u/.config/autostart/evil.desktop",
+    ]);
+  });
+
+  test("rc files: a plain PATH line is byte-identical; quotes, $ and backticks in the home are escaped so the shells read the same path", () => {
+    const { rcFiles } = require("../src/setup");
+    const home = tmp("home");
+    writeFileSync(join(home, ".zshrc"), "");
+    writeFileSync(join(home, ".bashrc"), "");
+    const rc = (bin: string, comp: string) => (rcFiles(home, bin, comp) as { file: string; body: string }[]).filter((r) => /\.(zsh|bash)rc$/.test(r.file));
+    const plain = rc("/Users/x/.vswarm/bin", "/Users/x/.vswarm/completions");
+    expect(plain.map((r) => r.file)).toEqual([join(home, ".zshrc"), join(home, ".bashrc")]);
+    expect(plain[0].body).toBe('export PATH="/Users/x/.vswarm/bin:$PATH"\nfpath=("/Users/x/.vswarm/completions" $fpath)\nautoload -Uz compinit 2>/dev/null && compinit -C 2>/dev/null');
+    expect(plain[1].body).toBe('export PATH="/Users/x/.vswarm/bin:$PATH"\n[ -f "/Users/x/.vswarm/completions/vswarm.bash" ] && . "/Users/x/.vswarm/completions/vswarm.bash"');
+    const odd = join(home, 'we"ird $HOME `x`');
+    const bin = join(odd, "bin");
+    const weird = rc(bin, join(odd, "completions"));
+    expect(weird[0].body.split("\n")[0]).toBe(`export PATH="${bin.replace(/["$`]/g, "\\$&")}:$PATH"`);
+    for (const [sh, body] of [[["zsh", "-f"], weird[0].body], [["bash", "--norc", "--noprofile"], weird[1].body]] as const) {
+      if (!Bun.which(sh[0])) continue;
+      const p = Bun.spawnSync([...sh, "-c", `${body}\nprintf '%s' "$PATH"`], { env: { PATH: "/usr/bin:/bin", HOME: home }, stdout: "pipe", stderr: "pipe" });
+      expect(p.stdout.toString()).toBe(`${bin}:/usr/bin:/bin`);
+    }
+  });
+
+  test("the clean-app fixture is not collected by bun test, and its test script still runs", () => {
+    const app = join(import.meta.dir, "fixtures", "clean-app");
+    const all = require("node:fs").readdirSync(app, { recursive: true }) as string[];
+    expect(all.some((f) => /\.(test|spec)\.|_test\./.test(f))).toBe(false);
+    const script = JSON.parse(readFileSync(join(app, "package.json"), "utf8")).scripts.test as string;
+    expect(script).toBe("node src/check.js");
+    const p = Bun.spawnSync([Bun.which("node") ?? process.execPath, ...script.split(" ").slice(1)], { cwd: app, stdout: "pipe", stderr: "pipe" });
+    expect(p.exitCode).toBe(0);
+    expect(p.stdout.toString()).toContain("1 test passed");
+    expect(staticCheck(app)).toEqual([]);
+  });
 });

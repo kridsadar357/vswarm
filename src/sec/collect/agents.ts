@@ -89,6 +89,63 @@ function claude(home: string): Item[] {
   return out;
 }
 
+// ── Codex's config.toml, read by hand (just the shapes MCP entries take; no TOML library)
+
+/** A dotted TOML key split into its parts: mcp_servers."name with spaces".env → [mcp_servers, name with spaces, env]. */
+const keyPath = (s: string) => [...s.matchAll(/"((?:[^"\\]|\\.)*)"|'([^']*)'|([\w-]+)/g)].map((m) => (m[1] !== undefined ? m[1].replace(/\\(.)/g, "$1") : m[2] ?? m[3]));
+/** A TOML string value: "basic" with escapes, or 'literal'. */
+const tomlStr = (v: string) => {
+  const m = /^"((?:[^"\\]|\\.)*)"|^'([^']*)'/.exec(v.trim());
+  return m ? (m[1] !== undefined ? m[1].replace(/\\(.)/g, "$1") : m[2]) : undefined;
+};
+/** Every string in a TOML array text, `[ "a", 'b' ]`, spread over any number of lines. */
+const tomlStrs = (v: string) => [...v.matchAll(/"((?:[^"\\]|\\.)*)"|'([^']*)'/g)].map((m) => (m[1] !== undefined ? m[1].replace(/\\(.)/g, "$1") : m[2]));
+
+/** The MCP servers in a Codex config: `[mcp_servers.<name>]` tables and `name = { … }` inline tables under `[mcp_servers]`. */
+export function codexServers(toml: string): Record<string, Server> {
+  const out: Record<string, Server> = {};
+  // Comments go first, outside strings only: a `# "x"` comment inside an args array is not an argument.
+  const lines = toml.split("\n").map((l) => l.replace(/("(?:[^"\\]|\\.)*"|'[^']*')|#.*$/g, (m, s) => s ?? "").trim());
+  let cur: Server | undefined; // inside [mcp_servers.<name>]
+  let root = false; // inside [mcp_servers] itself
+  for (let i = 0; i < lines.length; i++) {
+    const l = lines[i];
+    if (!l) continue;
+    const head = /^\[([^\]]+)\]/.exec(l);
+    if (head) {
+      const path = keyPath(head[1]);
+      cur = undefined;
+      root = path[0] === "mcp_servers" && path.length === 1;
+      // Deeper tables (.env, .headers) hold values, not servers; they are left out as before.
+      if (path[0] === "mcp_servers" && path.length === 2) cur = out[path[1]] ??= {};
+      continue;
+    }
+    const kv = /^((?:"(?:[^"\\]|\\.)*"|'[^']*'|[\w.-]+)+)\s*=\s*([\s\S]*)$/.exec(l);
+    if (!kv) continue;
+    let val = kv[2];
+    // An array may run over several lines; read on until it closes (in any table, so its lines are not taken for headers).
+    if (val.startsWith("[")) while (!/\]$/.test(val) && i + 1 < lines.length) val += "\n" + lines[++i];
+    if (!(cur || root)) continue;
+    const key = keyPath(kv[1]);
+    if (root) {
+      if (key.length !== 1 || !val.startsWith("{")) continue;
+      const s: Server = (out[key[0]] ??= {});
+      const field = (k: string) => new RegExp(`(?:^\\{|,)\\s*${k}\\s*=\\s*("(?:[^"\\\\]|\\\\.)*"|'[^']*')`).exec(val)?.[1];
+      const command = field("command"), url = field("url");
+      if (command) s.command = tomlStr(command);
+      if (url) s.url = tomlStr(url);
+      const args = /(?:^\{|,)\s*args\s*=\s*\[([^\]]*)\]/.exec(val)?.[1];
+      if (args !== undefined) s.args = tomlStrs(args);
+      continue;
+    }
+    if (key.length !== 1) continue;
+    if (key[0] === "command") cur!.command = tomlStr(val);
+    else if (key[0] === "url") cur!.url = tomlStr(val);
+    else if (key[0] === "args" && val.startsWith("[")) cur!.args = tomlStrs(val);
+  }
+  return out;
+}
+
 export async function agents(ctx: Ctx): Promise<Item[]> {
   const h = ctx.home;
   const mac = (rel: string) => join(h, "Library/Application Support", rel);
@@ -111,14 +168,6 @@ export async function agents(ctx: Ctx): Promise<Item[]> {
   // Codex: TOML, [mcp_servers.<name>] tables with command / args / url.
   const codexFile = join(h, ".codex/config.toml");
   const toml = readText(codexFile);
-  if (toml) {
-    for (const m of toml.matchAll(/^\[mcp_servers\.("?)([\w.-]+)\1\]\s*\n([\s\S]*?)(?=^\[|$(?![\s\S]))/gm)) {
-      if (m[2].includes(".env") || m[2].endsWith(".headers")) continue;
-      const body = m[3];
-      const str = (k: string) => new RegExp(`^${k}\\s*=\\s*"([^"]*)"`, "m").exec(body)?.[1];
-      const args = /^args\s*=\s*\[([^\]]*)\]/m.exec(body)?.[1];
-      out.push(serverItem("codex", codexFile, m[2], { command: str("command"), url: str("url"), args: args ? [...args.matchAll(/"([^"]*)"/g)].map((a) => a[1]) : undefined }));
-    }
-  }
+  if (toml) for (const [name, s] of Object.entries(codexServers(toml))) out.push(serverItem("codex", codexFile, name, s));
   return [...new Map(out.map((i) => [`${i.kind}:${i.id}`, i])).values()];
 }

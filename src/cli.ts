@@ -48,6 +48,20 @@ function has(args: string[], ...names: string[]): boolean {
   return found;
 }
 
+/** `--opt=value` becomes `--opt value`, for vswarm's own options only; the wrapped command's arguments are left as typed. */
+function splitEquals(args: string[]) {
+  for (let i = 0; i < own(args); i++) {
+    const m = /^(--[\w-]+)=([\s\S]*)$/.exec(args[i]);
+    if (m) args.splice(i, 1, m[1], m[2]);
+  }
+}
+
+/** After a command took its options, anything left that looks like one is a typo, not something to pass along silently. */
+function noMoreOptions(cmd: string, args: string[], known: string[] = []) {
+  const bad = args.slice(0, own(args)).find((a) => /^-./.test(a) && !known.includes(a));
+  if (bad) throw new Error(`unknown option ${bad} for vswarm ${cmd} · vswarm help`);
+}
+
 function usage() {
   banner("check your machine before it touches production");
   const row = (cmd: string, desc: string) => console.log(`  ${c.cyan(cmd.padEnd(46))}${c.dim(desc)}`);
@@ -93,6 +107,8 @@ async function main() {
   // What follows --then (preflight) or -- (try) belongs to the other command; vswarm's own flags stop there.
   const tailAt = args.indexOf(cmd === "preflight" ? "--then" : cmd === "try" ? "--" : "\0");
   const tail = tailAt >= 0 ? args.splice(tailAt + 1) : [];
+  // pkg hands everything after the tool name to that tool, `=` and all.
+  if (cmd !== "pkg") splitEquals(args);
   const offline = has(args, "--offline");
   const json = has(args, "--json");
 
@@ -100,16 +116,19 @@ async function main() {
     case "scan":
     case "diff":
     case "check": {
+      const all = has(args, "--all");
+      noMoreOptions(cmd, args);
       const r = await check(realCtx(), { offline });
       if (cmd === "diff") r.findings = r.findings.filter((f) => f.rule !== "secret");
       if (json) console.log(JSON.stringify({ verdict: r.verdict, findings: r.findings, notes: r.notes, items: r.scan.items.length, ms: r.ms }, null, 2));
-      else summary(r, { all: has(args, "--all"), title: cmd });
+      else summary(r, { all, title: cmd });
       process.exitCode = r.verdict === "block" ? 3 : 0;
       return;
     }
 
     case "baseline": {
       const auto = has(args, "--yes", "-y");
+      noMoreOptions(cmd, args);
       const r = await check(realCtx(), { offline });
       summary(r, { title: "baseline check" });
       // During an incident this is the step that records the cleaned machine; vswarm unlock needs it.
@@ -129,10 +148,13 @@ async function main() {
     case "agents": {
       // What AI agents on this machine may start or run on their own.
       const { agents } = await import("./sec/collect/agents");
+      const inspectOpt = { sandbox: !has(args, "--no-sandbox"), show: has(args, "--show") };
+      const doInspect = has(args, "--inspect");
+      noMoreOptions(cmd, args);
       const list = await agents(realCtx());
-      if (has(args, "--inspect")) {
+      if (doInspect) {
         const { inspectAll } = await import("./sec/mcp");
-        process.exitCode = await inspectAll(list.filter((i) => i.kind === "mcp"), { sandbox: !has(args, "--no-sandbox"), show: has(args, "--show") });
+        process.exitCode = await inspectAll(list.filter((i) => i.kind === "mcp"), inspectOpt);
         return;
       }
       line(`${c.violet("▼ vswarm agents")} ${c.dim("· MCP servers, hooks and permissions of AI coding agents on this machine")}`);
@@ -153,6 +175,7 @@ async function main() {
     }
 
     case "secrets": {
+      noMoreOptions(cmd, args);
       const f = await findSecrets(realCtx());
       line(`${c.violet("▼ vswarm secrets")} ${c.dim("· where long-lived credentials live on this machine · values are never read out")}`);
       if (!f.length) line(`  ${c.green("✔")} none found in the usual places`);
@@ -166,6 +189,7 @@ async function main() {
       const fresh = has(args, "--fresh");
       const maxAge = Number(flag(args, "--max-age") ?? 120) * 1000;
       flag(args, "--host"); // accepted for ssh's %h; the check is about this machine, whatever the host
+      noMoreOptions(cmd, args);
       const then = args.includes("--then") ? tail : [];
       const verdict = await verdictNow({ fresh, quiet, offline, maxAge });
       if (verdict === "block" || (strict && verdict === "warn")) {
@@ -181,13 +205,16 @@ async function main() {
 
     case "accept": {
       const acc = loadAccepted();
-      if (has(args, "--list")) {
+      const list = has(args, "--list");
+      const rm = flag(args, "--remove");
+      const all = has(args, "--all");
+      noMoreOptions(cmd, args);
+      if (list) {
         const ids = Object.entries(acc);
         if (!ids.length) return line("nothing accepted");
         for (const [id, a] of ids) line(`  ${c.dim(new Date(a.at).toLocaleDateString())}  ${a.title}\n      ${c.dim(id)}`);
         return;
       }
-      const rm = flag(args, "--remove");
       if (rm) {
         if (!acc[rm]) throw new Error(`${rm} is not an accepted finding · vswarm accept --list`);
         delete acc[rm];
@@ -196,7 +223,7 @@ async function main() {
       }
       const last = loadLast();
       if (!last) throw new Error("run vswarm scan first");
-      const pick = has(args, "--all") ? last.findings : last.findings.filter((f) => args.includes(f.id));
+      const pick = all ? last.findings : last.findings.filter((f) => args.includes(f.id));
       if (!pick.length) throw new Error("name finding ids (shown under each finding), or --all");
       for (const f of pick) {
         if (f.rule === "malicious") {
@@ -213,6 +240,7 @@ async function main() {
     case "respond": {
       const auto = has(args, "--yes", "-y");
       const force = has(args, "--force");
+      noMoreOptions(cmd, args);
       const r = await check(realCtx(), { offline });
       if (!force && !r.findings.some((f) => RANK[f.severity] >= RANK.medium)) {
         summary(r, { title: "respond" });
@@ -223,6 +251,7 @@ async function main() {
     }
 
     case "report": {
+      noMoreOptions(cmd, args);
       const dir = files.incidents();
       const id = args[0] ?? (existsSync(dir) ? readdirSync(dir).sort().at(-1) : undefined);
       if (!id) throw new Error("no incidents yet");
@@ -233,10 +262,12 @@ async function main() {
     }
 
     case "unlock": {
+      const force = has(args, "--force");
+      noMoreOptions(cmd, args);
       const lock = loadLock();
       if (!lock) return line("no incident is open");
       const base = loadBaseline();
-      if ((!base || base.at < lock.at) && !has(args, "--force")) {
+      if ((!base || base.at < lock.at) && !force) {
         return line(c.amber(`The baseline is older than incident ${lock.incident}. On the cleaned machine run vswarm baseline first (or unlock --force).`));
       }
       clearLock();
@@ -244,9 +275,11 @@ async function main() {
     }
 
     case "gate":
+      noMoreOptions(cmd, args, ["--cert"]);
       return gate(args);
 
     case "guard":
+      noMoreOptions(cmd, args);
       return guard(args);
 
     case "watch": {
@@ -254,6 +287,7 @@ async function main() {
       const action = args.shift() ?? "status";
       const every = Number(flag(args, "--every") ?? 60);
       if (!Number.isInteger(every) || every < 1) throw new Error("--every takes a whole number of minutes");
+      noMoreOptions(cmd, args);
       return watchCommand(action, { every });
     }
 
@@ -269,33 +303,41 @@ async function main() {
 
     case "ca": {
       const action = args.shift() ?? "status";
-      return caCommand(action, args, { principals: flag(args, "--principal")?.split(","), ttl: flag(args, "--ttl"), sk: has(args, "--sk"), noPassphrase: has(args, "--no-passphrase") });
+      const opt = { principals: flag(args, "--principal")?.split(","), ttl: flag(args, "--ttl"), sk: has(args, "--sk"), noPassphrase: has(args, "--no-passphrase") };
+      noMoreOptions(cmd, args);
+      return caCommand(action, args, opt);
     }
 
     case "canary": {
       const action = args.shift() ?? "list";
-      return canaryCommand(action, args, { ask, profile: flag(args, "--profile"), alias: flag(args, "--alias") });
+      const opt = { ask, profile: flag(args, "--profile"), alias: flag(args, "--alias") };
+      noMoreOptions(cmd, args);
+      return canaryCommand(action, args, opt);
     }
 
-    case "cert":
-      process.exitCode = await certCommand({ quiet: has(args, "--quiet", "-q"), fresh: has(args, "--fresh"), offline, host: flag(args, "--host") });
+    case "cert": {
+      const opt = { quiet: has(args, "--quiet", "-q"), fresh: has(args, "--fresh"), offline, host: flag(args, "--host") };
+      noMoreOptions(cmd, args);
+      process.exitCode = await certCommand(opt);
       return;
+    }
 
     case "try": {
-      if (has(args, "--list")) {
+      const list = has(args, "--list");
+      const cleanAt = args.indexOf("--clean");
+      // --clean on its own removes every try; --clean <id> one of them.
+      const clean = cleanAt >= 0 && cleanAt < own(args) ? { id: args.splice(cleanAt, 2)[1] } : undefined;
+      const net = (flag(args, "--net") ?? "none") as Net;
+      const auto = has(args, "--yes", "-y");
+      noMoreOptions(cmd, args);
+      if (list) {
         const all = listTries();
         if (!all.length) return line("no tries yet");
         for (const t of all) line(`  ${t.verdict === "block" ? c.red("●") : t.verdict === "warn" ? c.amber("●") : c.green("●")} ${t.id}  ${c.dim(t.source ?? "")}`);
         return;
       }
-      const cleanAt = args.indexOf("--clean");
-      if (cleanAt >= 0 && cleanAt < own(args)) {
-        const id = args[cleanAt + 1];
-        return line(`${c.green("✔")} removed ${cleanTries(id)} tr${id ? "y" : "ies"}`);
-      }
-      const net = (flag(args, "--net") ?? "none") as Net;
+      if (clean) return line(`${c.green("✔")} removed ${cleanTries(clean.id)} tr${clean.id ? "y" : "ies"}`);
       if (!["none", "registries", "all"].includes(net)) throw new Error("--net is none, registries or all");
-      const auto = has(args, "--yes", "-y");
       const dash = args.indexOf("--");
       const command = dash >= 0 ? tail : [];
       const source = (dash >= 0 ? args.slice(0, dash) : args)[0];
@@ -306,6 +348,7 @@ async function main() {
     }
 
     case "selftest": {
+      noMoreOptions(cmd, args);
       banner("selftest");
       console.log(c.dim("  fake home in a temp folder · harmless stand-ins for real attack steps · this machine is not touched\n"));
       const r = await selftest();
@@ -323,24 +366,33 @@ async function main() {
     case "shot": {
       const target = args.shift();
       if (!target) throw new Error("usage: vswarm shot <localhost URL or file> [--out shot.png] [--size 1280x800] [--wait ms]");
-      console.log(await shot(target, flag(args, "--out", "-o") ?? "shot.png", { size: flag(args, "--size"), wait: Number(flag(args, "--wait") ?? 5000) }));
+      const out = flag(args, "--out", "-o") ?? "shot.png";
+      const opt = { size: flag(args, "--size"), wait: Number(flag(args, "--wait") ?? 5000) };
+      noMoreOptions(cmd, args);
+      console.log(await shot(target, out, opt));
       return;
     }
 
     case "doctor":
+      noMoreOptions(cmd, args);
       banner("doctor");
       if (!(await doctor())) process.exitCode = 1;
       return;
     case "install":
+      noMoreOptions(cmd, args, ["--yes", "-y", "--no-path"]);
       return install(args);
     case "uninstall":
+      noMoreOptions(cmd, args, ["--purge"]);
       return uninstall(args);
     case "update":
     case "upgrade":
+      noMoreOptions(cmd, args, ["--unsigned"]);
       return update(args);
     case "trust":
+      noMoreOptions(cmd, args);
       return trust(args);
     case "completions":
+      noMoreOptions(cmd, args);
       process.stdout.write(completion(args[0] ?? "zsh"));
       return;
     case "version":
