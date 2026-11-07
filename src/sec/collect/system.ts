@@ -281,10 +281,16 @@ const KNOWN_HIDDEN = /^\.(bun|cargo|rustup|npm|npm-global|nvm|volta|pyenv|rbenv|
 /** A Windows path with a drive letter, either separator. */
 export const WIN_PATH = /^[A-Za-z]:[\\/]/;
 
+const WIN_TEMP = (p: string) => /^[a-z]:\\windows\\temp\\/.test(p) || /\\appdata\\local\\temp\\/.test(p);
+
 /** The same judgement for Windows paths: case-insensitive, either separator. */
 function windowsLocation(path: string, home: string): string | undefined {
   const p = path.replace(/\//g, "\\").toLowerCase();
-  if (/^[a-z]:\\windows\\temp\\/.test(p) || /\\appdata\\local\\temp\\/.test(p)) return "runs from a temp folder";
+  const h = home.replace(/\//g, "\\").replace(/\\+$/, "");
+  const inHome = WIN_PATH.test(h) && p.startsWith(h.toLowerCase() + "\\");
+  // %TEMP% sits inside a real home, so a program there counts; a home that is itself in a temp folder (a test's fake
+  // one) is judged as a home, the way suspiciousLocation does on macOS and Linux.
+  if (WIN_TEMP(p) && !(inHome && WIN_TEMP(h.toLowerCase() + "\\"))) return "runs from a temp folder";
   if (/^[a-z]:\\windows\\(tasks|tracing|system32\\spool\\drivers\\color)\\/.test(p)) return "runs from a Windows folder any user can write to";
   if (/^[a-z]:\\users\\public\\/.test(p)) return "runs from C:\\Users\\Public";
   if (/^[a-z]:\\\$recycle\.bin\\/.test(p)) return "runs from the Recycle Bin";
@@ -293,8 +299,7 @@ function windowsLocation(path: string, home: string): string | undefined {
   // Downloads and Desktop of any profile, also when OneDrive holds them.
   const dl = /^[a-z]:\\users\\[^\\]+\\(?:onedrive[^\\]*\\)?(downloads|desktop)\\/.exec(p);
   if (dl) return `runs from the ${dl[1] === "downloads" ? "Downloads" : "Desktop"} folder`;
-  const h = home.replace(/\//g, "\\").replace(/\\+$/, "");
-  if (WIN_PATH.test(h) && p.startsWith(h.toLowerCase() + "\\")) {
+  if (inHome) {
     const rel = p.slice(h.length + 1).replace(/\\/g, "/");
     const top = path.replace(/\//g, "\\").slice(h.length + 1).split("\\")[0];
     if (rel.startsWith(".") && !KNOWN_HIDDEN.test(rel)) return `runs from a hidden folder (~\\${top})`;

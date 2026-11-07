@@ -557,3 +557,34 @@ describe("windows: ssh gate and install guard", () => {
     }
   });
 });
+
+describe("windows: a home inside %TEMP% (the selftest's fake home on a Windows runner)", () => {
+  const { hiddenProgram, lineRisk } = require("../src/sec/rules");
+  const { partsFor, watchTable } = require("../src/sec/schedule");
+  const FAKE = "C:\\Users\\runneradmin\\AppData\\Local\\Temp\\vswarm-selftest-ab12\\home";
+
+  test("its own folders are judged as a home, not as a temp folder; hidden folders in it still count", () => {
+    expect(suspiciousLocation(`${FAKE}\\develop\\tool.exe`, FAKE)).toBeUndefined();
+    expect(suspiciousLocation(`${FAKE}/develop`, FAKE)).toBeUndefined();
+    expect(suspiciousLocation(`${FAKE}/.cache/.k/kube-auth`, FAKE)).toBe("runs from a hidden folder (~\\.cache)");
+    // A real home's %TEMP% still is one, and so is a temp folder outside the fake home.
+    expect(suspiciousLocation("C:\\Users\\nok\\AppData\\Local\\Temp\\x.exe", "C:\\Users\\nok")).toBe("runs from a temp folder");
+    expect(suspiciousLocation("C:\\Users\\runneradmin\\AppData\\Local\\Temp\\other\\x.exe", FAKE)).toBe("runs from a temp folder");
+  });
+
+  test("the selftest's benign shapes stay quiet there; its attack shapes are still caught", () => {
+    expect(hiddenProgram("~/.krew/bin/kubectl-oidc_login", FAKE)).toBeUndefined();
+    expect(lineRisk(".zshrc", `export PATH="$HOME/.bun/bin:$HOME/go/bin:$PATH"`, FAKE)).toBeUndefined();
+    expect(lineRisk(".zshrc", `export PATH="$HOME/.yarn/bin:$HOME/.krew/bin:$PATH"`, FAKE)).toBeUndefined();
+    expect(hiddenProgram(`${FAKE}/.cache/.k/kube-auth`, FAKE)).toBeDefined();
+    expect(hiddenProgram(`${FAKE}/.config/.a/creds`, FAKE)).toBeDefined();
+    expect(lineRisk(".profile", `export PATH="$HOME/.cache/.bin:$PATH"`, FAKE)).toBeDefined();
+  });
+
+  test("the watch table works on the path inside the home, whatever the separators", () => {
+    expect(watchTable(FAKE, "darwin").length).toBeGreaterThan(5);
+    expect(watchTable(FAKE, "linux").length).toBeGreaterThan(5);
+    expect(partsFor([`${FAKE}\\Library\\LaunchAgents\\com.x.plist`], FAKE, "darwin")).toEqual(["launchd"]);
+    expect(partsFor([`${FAKE}/.zshrc`], FAKE, "linux")).toEqual(["startup files"]);
+  });
+});

@@ -76,12 +76,13 @@ describe("real-time watch: job files", () => {
     const home = tmp("linux") + "/50%";
     mkdirSync(home, { recursive: true });
     const jf = jobFiles("/home/a b/.vswarm/bin/vswarm", 60, home, "linux");
-    expect(Object.keys(jf).map((p) => p.slice(home.length))).toEqual(["/.config/systemd/user/vswarm-watch.service", "/.config/systemd/user/vswarm-watch.timer", "/.config/systemd/user/vswarm-watch-quick.service", "/.config/systemd/user/vswarm-watch.path"]);
+    // join(), so the expectations use this system's separator like the job files do.
+    expect(Object.keys(jf)).toEqual(["vswarm-watch.service", "vswarm-watch.timer", "vswarm-watch-quick.service", "vswarm-watch.path"].map((f) => join(home, ".config/systemd/user", f)));
     const path = jf[join(home, ".config/systemd/user/vswarm-watch.path")];
     expect(path).toContain("Unit=vswarm-watch-quick.service");
     expect(path).toContain("WantedBy=default.target");
-    expect(path).toContain(`PathModified=${home.replace("%", "%%")}/.zshrc`);
-    expect(path).toContain(`PathModified=${home.replace("%", "%%")}/.config/systemd/user`);
+    expect(path).toContain(`PathModified=${join(home, ".zshrc").replace("%", "%%")}\n`);
+    expect(path).toContain(`PathModified=${join(home, ".config/systemd/user").replace("%", "%%")}\n`);
     expect(path).not.toContain("Library/");
     expect(jf[join(home, ".config/systemd/user/vswarm-watch-quick.service")]).toContain('ExecStart="/home/a b/.vswarm/bin/vswarm" watch quick');
   });

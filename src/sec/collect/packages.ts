@@ -145,7 +145,7 @@ export function galleryInstalled(root: string): Set<string> | undefined {
   const out = new Set<string>();
   for (const e of list) {
     const m = e?.metadata;
-    const folder = typeof e?.relativeLocation === "string" ? e.relativeLocation : typeof e?.location?.path === "string" ? e.location.path.split("/").pop() : undefined;
+    const folder = typeof e?.relativeLocation === "string" ? e.relativeLocation : typeof e?.location?.path === "string" ? e.location.path.split(/[\\/]/).pop() : undefined;
     if (folder && m && (m.source === "gallery" || (m.id && m.publisherId && m.source !== "vsix" && m.source !== "resource"))) out.add(folder);
   }
   return out;

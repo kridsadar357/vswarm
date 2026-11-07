@@ -92,6 +92,9 @@ async function ps(script: string, env: Record<string, string>) {
   return exec([powershell(), "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", script], { env: { ...process.env, ...env }, timeoutMs: 30_000 });
 }
 
+/** Either separator as /, so paths from join() compare the same on every system. */
+const slash = (p: string) => p.replace(/\\/g, "/");
+
 const TASK_ARGS = `-TaskPath '${WIN_TASK.path}' -TaskName '${WIN_TASK.name}'`;
 
 // ── real time: what to watch, and which part of the scan reads it
@@ -120,9 +123,12 @@ export function watchTable(home: string, os: NodeJS.Platform = process.platform)
     { part: "npm", paths: h(".npm-global/lib/node_modules", ".bun/install/global/node_modules") },
   ];
   // Each system only where it keeps things; and never vswarm's own folder, whose writes would trigger it again.
-  const other = os === "darwin" ? /\/\.config\/(systemd|autostart|environment\.d|Code|Cursor|Claude)\b|\/\.local\/lib\b|\/\.xprofile$|\/\.xinitrc$/ : /\/Library\/|\/Applications$|AppData/;
-  const own = (p: string) => p === HOME || p.startsWith(HOME + "/") || p.startsWith(SEC());
-  return table.map((t) => ({ ...t, paths: t.paths.filter((p) => !other.test(p) && !/AppData/.test(p) && !own(p)) })).filter((t) => t.paths.length);
+  // Judged on the path inside the home, with / as separator: a home that sits in AppData or a Library folder (a test's,
+  // or a Windows runner's) must not take every path with it.
+  const other = os === "darwin" ? /^\/\.config\/(systemd|autostart|environment\.d|Code|Cursor|Claude)\b|^\/\.local\/lib\b|^\/\.xprofile$|^\/\.xinitrc$/ : /^\/Library\/|^\/Applications$/;
+  const rel = (p: string) => slash(p).slice(slash(home).replace(/\/+$/, "").length);
+  const own = (p: string) => slash(p) === slash(HOME) || slash(p).startsWith(slash(HOME) + "/") || slash(p).startsWith(slash(SEC()));
+  return table.map((t) => ({ ...t, paths: t.paths.filter((p) => !other.test(rel(p)) && !/^\/AppData\//.test(rel(p)) && !own(p)) })).filter((t) => t.paths.length);
 }
 
 /**
@@ -138,7 +144,8 @@ export function watchPaths(home: string, os: NodeJS.Platform = process.platform)
 /** The parts of the scan that read these changed paths (a path, or something inside a watched folder). */
 export function partsFor(changed: string[], home: string, os: NodeJS.Platform = process.platform): string[] {
   const table = watchTable(home, os);
-  return table.filter((t) => t.paths.some((p) => changed.some((c) => c === p || c.startsWith(p + "/")))).map((t) => t.part);
+  const ch = changed.map(slash);
+  return table.filter((t) => t.paths.map(slash).some((p) => ch.some((c) => c === p || c.startsWith(p + "/")))).map((t) => t.part);
 }
 
 /** The modification time of each watched path; a folder's changes when an entry is added, removed or renamed. */
