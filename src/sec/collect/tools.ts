@@ -6,7 +6,8 @@
 //                (.pth import lines, sitecustomize / usercustomize)
 // Secrets in these files are never kept: a line that holds one is stored with its value replaced by a fingerprint.
 
-import { join } from "node:path";
+import { join, resolve } from "node:path";
+import { HOME } from "../../home";
 import { ls, readJson, readText, sha256, type Ctx } from "../ctx";
 import type { Item } from "../types";
 
@@ -87,6 +88,27 @@ export function kubeExecs(yaml: string): { user: string; command: string }[] {
   return out;
 }
 
+/**
+ * The command behind vswarm's own gate, `<this vswarm> preflight --quiet --then <command>` (what vswarm gate aws and
+ * gate kube write), or undefined. Only this vswarm's launcher counts, in the quoting those gates write: another program
+ * named vswarm in front of a command is not vswarm's gate.
+ */
+export function behindGate(program: string, launchers = ownLaunchers()): string | undefined {
+  const sq = (s: string) => (/^[A-Za-z0-9_@%+=:,./-]+$/.test(s) ? s : `'${s.replace(/'/g, `'"'"'`)}'`);
+  const dq = (s: string) => (/^[A-Za-z0-9_@%+=:,./\\-]+$/.test(s) ? s : `"${s}"`);
+  for (const l of launchers)
+    for (const form of new Set([l.join(" "), l.map(sq).join(" "), l.map(dq).join(" ")])) {
+      const head = `${form} preflight --quiet --then `;
+      if (program.startsWith(head) && program.length > head.length) return program.slice(head.length);
+    }
+}
+
+/** How this vswarm is started from other tools: its launcher, or bun and the CLI. */
+const ownLaunchers = (): string[][] => [
+  [join(HOME, "bin", process.platform === "win32" ? "vswarm.cmd" : "vswarm")],
+  [process.execPath, resolve(import.meta.dir, "../../cli.ts")],
+];
+
 /** credential_process lines of ~/.aws/config, per profile. */
 export function awsProcesses(ini: string): { profile: string; command: string }[] {
   const out: { profile: string; command: string }[] = [];
@@ -129,11 +151,18 @@ export async function toolHelpers(ctx: Ctx): Promise<Item[]> {
   const add = (id: string, name: string, what: string, path: string, program: string, extra: Record<string, string | boolean | undefined> = {}) =>
     out.push({ kind: "tool-exec", id, name, path, source: what, hash: sha256(program + JSON.stringify(extra)), meta: { what, program: program.slice(0, 300), ...extra } });
 
+  // A command vswarm's own gate runs is judged and fingerprinted as that command: gating it is not a change to it.
+  const gated = (id: string, name: string, what: string, path: string, program: string) => {
+    const inner = behindGate(program);
+    if (!inner) return add(id, name, what, path, program);
+    out.push({ kind: "tool-exec", id, name, path, source: what, hash: sha256(inner + "{}"), meta: { what, program: program.slice(0, 300), gated: inner.slice(0, 300) } });
+  };
+
   const kube = join(h, ".kube/config");
-  for (const e of kubeExecs(readText(kube) ?? "")) add(`kube:${kube}:${e.user}`, e.user, "kubectl exec plugin", kube, e.command);
+  for (const e of kubeExecs(readText(kube) ?? "")) gated(`kube:${kube}:${e.user}`, e.user, "kubectl exec plugin", kube, e.command);
 
   const awsCfg = join(h, ".aws/config");
-  for (const p of awsProcesses(readText(awsCfg) ?? "")) add(`aws:${p.profile}`, p.profile, "AWS credential_process", awsCfg, p.command);
+  for (const p of awsProcesses(readText(awsCfg) ?? "")) gated(`aws:${p.profile}`, p.profile, "AWS credential_process", awsCfg, p.command);
 
   const dockerCfg = join(h, ".docker/config.json");
   const dc = readJson(dockerCfg);

@@ -425,6 +425,46 @@ until you turn it on again or unprotect them. `vswarm doctor` reports it, `vswar
 
 ### AWS and Kubernetes
 
+The credential is handed out only while the machine passes: aws and kubectl run a command for it, and vswarm puts
+`vswarm preflight --quiet --then` in front of that command.
+
+```bash
+vswarm gate aws prod-sso prod-admin       # ~/.aws/config (or AWS_CONFIG_FILE)
+vswarm gate kube prod staging             # the kubeconfig that defines each context's user (KUBECONFIG or ~/.kube/config)
+vswarm gate aws status · gate kube status
+vswarm gate aws --off prod-admin · gate kube --off      # puts the files back
+```
+
+- **aws**, per profile:
+  - an **IAM Identity Center (SSO)** profile: its `sso_*` settings move to a companion, `[profile vswarm-src-<name>]`,
+    and the profile gets `credential_process = vswarm preflight --quiet --then aws configure export-credentials
+    --profile vswarm-src-<name> --format process`. The profile cannot ask itself, which would run its own
+    `credential_process` again, and the settings move rather than stay because the SDKs try SSO before
+    `credential_process`. Sign in with `aws sso login --sso-session <session>` (or `--profile vswarm-src-<name>`).
+    Needs AWS CLI 2.9 or later.
+  - a profile with a **`credential_process`**: that command is wrapped where it stands.
+  - a **role** (`role_arn` + `source_profile`): the role is assumed with the source profile's credentials, so the
+    source is gated, to the end of the chain.
+  - **refused**, with the reason: static keys (`aws_access_key_id` in `~/.aws/credentials` or the config), which aws
+    sends without running anything, so no check can stand in front of them (move to IAM Identity Center or a
+    `credential_process`, then gate it); a role whose source is the machine (`credential_source`) or a web identity
+    token file; a profile with no credential source of its own.
+- **kubectl**, per context: the context's user must sign in through an **exec plugin** (`aws eks get-token`,
+  `gke-gcloud-auth-plugin`, kubelogin for OIDC). Its `command` becomes vswarm and its `args` become
+  `preflight --quiet --then <command> <args>`; `env`, `apiVersion` and the rest stay. With several files in
+  `KUBECONFIG`, the change goes to the first file that defines the user, which is the one kubectl uses. Static tokens,
+  token files, client certificates, passwords and the old `auth-provider` are refused: kubectl sends those without
+  running anything. vswarm has no YAML library; it changes the one exec block line by line, and refuses a kubeconfig
+  that is not in block style (as kubectl writes it) rather than reformatting it.
+- Both keep a backup next to the file and record exactly which lines they changed, so `--off` puts the bytes back. A
+  section edited since (`aws configure set`, or kubectl rewriting the file) gets only vswarm's lines swapped back, and
+  `status` and `vswarm doctor` say when the gate was changed by hand. Running the command again does not wrap twice.
+  Scans know vswarm's own wrapper: gating is not reported as a changed helper, and the command behind it is still
+  judged by what it runs.
+- preflight prints only on stderr, so the credential JSON the command prints reaches aws or kubectl untouched.
+
+Or by hand:
+
 ```ini
 # ~/.aws/config
 [profile prod]
@@ -912,6 +952,8 @@ Maintainers: the release steps are in [SECURITY.md](../SECURITY.md#for-the-maint
 | `vswarm watch on [--every min]` · `off` · `status` · `run` | background check, hourly and on changes, with notifications (`quick` is what the real-time job runs) |
 | `vswarm preflight [--quiet] [--strict] [--fresh] [--max-age s] [--then cmd…]` | the PASS/WARN/BLOCK gate |
 | `vswarm gate ssh <pattern…> [--cert]` · `gate status` · `gate remove` | the gate in `~/.ssh/config` |
+| `vswarm gate aws <profile…>` · `--off [profile…]` · `status` | aws: the profile's `credential_process` runs preflight |
+| `vswarm gate kube <context…>` · `--off [context…]` · `status` | kubectl: the user's exec plugin runs preflight |
 | `vswarm gate cmd [<name> [pattern…]]` · `gate cmd --off <name>` | a reminder before commands with no credential hook |
 | `vswarm gate gcloud <configuration> [--cred-file f]` · `gate gcloud <pattern…> [--wrapper]` · `--off [name]` · `status` | gcloud: the token command runs preflight, or the wrapper |
 | `vswarm gate az [subscription…]` · `--off` · `status` | az: the wrapper |

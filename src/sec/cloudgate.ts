@@ -23,6 +23,8 @@ import { readJson, readText } from "./ctx";
 import { addCmdGate, gcloudDir, honest, iniGet, loadCmdGates, realGateFiles, removeCmdGate, type GateFiles } from "./cmdgate";
 import { c } from "./print";
 import { SEC, writePrivate } from "./store";
+import type { AwsHook } from "./awsgate";
+import type { KubeHook } from "./kubegate";
 
 export interface GcloudHook {
   /** The configuration file vswarm changed. */
@@ -38,14 +40,19 @@ export interface GcloudHook {
 
 export interface CloudGates {
   gcloud: Record<string, GcloudHook>;
+  /** aws profiles whose credential_process runs preflight (awsgate.ts), by the profile vswarm changed. */
+  aws: Record<string, AwsHook>;
+  /** kubeconfig users whose exec plugin runs preflight (kubegate.ts), by user name. */
+  kube: Record<string, KubeHook>;
 }
 
 const stateFile = () => join(SEC(), "cloudgate.json");
 export const loadCloudGates = (): CloudGates => {
   const s = readJson<CloudGates>(stateFile());
-  return { gcloud: s?.gcloud && typeof s.gcloud === "object" ? s.gcloud : {} };
+  const map = (v: unknown): any => (v && typeof v === "object" && !Array.isArray(v) ? v : {});
+  return { gcloud: map(s?.gcloud), aws: map(s?.aws), kube: map(s?.kube) };
 };
-const saveCloudGates = (s: CloudGates) => writePrivate(stateFile(), s);
+export const saveCloudGates = (s: CloudGates) => writePrivate(stateFile(), s);
 
 /** Where vswarm keeps gated credentials. */
 export const gateDir = () => process.env.VSWARM_GATE_DIR ?? join(HOME, "gate");
@@ -149,7 +156,7 @@ export interface CloudEnv {
   where?: GateFiles;
 }
 
-async function realEnv(): Promise<CloudEnv> {
+export async function realEnv(): Promise<CloudEnv> {
   const { CLI, launcherPath } = await import("../setup");
   const win = process.platform === "win32";
   // On Windows bun and the CLI by full path: Python starts vswarm.cmd through cmd.exe, which would read the arguments.
@@ -214,9 +221,9 @@ export function gcloudHookStatus(): { name: string; ok: boolean; detail: string 
   });
 }
 
-const ok = (t: string, d = "") => console.log(`  ${c.green("✔")} ${t}${d ? "  " + c.dim(d) : ""}`);
-const warn = (t: string, d = "") => console.log(`  ${c.amber("!")} ${t}${d ? "  " + c.dim(d) : ""}`);
-const note = (t: string) => console.log(`  ${c.dim(t)}`);
+export const ok = (t: string, d = "") => console.log(`  ${c.green("✔")} ${t}${d ? "  " + c.dim(d) : ""}`);
+export const warn = (t: string, d = "") => console.log(`  ${c.amber("!")} ${t}${d ? "  " + c.dim(d) : ""}`);
+export const note = (t: string) => console.log(`  ${c.dim(t)}`);
 
 /** vswarm gate gcloud <configuration|project patterns…> [--cred-file f] [--wrapper] | --off [name] | (status) */
 export async function gateGcloud(args: string[], e?: CloudEnv) {
@@ -321,8 +328,17 @@ export async function gateAz(args: string[], where?: GateFiles) {
 }
 
 /** For doctor: one line per cloud and command gate. */
-export async function cloudDoctor(): Promise<{ level: "ok" | "warn" | "off"; text: string; detail?: string }[]> {
+export async function cloudDoctor(e?: CloudEnv): Promise<{ level: "ok" | "warn" | "off"; text: string; detail?: string }[]> {
   const out: { level: "ok" | "warn" | "off"; text: string; detail?: string }[] = [];
+  // aws profiles and kubectl users whose credential runs preflight (awsgate.ts, kubegate.ts)
+  const { awsStatus } = await import("./awsgate");
+  const { kubeStatus } = await import("./kubegate");
+  const aws = awsStatus(e ?? (await realEnv()));
+  for (const h of aws) out.push({ level: h.ok ? "ok" : "warn", text: `aws gate on profile ${h.name}`, detail: h.detail });
+  if (!aws.length) out.push({ level: "off", text: "no aws gate", detail: "vswarm gate aws <profile>" });
+  const kube = kubeStatus();
+  for (const h of kube) out.push({ level: h.ok ? "ok" : "warn", text: `kubectl gate on user ${h.name}`, detail: h.detail });
+  if (!kube.length) out.push({ level: "off", text: "no kubectl gate", detail: "vswarm gate kube <context>" });
   for (const h of gcloudHookStatus()) out.push({ level: h.ok ? "ok" : "warn", text: `gcloud gate on configuration ${h.name}`, detail: h.detail });
   const tools = Object.keys(loadCmdGates().tools).sort();
   if (tools.length) {
@@ -334,9 +350,10 @@ export async function cloudDoctor(): Promise<{ level: "ok" | "warn" | "off"; tex
   return out;
 }
 
-/** For uninstall: every command gate and gcloud hook removed. Returns what changed. */
+/** For uninstall: every command gate and aws, kubectl and gcloud hook removed. Returns what changed. */
 export async function cloudUninstall(where?: GateFiles): Promise<string[]> {
   const done: string[] = [];
+  done.push(...(await import("./awsgate")).awsUninstall(), ...(await import("./kubegate")).kubeUninstall());
   for (const n of Object.keys(loadCloudGates().gcloud)) if (gcloudHookOff(n).done) done.push(`gcloud configuration ${n} restored`);
   if (Object.keys(loadCmdGates().tools).length || where) {
     const w = where ?? (await realGateFiles(false));

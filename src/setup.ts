@@ -211,7 +211,7 @@ export const COMMANDS: [string, string][] = [
   ["respond", "lock, collect evidence, rotate, quarantine, report"],
   ["report", "write the incident report again"],
   ["unlock", "close an incident once the machine is clean"],
-  ["gate", "add the preflight gate to ssh"],
+  ["gate", "gate ssh, aws, kubectl and gcloud on preflight"],
   ["guard", "check npm, pip and brew packages before they install"],
   ["pkg", "check what a package-manager command would install"],
   ["try", "run untrusted code in a sandbox and see what it tried"],
@@ -241,7 +241,7 @@ _vswarm() {
     scan|diff) COMPREPLY=( $(compgen -W "--all --json --offline" -- "$cur") ) ;;
     preflight) COMPREPLY=( $(compgen -W "--quiet --strict --fresh --then --json --offline" -- "$cur") ) ;;
     accept) COMPREPLY=( $(compgen -W "--all --list --remove" -- "$cur") ) ;;
-    gate) COMPREPLY=( $(compgen -W "ssh status remove cmd gcloud az" -- "$cur") ) ;;
+    gate) COMPREPLY=( $(compgen -W "ssh status remove cmd aws kube gcloud az" -- "$cur") ) ;;
     guard) COMPREPLY=( $(compgen -W "on off status" -- "$cur") ) ;;
     agent) COMPREPLY=( $(compgen -W "on off status protect policy unprotect restore add log run" -- "$cur") ) ;;
   esac
@@ -262,7 +262,7 @@ ${lines}
     scan|diff) _arguments '--all[show low and info findings]' '--json[machine-readable output]' '--offline[no OSV lookup]' ;;
     preflight) _arguments '--quiet[print only on problems]' '--strict[WARN also blocks]' '--fresh[ignore the cached verdict]' '--then[run a command when allowed]:command:_command_names' ;;
     accept) _arguments '--all[accept every current finding]' '--list[show accepted]' '--remove[un-accept]:id:' ;;
-    gate) _values 'action' ssh status remove cmd gcloud az ;;
+    gate) _values 'action' ssh status remove cmd aws kube gcloud az ;;
     guard) _values 'action' on off status ;;
     agent) _values 'action' on off status protect policy unprotect restore add log run ;;
   esac
@@ -434,6 +434,13 @@ export async function gate(args: string[], home = homedir()) {
   if (action === "cmd") return (await import("./sec/cmdgate")).gateCmd(args);
   if (action === "gcloud") return (await import("./sec/cloudgate")).gateGcloud(args);
   if (action === "az") return (await import("./sec/cloudgate")).gateAz(args);
+  // aws profiles and kubectl contexts: the credential they hand out runs preflight first (awsgate.ts, kubegate.ts).
+  // A profile or context that cannot be gated is said so, and the exit code says it too.
+  if (action === "aws" || action === "kube" || action === "kubectl") {
+    const done = action === "aws" ? await (await import("./sec/awsgate")).gateAws(args) : await (await import("./sec/kubegate")).gateKube(args);
+    if (!done) process.exitCode = 1;
+    return;
+  }
   const cfgPath = join(home, ".ssh", "config");
   const old = existsSync(cfgPath) ? readFileSync(cfgPath, "utf8") : "";
   if (action === "status") {
@@ -442,12 +449,15 @@ export async function gate(args: string[], home = homedir()) {
     const { loadCmdGates } = await import("./sec/cmdgate");
     const { loadCloudGates } = await import("./sec/cloudgate");
     const cmds = Object.keys(loadCmdGates().tools).sort();
-    const hooks = Object.keys(loadCloudGates().gcloud);
+    const { gcloud, aws, kube } = loadCloudGates();
+    const hooks = Object.keys(gcloud);
     if (cmds.length) console.log(`command gates (reminders): ${cmds.join(", ")} · vswarm gate cmd`);
+    if (Object.keys(aws).length) console.log(`aws profiles gated: ${Object.keys(aws).join(", ")} · vswarm gate aws`);
+    if (Object.keys(kube).length) console.log(`kubectl contexts gated: ${Object.values(kube).flatMap((h) => h.for).join(", ")} · vswarm gate kube`);
     if (hooks.length) console.log(`gcloud credential hooks: ${hooks.join(", ")} · vswarm gate gcloud`);
     return;
   }
-  if (action !== "ssh" && action !== "remove") throw new Error('usage: vswarm gate ssh "<host pattern>" [...] | gate status | gate remove');
+  if (action !== "ssh" && action !== "remove") throw new Error('usage: vswarm gate ssh "<host pattern>" [...] | gate aws <profile…> | gate kube <context…> | gate gcloud <configuration> | gate cmd <tool> | gate status | gate remove');
   // Everything that can refuse comes before the backup and the write, so a refused command changes nothing.
   const certAt = args.indexOf("--cert");
   const withCert = certAt >= 0;

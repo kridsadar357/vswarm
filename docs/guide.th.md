@@ -316,7 +316,43 @@ vswarm agent status                    # vswarm agent log: ดูทุกคร
 
 ### ใช้กับ AWS และ Kubernetes
 
-ใช้ `--then` ให้ credential ถูกปล่อยเฉพาะตอนเครื่องผ่าน:
+credential จะถูกปล่อยเฉพาะตอนเครื่องผ่าน: aws และ kubectl รันคำสั่งหนึ่งเพื่อขอ credential และ vswarm จะใส่
+`vswarm preflight --quiet --then` ไว้หน้าคำสั่งนั้น
+
+```bash
+vswarm gate aws prod-sso prod-admin       # ~/.aws/config (หรือ AWS_CONFIG_FILE)
+vswarm gate kube prod staging             # kubeconfig ที่นิยาม user ของแต่ละ context (KUBECONFIG หรือ ~/.kube/config)
+vswarm gate aws status · gate kube status
+vswarm gate aws --off prod-admin · gate kube --off      # คืนไฟล์เป็นเหมือนเดิม
+```
+
+- **aws** ทีละ profile:
+  - profile แบบ **IAM Identity Center (SSO)**: ค่า `sso_*` ย้ายไปอยู่ใน profile คู่ชื่อ `[profile vswarm-src-<ชื่อ>]`
+    และ profile เดิมได้ `credential_process = vswarm preflight --quiet --then aws configure export-credentials
+    --profile vswarm-src-<ชื่อ> --format process` แทน profile จะเรียกตัวเองไม่ได้ เพราะจะไปรัน `credential_process`
+    ของตัวเองซ้ำ และต้องย้ายค่า SSO ออก ไม่ใช่เก็บไว้ที่เดิม เพราะ SDK ลอง SSO ก่อน `credential_process` เสมอ
+    login ด้วย `aws sso login --sso-session <session>` (หรือ `--profile vswarm-src-<ชื่อ>`) ต้องใช้ AWS CLI 2.9 ขึ้นไป
+  - profile ที่มี **`credential_process`** อยู่แล้ว: ครอบคำสั่งนั้นตรงที่มันอยู่
+  - **role** (`role_arn` + `source_profile`): role ถูก assume ด้วย credential ของ source profile จึงไปคุมที่ source
+    ตามสายไปจนสุด
+  - **ปฏิเสธ** พร้อมบอกเหตุผล: key แบบถาวร (`aws_access_key_id` ใน `~/.aws/credentials` หรือใน config) เพราะ aws
+    ส่ง key ไปเลยโดยไม่รันอะไร จึงไม่มีจุดให้ตรวจก่อน (ย้ายไปใช้ IAM Identity Center หรือ `credential_process`
+    ก่อนแล้วค่อย gate), role ที่เอา credential จากตัวเครื่อง (`credential_source`) หรือจากไฟล์ web identity token
+    และ profile ที่ไม่มีแหล่ง credential ของตัวเอง
+- **kubectl** ทีละ context: user ของ context ต้อง login ผ่าน **exec plugin** (`aws eks get-token`,
+  `gke-gcloud-auth-plugin`, kubelogin สำหรับ OIDC) `command` ของมันจะกลายเป็น vswarm และ `args` เป็น
+  `preflight --quiet --then <command> <args>` ส่วน `env`, `apiVersion` และอื่นๆ คงไว้ ถ้า `KUBECONFIG` มีหลายไฟล์
+  จะแก้ไฟล์แรกที่นิยาม user นั้น ซึ่งเป็นไฟล์ที่ kubectl ใช้จริง token แบบถาวร, token file, client certificate,
+  รหัสผ่าน และ `auth-provider` แบบเก่าจะถูกปฏิเสธ เพราะ kubectl ส่งไปเลยโดยไม่รันอะไร vswarm ไม่มี library YAML
+  จึงแก้เฉพาะบล็อก exec นั้นทีละบรรทัด และถ้า kubeconfig ไม่ได้เขียนแบบ block (แบบที่ kubectl เขียน) ก็จะปฏิเสธ
+  แทนที่จะจัดรูปแบบไฟล์ใหม่ทั้งไฟล์
+- ทั้งสองแบบเก็บไฟล์ backup ไว้ข้างไฟล์เดิม และจดไว้ว่าเปลี่ยนบรรทัดไหนบ้าง `--off` จึงคืนไฟล์ได้ตรงทุกไบต์ ถ้า
+  section ถูกแก้ทีหลัง (`aws configure set` หรือ kubectl เขียนไฟล์ใหม่) จะสลับคืนเฉพาะบรรทัดของ vswarm และ
+  `status` กับ `vswarm doctor` จะบอกเมื่อมีคนไปแก้ด่านด้วยมือ สั่งซ้ำก็ไม่ครอบซ้อน การ scan รู้จักตัวครอบของ
+  vswarm เอง: การ gate ไม่ถูกรายงานว่า helper เปลี่ยน และคำสั่งข้างในยังถูกตรวจตามสิ่งที่มันรันจริง
+- preflight พิมพ์ข้อความออก stderr เท่านั้น JSON ของ credential ที่คำสั่งพิมพ์ออกมาจึงถึง aws หรือ kubectl ครบไม่เพี้ยน
+
+หรือแก้ไฟล์เอง:
 
 ```ini
 # ~/.aws/config
@@ -687,6 +723,8 @@ vswarm trust           # fingerprint ของกุญแจที่เคร�
 | `vswarm watch on [--every นาที]` · `off` · `status` · `run` | ตรวจเบื้องหลังทุกชั่วโมงและทันทีที่มีการเปลี่ยน พร้อมแจ้งเตือน (`quick` คือสิ่งที่ job แบบ real-time รัน) |
 | `vswarm preflight [--quiet] [--strict] [--fresh] [--max-age s] [--then cmd…]` | ด่าน PASS/WARN/BLOCK |
 | `vswarm gate ssh <pattern…> [--cert]` · `gate status` · `gate remove` | ด่านใน `~/.ssh/config` |
+| `vswarm gate aws <profile…>` · `--off [profile…]` · `status` | aws: `credential_process` ของ profile รัน preflight ก่อน |
+| `vswarm gate kube <context…>` · `--off [context…]` · `status` | kubectl: exec plugin ของ user รัน preflight ก่อน |
 | `vswarm gate cmd [<ชื่อ> [pattern…]]` · `gate cmd --off <ชื่อ>` | ตัวเตือนก่อนคำสั่งที่ไม่มี hook ของ credential |
 | `vswarm gate gcloud <configuration> [--cred-file f]` · `gate gcloud <pattern…> [--wrapper]` · `--off [ชื่อ]` · `status` | gcloud: คำสั่งขอ token รัน preflight ก่อน หรือใช้ตัวครอบ |
 | `vswarm gate az [subscription…]` · `--off` · `status` | az: ตัวครอบคำสั่ง |

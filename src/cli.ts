@@ -86,6 +86,8 @@ function usage() {
   row("vswarm preflight [--quiet] [--strict]", "PASS / WARN / BLOCK; exit 3 on BLOCK");
   row("vswarm preflight --then <command…>", "run the command only if this machine passes");
   row('vswarm gate ssh "prod-*" "*.internal"', "ssh to these hosts only after preflight passes");
+  row("vswarm gate aws <profile…> · --off", "the profile's credential_process runs preflight first (SSO and credential_process)");
+  row("vswarm gate kube <context…> · --off", "the context's exec plugin runs preflight first");
   row("vswarm ca init · ca server <account>", "a CA for short-lived SSH certificates");
   row("vswarm canary plant aws|dns|env · list", "decoy credentials that alert you when used");
   row('vswarm cert · gate ssh --cert "prod-*"', "15-minute certificate, only when preflight passes");
@@ -114,8 +116,8 @@ function usage() {
   row("vswarm selftest", "plant fake threats in a sandbox home, print the detection rate");
   row("vswarm doctor · install · update · uninstall", "set-up (update: signed releases once published, main until then)");
   row("vswarm trust", "release keys this machine accepts updates from");
-  console.log(`\n  ${c.bold("gates for other tools")}`);
-  console.log(c.dim("    ~/.aws/config     credential_process = vswarm preflight --quiet --then aws configure export-credentials --profile prod-sso --format process"));
+  console.log(`\n  ${c.bold("gates for other tools, by hand")} ${c.dim("(what vswarm gate aws and gate kube write)")}`);
+  console.log(c.dim("    ~/.aws/config     credential_process = vswarm preflight --quiet --then aws configure export-credentials --profile <sso profile> --format process"));
   console.log(c.dim("    kubeconfig user   exec: { command: vswarm, args: [preflight, --quiet, --then, kubelogin, get-token, …] }"));
   if (process.platform === "win32") console.log(c.amber("\n  Windows preview: try and agents --inspect need the sandbox, and ca, cert, agent, canary and shot are not here yet;\n  use those inside WSL. Everything else works."));
   console.log(c.dim("\n  Local-first, no telemetry. Only package names and versions go to api.osv.dev for the known-malicious check (--offline skips it).\n"));

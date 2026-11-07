@@ -88,11 +88,14 @@ What it does:
   **not** stop malware running as you from asking the agent to sign while the machine passes, reading the agent's
   memory, or reading the wrapping key the way vswarm does. Hardware keys (`-sk`) and short-lived certificates are
   stronger, and combine with it.
-- **Gates gcloud's credential, and only reminds for the rest.** `vswarm gate gcloud` puts preflight in front of a
-  workload-identity credential's token command, so any program using that configuration gets no new token from a
-  blocked machine (a token gcloud already cached stays valid until it expires, about an hour). `vswarm gate cmd` and
-  `vswarm gate az` are shell functions: `command <tool>`, a script or another program skips them. A bypass of those
-  wrappers is not a vulnerability; a way to make the gcloud hook hand out a token while the machine is blocked is.
+- **Gates aws, kubectl and gcloud credentials, and only reminds for the rest.** `vswarm gate aws` (an SSO or
+  `credential_process` profile), `vswarm gate kube` (an exec-plugin user) and `vswarm gate gcloud` (a
+  workload-identity credential) put preflight in front of the command that produces the credential, so any program
+  using that profile, context or configuration gets no new credential from a blocked machine (one already handed out,
+  or cached by the tool, stays valid until it expires). Static AWS keys, kube tokens and client certificates cannot
+  be gated and are refused. `vswarm gate cmd` and `vswarm gate az` are shell functions: `command <tool>`, a script or
+  another program skips them. A bypass of those wrappers is not a vulnerability; a way to make the aws, kubectl or
+  gcloud hook hand out a credential while the machine is blocked is.
 - **Reads packages before they install.** The install guard downloads the archive a package manager would install,
   checks it against the registry's checksum, and reads it without running it (its own unpacker, with size, file-count,
   path and time limits). It looks for install-time code that decodes and runs hidden code, reads credentials, reaches

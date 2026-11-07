@@ -60,7 +60,15 @@ vswarm watch on             # check hourly, and within seconds when a login job,
 ```bash
 vswarm gate ssh "prod-*" "*.wallet.internal"     # adds a Match block to ~/.ssh/config (backup kept)
 vswarm agent protect ~/.ssh/prod_key && vswarm agent on   # the key moves into an ssh agent that signs only while the machine passes
+vswarm gate aws prod-sso prod-admin               # the profile's credential_process runs preflight first (backup kept)
+vswarm gate kube prod                             # the context's exec plugin runs preflight first (backup kept)
 ```
+
+`gate aws` handles SSO profiles, profiles with a `credential_process`, and roles (`role_arn` + `source_profile`, gated
+at their source); `gate kube` handles users with an exec plugin (`aws eks get-token`, `gke-gcloud-auth-plugin`,
+kubelogin), in whichever `KUBECONFIG` file defines them. Static AWS keys, static kube tokens and client certificates
+are refused, because those are sent without running anything. `--off` puts the files back as they were, and `status`
+notices a later hand edit ([guide](docs/guide.md#aws-and-kubernetes)). Or by hand:
 
 ```ini
 # ~/.aws/config

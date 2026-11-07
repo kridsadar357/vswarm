@@ -166,7 +166,8 @@ const PY_RISKY = /\b(exec|eval)\s*\(|b64decode|base64|subprocess|os\.system|os\.
 
 /** Why a program another tool runs for you is dangerous, if it is. */
 function toolExecRisk(i: Item, home: string): string | undefined {
-  const prog = String(i.meta?.program ?? "");
+  // Behind vswarm's own gate, the command it hands on is what runs (collect/tools.ts behindGate).
+  const prog = String(i.meta?.gated ?? i.meta?.program ?? "");
   if (String(i.id).startsWith("docker-context:")) {
     const m = /^tcp:\/\/([^:/]+)(?::(\d+))?/.exec(prog);
     if (m && i.meta?.current && !/^(localhost|127\.)/.test(m[1]) && (m[2] !== "2376" || i.meta?.skipTls)) return `sends every docker command to ${prog} without TLS`;
@@ -177,6 +178,9 @@ function toolExecRisk(i: Item, home: string): string | undefined {
   const where = hiddenProgram(prog, home);
   if (where) return `starts a program that ${where}`;
 }
+
+/** What vswarm gate aws writes for an SSO profile behind its gate: only aws, asking vswarm's companion profile. */
+const SSO_GATE = /^aws configure export-credentials --profile '?vswarm-src-[^\s']+'? --format process$/;
 
 /** Commands that are handed passwords and tokens: a copy found earlier on PATH sees them first. */
 const SHADOWED = new Set(["sudo", "su", "doas", "pkexec", "passwd", "login", "ssh", "scp", "sftp", "ssh-add", "ssh-agent", "ssh-keygen", "git", "gpg", "gpg2", "security"]);
@@ -413,7 +417,7 @@ export async function evaluate(input: RuleInput): Promise<Finding[]> {
               detail: [i.path ?? "", String(i.meta?.crx ?? i.meta?.update ?? "")].filter(Boolean), fix: "Remove the file unless an app you trust put it there, then remove the extension in the browser", item: i });
           break;
         case "tool-exec":
-          add({ id: `tool-exec:${i.id}:${i.hash?.slice(0, 12)}`, rule: fresh ? "tool-exec-new" : "tool-exec-changed", severity: i.meta?.stock ? "low" : "medium",
+          add({ id: `tool-exec:${i.id}:${i.hash?.slice(0, 12)}`, rule: fresh ? "tool-exec-new" : "tool-exec-changed", severity: i.meta?.stock || SSO_GATE.test(String(i.meta?.gated ?? "")) ? "low" : "medium",
             title: `${fresh ? "New" : "Changed"} ${i.meta?.what ?? "helper"} ${i.name}: ${redact(String(i.meta?.program ?? "")).slice(0, 80)}`, detail: [i.path ?? ""],
             fix: "Another tool runs this for you, with your access; keep it only if you set it up", item: i });
           break;

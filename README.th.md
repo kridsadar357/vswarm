@@ -42,6 +42,8 @@ vswarm baseline                      # บนเครื่องที่ไ�
 vswarm diff                          # ทีหลัง: อะไรเปลี่ยนไปจาก baseline
 vswarm secrets                       # credential อายุยาวในเครื่อง (ไม่แสดงค่า)
 vswarm gate ssh "prod-*"             # ssh เข้า prod-* ได้เฉพาะตอนเครื่องผ่าน
+vswarm gate aws prod-sso             # profile นี้ของ aws ได้ credential เฉพาะตอนเครื่องผ่าน (เก็บไฟล์ backup ไว้ --off คืนให้ตามเดิม)
+vswarm gate kube prod                # context นี้ของ kubectl ขอ token ได้เฉพาะตอนเครื่องผ่าน
 vswarm agent protect ~/.ssh/prod_key && vswarm agent on   # ย้ายกุญแจเข้า ssh agent ที่เซ็นให้เฉพาะตอนเครื่องผ่าน อ้อม config ก็ใช้กุญแจไม่ได้
 vswarm gate gcloud prod --cred-file wif.json   # gcloud แบบ workload identity: คำสั่งขอ token รัน preflight ก่อน
 vswarm gate cmd psql "*.prod.internal"         # ตัวเตือนก่อน psql, mysql, telnet … (ข้ามได้ด้วย command psql ไม่ใช่ตัวควบคุม)
