@@ -90,6 +90,8 @@ function usage() {
   row("vswarm canary plant aws|dns|env · list", "decoy credentials that alert you when used");
   row('vswarm cert · gate ssh --cert "prod-*"', "15-minute certificate, only when preflight passes");
   row("vswarm agent protect <key> · agent on", "an ssh agent that holds the key and signs only when this machine passes");
+  row('vswarm gate cmd psql "*.prod.internal"', "a reminder before commands with no credential hook (telnet, mysql, …)");
+  row("vswarm gate gcloud <configuration> · gate az", "gcloud: the token command runs preflight; az: a wrapper");
   row("vswarm accept <id…> | --all | --list", "mark reviewed findings as expected");
   console.log(`\n  ${c.bold("before you install")}`);
   row("vswarm guard on [--ignore-scripts] [--sandbox] [--strict]", "npm, pip, brew … ask vswarm before installing");
@@ -124,7 +126,7 @@ async function main() {
   const tailAt = args.indexOf(cmd === "preflight" ? "--then" : cmd === "try" ? "--" : "\0");
   const tail = tailAt >= 0 ? args.splice(tailAt + 1) : [];
   // pkg hands everything after the tool name to that tool, `=` and all.
-  if (cmd !== "pkg") splitEquals(args);
+  if (cmd !== "pkg" && cmd !== "cmdgate") splitEquals(args);
   const offline = has(args, "--offline");
   const json = has(args, "--json");
   if (process.platform === "win32" && NOT_ON_WINDOWS.has(cmd)) throw new Error(`vswarm ${cmd} is not on Windows yet ; use it inside WSL`);
@@ -322,8 +324,17 @@ async function main() {
     }
 
     case "gate":
-      noMoreOptions(cmd, args, ["--cert", "--team"]);
+      noMoreOptions(cmd, args, ["--cert", "--team", "--off", "--list", "--cred-file", "--wrapper"]);
       return gate(args);
+
+    case "cmdgate": {
+      // vswarm cmdgate <tool> [patterns…] -- <the tool's arguments>; the functions vswarm gate cmd writes call this.
+      const dash = args.indexOf("--");
+      const [tool, ...patterns] = dash >= 0 ? args.slice(0, dash) : args;
+      if (!tool) throw new Error("usage: vswarm cmdgate <tool> [host patterns…] -- <arguments>   (written by vswarm gate cmd)");
+      process.exitCode = await (await import("./sec/cmdgate")).cmdgateRun(tool, patterns, dash >= 0 ? args.slice(dash + 1) : []);
+      return;
+    }
 
     case "guard":
       noMoreOptions(cmd, args, ["--ignore-scripts", "--sandbox", "--strict"]);

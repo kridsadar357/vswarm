@@ -108,7 +108,7 @@ export const yes = async (q: string, def = false) => {
 };
 
 // ── Launcher and PATH
-function launcherPath(): string {
+export function launcherPath(): string {
   return join(paths.bin(), WIN ? "vswarm.cmd" : "vswarm");
 }
 
@@ -241,7 +241,7 @@ _vswarm() {
     scan|diff) COMPREPLY=( $(compgen -W "--all --json --offline" -- "$cur") ) ;;
     preflight) COMPREPLY=( $(compgen -W "--quiet --strict --fresh --then --json --offline" -- "$cur") ) ;;
     accept) COMPREPLY=( $(compgen -W "--all --list --remove" -- "$cur") ) ;;
-    gate) COMPREPLY=( $(compgen -W "ssh status remove" -- "$cur") ) ;;
+    gate) COMPREPLY=( $(compgen -W "ssh status remove cmd gcloud az" -- "$cur") ) ;;
     guard) COMPREPLY=( $(compgen -W "on off status" -- "$cur") ) ;;
     agent) COMPREPLY=( $(compgen -W "on off status protect unprotect restore add log run" -- "$cur") ) ;;
   esac
@@ -262,7 +262,7 @@ ${lines}
     scan|diff) _arguments '--all[show low and info findings]' '--json[machine-readable output]' '--offline[no OSV lookup]' ;;
     preflight) _arguments '--quiet[print only on problems]' '--strict[WARN also blocks]' '--fresh[ignore the cached verdict]' '--then[run a command when allowed]:command:_command_names' ;;
     accept) _arguments '--all[accept every current finding]' '--list[show accepted]' '--remove[un-accept]:id:' ;;
-    gate) _values 'action' ssh status remove ;;
+    gate) _values 'action' ssh status remove cmd gcloud az ;;
     guard) _values 'action' on off status ;;
     agent) _values 'action' on off status protect unprotect restore add log run ;;
   esac
@@ -371,6 +371,11 @@ export async function doctor(): Promise<boolean> {
     if (a.level === "off") console.log(`  ${c.dim("·")} ${a.text}  ${c.dim(a.detail ?? "")}`);
     else (a.level === "ok" ? ok : a.level === "warn" ? warn : bad)(a.text, a.detail);
   }
+  // Command gates (reminders) and gcloud credential hooks: src/sec/cloudgate.ts
+  for (const a of await (await import("./sec/cloudgate")).cloudDoctor()) {
+    if (a.level === "off") console.log(`  ${c.dim("·")} ${a.text}  ${c.dim(a.detail ?? "")}`);
+    else (a.level === "ok" ? ok : warn)(a.text, a.detail);
+  }
   if (await guardOn()) ok("install guard on", "npm, pip, brew … are checked before installing");
   else console.log(`  ${c.dim("·")} install guard off  ${c.dim("vswarm guard on")}`);
   console.log();
@@ -419,11 +424,21 @@ export function sshGate(patterns: string[], launcher: string[], opt: { cert?: { 
 
 export async function gate(args: string[], home = homedir()) {
   const action = args.shift() ?? "status";
+  // Command wrappers and the gcloud / az gates: src/sec/cmdgate.ts, src/sec/cloudgate.ts
+  if (action === "cmd") return (await import("./sec/cmdgate")).gateCmd(args);
+  if (action === "gcloud") return (await import("./sec/cloudgate")).gateGcloud(args);
+  if (action === "az") return (await import("./sec/cloudgate")).gateAz(args);
   const cfgPath = join(home, ".ssh", "config");
   const old = existsSync(cfgPath) ? readFileSync(cfgPath, "utf8") : "";
   if (action === "status") {
     const block = old.match(blockRegex(GATE_START, GATE_END))?.[0];
     console.log(block ? block.trim() : "no vswarm gate in ~/.ssh/config · add one: vswarm gate ssh \"prod-*\" \"*.internal\"");
+    const { loadCmdGates } = await import("./sec/cmdgate");
+    const { loadCloudGates } = await import("./sec/cloudgate");
+    const cmds = Object.keys(loadCmdGates().tools).sort();
+    const hooks = Object.keys(loadCloudGates().gcloud);
+    if (cmds.length) console.log(`command gates (reminders): ${cmds.join(", ")} · vswarm gate cmd`);
+    if (hooks.length) console.log(`gcloud credential hooks: ${hooks.join(", ")} · vswarm gate gcloud`);
     return;
   }
   if (action !== "ssh" && action !== "remove") throw new Error('usage: vswarm gate ssh "<host pattern>" [...] | gate status | gate remove');
@@ -470,7 +485,7 @@ function windowsDocs(): Promise<string | undefined> {
 }
 
 /** Where the guard goes: ~/.zshrc and ~/.bashrc, or on Windows the profile.ps1 of Windows PowerShell and of PowerShell 7. */
-async function guardFiles(adding = false): Promise<string[]> {
+export async function guardFiles(adding = false): Promise<string[]> {
   if (!WIN) return rcFiles().map((r) => r.file).filter((f) => /\.(zsh|bash)rc$/.test(f));
   const docs = await windowsDocs();
   if (!docs) throw new Error("could not find your Documents folder, where PowerShell profiles live");
@@ -618,6 +633,7 @@ export async function uninstall(args: string[]) {
   const sshCfg = join(homedir(), ".ssh/config");
   if (existsSync(sshCfg) && readFileSync(sshCfg, "utf8").includes(GATE_START)) await gate(["remove"]);
   if (await guardOn()) await guard(["off"]);
+  for (const t of await (await import("./sec/cloudgate")).cloudUninstall()) ok(t);
   if (args.includes("--purge")) {
     // The sealing key goes too, or a reinstall would find its incident log "deleted" and stay locked.
     await forgetKey();
