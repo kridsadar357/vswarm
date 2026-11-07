@@ -6,6 +6,7 @@ import { delimiter, join } from "node:path";
 import { isDir, ls, mtime, readJson, readText, type Ctx } from "./ctx";
 import type { Finding, Severity } from "./types";
 import { canaryKeyIds, canaryWhere } from "./canary";
+import { plaintext } from "./plaintext";
 
 const day = 86_400_000;
 const statSize = (p: string) => {
@@ -241,5 +242,7 @@ export async function secrets(ctx: Ctx): Promise<Finding[]> {
     out.push(finding("env-files", "low", `${envHits.length} .env file${envHits.length > 1 ? "s" : ""} with secrets in code folders`, envHits.slice(0, 8).concat(envHits.length > 8 ? [`… ${envHits.length - 8} more`] : []),
       "Fine for local dev keys; production keys do not belong on a laptop."));
   }
+  // Plain-text protocols (telnet, ftp, rsh) and stored database passwords: src/sec/plaintext.ts
+  out.push(...plaintext(ctx));
   return out;
 }
