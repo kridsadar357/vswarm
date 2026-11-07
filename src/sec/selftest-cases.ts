@@ -1045,11 +1045,14 @@ export const BENIGN: Benign[] = [
     plant: (h) => write(join(h, "Library/Application Support/Google/Chrome/Default/Extensions/cjpalhdlnbpafiamejdnhcphjbkeiagm/1.60.0_0/manifest.json"), JSON.stringify({ name: "uBlock Origin", version: "1.60.0", permissions: ["storage"] })),
   },
   {
-    name: "setuptools and editable-install .pth files", technique: "T1546.018 Python startup hooks", when: "clean", max: "info",
+    name: "setuptools, editable-install, coverage and pytest-cov .pth files", technique: "T1546.018 Python startup hooks", when: "clean", max: "info",
     plant: (h) => {
       write(join(h, SITE, "distutils-precedence.pth"), "import os; var = 'SETUPTOOLS_USE_DISTUTILS'; enabled = os.environ.get(var, 'local') == 'local'; enabled and __import__('_distutils_hack').add_shim(); \n");
       write(join(h, SITE, "__editable__.mytool-0.1.0.pth"), "import __editable___mytool_0_1_0_finder; __editable___mytool_0_1_0_finder.install()\n");
       write(join(h, SITE, "easy-install.pth"), "./setuptools-69.0.0-py3.12.egg\n");
+      // pytest-cov's subprocess hook, as pytest-cov 4 and 5 ship it: exec() of a string, and harmless.
+      write(join(h, SITE, "pytest-cov.pth"), String.raw`import os, sys;exec('if \'COV_CORE_SOURCE\' in os.environ:\n try:\n  from pytest_cov.embed import init\n  init()\n except Exception as exc:\n  sys.stderr.write(\n    "pytest-cov: Failed to setup subprocess coverage. "\n    "Environ: {0!r} "\n    "Exception: {1!r}\\n".format(\n      dict((k, v) for k, v in os.environ.items() if k.startswith(\'COV_CORE\')),\n      exc\n    )\n  )')` + "\n");
+      write(join(h, SITE, "a1_coverage.pth"), "import coverage; coverage.process_startup()\n");
     },
   },
 

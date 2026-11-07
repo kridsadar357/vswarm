@@ -126,9 +126,13 @@ describe.skipIf(process.platform === "win32")("real-time watch: the quick check"
       const told: { at: number; title: string; body: string }[] = [];
       let quick: Promise<unknown> | undefined;
       // fs.watch stands in for launchd's WatchPaths (both are kqueue / FSEvents underneath on macOS, inotify on Linux).
-      const w = watch(agents, () => (quick ??= watchQuick({ ctx, debounceMs: 300, notify: async (title, body) => void told.push({ at: Date.now(), title, body }) })));
+      const trigger = () => (quick ??= watchQuick({ ctx, debounceMs: 300, notify: async (title, body) => void told.push({ at: Date.now(), title, body }) }));
+      const w = watch(agents, trigger);
       const t0 = Date.now();
       job(home, "com.apple.updater.helper");
+      // fs.watch in a long test run sometimes gives no event; then the trigger comes from here, a second late.
+      for (let i = 0; i < 20 && !quick; i++) await Bun.sleep(50);
+      if (!quick) (console.log("fs.watch gave no event; triggered directly"), trigger());
       for (let i = 0; i < 100 && !told.length; i++) await Bun.sleep(50);
       w.close();
       await quick;

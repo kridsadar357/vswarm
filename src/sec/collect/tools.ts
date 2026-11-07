@@ -100,8 +100,11 @@ export function awsProcesses(ini: string): { profile: string; command: string }[
   return out;
 }
 
-/** Import lines that setuptools, virtualenv and editable installs write into .pth files: ordinary, and many. */
-export const STOCK_PTH = /^import (os; var = 'SETUPTOOLS_USE_DISTUTILS'|_virtualenv|__editable___[\w]+_finder; __editable___[\w]+_finder\.install\(\)|_distutils_hack)/;
+/**
+ * Import lines that setuptools, virtualenv, editable installs and coverage tools write into .pth files: ordinary, and
+ * many. pytest-cov's runs its code through exec(), which would otherwise look like a loader.
+ */
+export const STOCK_PTH = /^import (os; var = 'SETUPTOOLS_USE_DISTUTILS'|_virtualenv|__editable___[\w]+_finder; __editable___[\w]+_finder\.install\(\)|_distutils_hack|coverage; coverage\.process_startup\(\)|os, sys;exec\('if \\'COV_CORE_SOURCE\\' in os\.environ:)/;
 
 /** User site-packages folders: macOS's ~/Library/Python and the XDG ~/.local/lib/pythonX.Y. */
 function userSites(h: string): string[] {
