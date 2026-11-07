@@ -77,6 +77,11 @@ What it does:
   **not** stop malware running as you from asking the agent to sign while the machine passes, reading the agent's
   memory, or reading the wrapping key the way vswarm does. Hardware keys (`-sk`) and short-lived certificates are
   stronger, and combine with it.
+- **Gates gcloud's credential, and only reminds for the rest.** `vswarm gate gcloud` puts preflight in front of a
+  workload-identity credential's token command, so any program using that configuration gets no new token from a
+  blocked machine (a token gcloud already cached stays valid until it expires, about an hour). `vswarm gate cmd` and
+  `vswarm gate az` are shell functions: `command <tool>`, a script or another program skips them. A bypass of those
+  wrappers is not a vulnerability; a way to make the gcloud hook hand out a token while the machine is blocked is.
 - **Is not the enforcement point** for production. The decision that cannot be bypassed from the laptop belongs on
   the server: short-lived certificates, a bastion or SSH CA that asks for a fresh signed report, device trust in your
   identity provider. See [docs/server-side.md](docs/server-side.md).

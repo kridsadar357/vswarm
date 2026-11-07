@@ -78,6 +78,10 @@ users:
       args: [preflight, --quiet, --then, kubelogin, get-token, --server-id, "<id>"]
 ```
 
+`vswarm gate gcloud <configuration>` puts the same check in front of a workload-identity credential's token command;
+`vswarm gate cmd psql "*.prod.internal"` (and `gate az`) is a shell reminder for tools with no credential hook, one
+you can bypass with `command psql` ([guide](docs/guide.md#commands-with-no-credential-hook-gate-cmd)).
+
 The config gate is advice to OpenSSH; `vswarm agent` puts the check on the key itself, so `ssh -F /dev/null`, an IP
 address or another client gets no signature from a machine that does not pass ([guide](docs/guide.md#vswarm-agent)).
 

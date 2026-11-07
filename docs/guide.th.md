@@ -157,6 +157,20 @@ ssh-add --apple-use-keychain ~/.ssh/<key>        # macOS: จำรหัสใ�
 aws configure sso                                # เปลี่ยนจาก AKIA key เป็น SSO
 ```
 
+**โปรโตคอลที่ไม่เข้ารหัส และรหัสผ่านฐานข้อมูลที่เก็บไว้ในไฟล์** (ตรวจทุกครั้งที่ scan และใน `vswarm secrets` โดยไม่อ่านค่าออกมา):
+
+| สิ่งที่ตรวจ | ระดับ | ทำไมเสี่ยง และทางที่ปลอดภัยกว่า |
+| --- | --- | --- |
+| alias, function, `ProxyCommand`/`LocalCommand` ของ ssh หรือ `~/.telnetrc` ที่เปิด telnet, ftp, rsh หรือ rlogin ไปหา host | ต่ำ | รหัสผ่านและทุกอย่างที่พิมพ์วิ่งผ่านเครือข่ายแบบอ่านออก ใช้ ssh/sftp แทน หรือเข้าอุปกรณ์ผ่าน jump host หรือ VPN |
+| history ของ shell ที่มี telnet/ftp/rsh/rlogin ไปหา host | ต่ำ, กลางถ้ามีรหัสผ่านอยู่ในบรรทัดคำสั่ง | นับจำนวนและบอกชื่อ host เท่านั้น ไม่เก็บและไม่แสดงบรรทัด history |
+| `~/.rhosts` | กลาง | rsh/rlogin เข้าได้โดยไม่ต้องใช้รหัสผ่าน แค่อ้างชื่อ host |
+| `~/.pgpass` | info ถ้าเป็น 0600 และมีแต่ host ในเครื่อง, ต่ำถ้ามี host ภายนอก, กลางถ้าคนอื่นอ่านได้ | อ่านเฉพาะช่อง host |
+| `~/.my.cnf` ที่มีรหัสผ่าน, `~/.mylogin.cnf` | ต่ำ (กลางถ้าคนอื่นอ่าน `.my.cnf` ได้) | `.mylogin.cnf` แค่ถูกทำให้อ่านยาก ไม่ได้เข้ารหัสจริง |
+| URI ของ MongoDB ที่มีรหัสผ่านใน `~/.mongoshrc.js`, รหัสผ่าน Redis ใน `~/.config/redis` | ต่ำ | ให้ client ถามรหัสเอง หรือใช้ credential อายุสั้น |
+| `credentials-config.json` ของ DBeaver, ไฟล์ KeePass ของ JetBrains (DataGrip) ที่วางกุญแจไว้ข้างกัน | ต่ำ | DBeaver ใช้กุญแจเดียวกันทุกเครื่อง ให้เก็บใน keychain ของระบบแทน |
+
+ทางลัดที่ไป `localhost` และด่านคำสั่งของ vswarm เอง (ด้านล่าง) ไม่ถูกรายงาน
+
 ## 5. AI agent และ MCP: agents
 
 AI coding agent รันโค้ดด้วยสิทธิ์ของคุณ และการตั้งค่าเป็นตัวกำหนดว่ามันเริ่มอะไรเองได้บ้าง MCP server หรือ hook ที่เป็นอันตรายเท่ากับการฝังตัวที่ได้สิทธิ์ของ agent ไปทั้งหมด `vswarm agents` แสดงทุกอย่างที่ agent ในเครื่องเริ่มเองได้
@@ -299,6 +313,55 @@ users:
       command: vswarm
       args: [preflight, --quiet, --then, kubelogin, get-token, --server-id, "<id>"]
 ```
+
+### gcloud และ az
+
+vswarm คุมที่ **credential** เมื่อเครื่องมือยอมให้คำสั่งหนึ่งเป็นตัวสร้าง credential และใช้ตัวครอบใน shell เฉพาะเมื่อไม่มีทางนั้น
+
+```bash
+vswarm gate gcloud prod --cred-file ~/wif-prod.json   # hook: คำสั่งขอ token จะรัน preflight ก่อน
+vswarm gate gcloud "shop-*"                          # การ login แบบนี้ไม่มี hook จึงใช้ตัวครอบคำสั่ง
+vswarm gate az "Prod-*"                              # Azure CLI: ใช้ตัวครอบเสมอ
+vswarm gate gcloud status · gate gcloud --off prod · gate az --off
+```
+
+- **gcloud ที่ใช้ workload identity federation** (credential แบบ external account ที่ `credential_source.executable`
+  รันคำสั่งเพื่อเอา token): vswarm เขียนสำเนาไว้ที่ `~/.vswarm/gate/gcloud-<configuration>.json` โดยเปลี่ยนคำสั่งเป็น
+  `vswarm preflight --quiet --then <คำสั่งเดิม>` แล้วตั้ง `auth/credential_file_override` ของ configuration นั้นให้ชี้ไปที่สำเนา
+  (ค่าเดิมเก็บไว้ และ `--off` คืนให้) แบบเดียวกับ `credential_process` ของ aws: ทุกครั้งที่ gcloud ต้องการ token ใหม่
+  (ประมาณชั่วโมงละครั้ง) จาก shell, script หรือโปรแกรมไหนก็ตาม มันจะถาม vswarm ก่อน และถ้า BLOCK ก็ไม่ได้ token
+  configuration ที่ชี้ไปที่ไฟล์แบบนี้อยู่แล้วจะถูกรับมาใช้ได้เลยโดยไม่ต้องใส่ `--cred-file` สำเนาจะไม่มี `output_file`
+  เพราะ token ที่ cache ไว้ตรงนั้นจะถูกใช้โดยไม่ผ่านการตรวจ gcloud จะรันคำสั่งของ credential ก็ต่อเมื่อมี
+  `GOOGLE_EXTERNAL_ACCOUNT_ALLOW_EXECUTABLES=1` ใน environment ถ้าไม่มี vswarm จะเตือน
+  `credential_file_override` เป็นค่าที่ `google-github-actions/auth` ของ Google เองตั้ง (ผ่าน `CLOUDSDK_AUTH_CREDENTIAL_FILE_OVERRIDE`)
+  แต่ไม่ได้อยู่ในเอกสารอ้างอิงสาธารณะของ gcloud
+- **gcloud ที่ login ด้วยบัญชีผู้ใช้** (`gcloud auth login`) หรือใช้ service-account key ไม่มีคำสั่งให้รันเพื่อเอา token
+  จึงไม่มี hook: `gate gcloud <configuration หรือ project…>` จะเขียนตัวครอบคำสั่งด้านล่างแทน โดยเทียบกับ configuration
+  และ project ที่คำสั่งนั้นใช้ (`--project`, `--configuration`, `CLOUDSDK_CORE_PROJECT`, configuration ที่ active อยู่)
+- **az**: Azure CLI login ผ่าน MSAL และเก็บ token ไว้ใน `~/.azure` ไม่มีค่าตั้งใดที่ให้รันคำสั่งเพื่อเอา credential และ
+  `az account get-access-token` ก็แค่อ่านจาก cache ดังนั้น `gate az` จึงเป็นตัวครอบคำสั่ง โดยเทียบกับ subscription
+  (`--subscription` หรือค่า default ใน `azureProfile.json`) โปรแกรมที่เรียก `az` เอง (Terraform, `AzureCliCredential` ของ Azure SDK)
+  จะไม่ผ่านการตรวจ
+
+### คำสั่งที่ไม่มี hook ของ credential: gate cmd
+
+```bash
+vswarm gate cmd psql "*.prod.internal" "!canary.*"   # ตรวจก่อน psql ต่อไปยัง host เหล่านี้
+vswarm gate cmd telnet                               # ตรวจก่อน telnet ทุกครั้ง
+vswarm gate cmd                                      # ดูรายการ
+vswarm gate cmd --off psql
+```
+
+vswarm เขียน function ไว้ใน `~/.zshrc` และ `~/.bashrc` (บน Windows คือ profile ของ PowerShell) แบบเดียวกับ install guard
+function นี้อ่าน host ปลายทางตามรูปแบบของแต่ละเครื่องมือ: `telnet host port`, `ftp host` หรือ `ftp://…`, `nc host port`,
+`psql -h` / `postgres://…@host` / conninfo แบบ `host=` / `PGHOST`, `mysql -h` / `--host=`, `mongosh mongodb://…` / `--host`,
+`redis-cli -h` / `-u redis://…`, `sqlcmd -S` ส่วนเครื่องมือที่ vswarm ไม่รู้จัก จะดูว่ามี argument ไหนตรงกับ pattern
+เมื่อ host ตรง (หรือไม่ได้ใส่ pattern) จะรัน preflight แบบเงียบ: BLOCK หยุดคำสั่งพร้อมบอกว่าต้องแก้อะไร WARN พิมพ์บรรทัดเดียว
+vswarm ไม่อ่านรหัสผ่านจากบรรทัดคำสั่ง และปิด `user:password@` ในทุกข้อความที่พิมพ์ออกมา
+
+**นี่คือตัวเตือนที่ข้ามได้ ไม่ใช่ตัวควบคุม** `command psql …` (บน Windows คือ `psql.exe …`), script, shell อื่น หรือโปรแกรมใดก็ตาม
+เรียกตัวจริงได้โดยไม่ผ่านการตรวจ และตัวครอบมีผลเฉพาะใน shell ที่อ่านไฟล์ rc เท่านั้น ถ้ามี hook ของ credential
+(ssh กับ `vswarm agent`, aws, kubectl, gcloud แบบ external account) ให้ใช้ hook แทน `gate cmd` จึงไม่รับ ssh, aws, kubectl, gcloud และ az
 
 ## 7. ใบรับรอง ssh อายุสั้น: ca และ cert
 
@@ -511,6 +574,9 @@ vswarm trust           # fingerprint ของกุญแจที่เคร�
 | `vswarm watch on [--every นาที]` · `off` · `status` · `run` | ตรวจเบื้องหลังพร้อมแจ้งเตือน |
 | `vswarm preflight [--quiet] [--strict] [--fresh] [--max-age s] [--then cmd…]` | ด่าน PASS/WARN/BLOCK |
 | `vswarm gate ssh <pattern…> [--cert]` · `gate status` · `gate remove` | ด่านใน `~/.ssh/config` |
+| `vswarm gate cmd [<ชื่อ> [pattern…]]` · `gate cmd --off <ชื่อ>` | ตัวเตือนก่อนคำสั่งที่ไม่มี hook ของ credential |
+| `vswarm gate gcloud <configuration> [--cred-file f]` · `gate gcloud <pattern…> [--wrapper]` · `--off [ชื่อ]` · `status` | gcloud: คำสั่งขอ token รัน preflight ก่อน หรือใช้ตัวครอบ |
+| `vswarm gate az [subscription…]` · `--off` · `status` | az: ตัวครอบคำสั่ง |
 | `vswarm ca init [--sk] [--principal a,b] [--ttl 15m]` · `ca server <account>` · `ca status` | CA สำหรับใบรับรอง ssh |
 | `vswarm cert [--host h]` | ขอใบรับรองอายุสั้น (เฉพาะตอนผ่าน) |
 | `vswarm agent protect <กุญแจ> [--confirm] [--strict]` · `unprotect <กุญแจ>` · `restore <ไฟล์สำรอง>` | ย้ายกุญแจ ssh เข้าตู้เซฟของ agent และเอากลับ |
@@ -545,6 +611,7 @@ vswarm trust           # fingerprint ของกุญแจที่เคร�
 | `sec/*.seal`, `sec/keystore.json` | ตราประทับของไฟล์ข้างบน และที่เก็บกุญแจที่ใช้ประทับ |
 | `sec/incidents/<id>/` | หลักฐาน, ไฟล์ที่กักกัน, รายงาน |
 | `sec/osv-cache.json`, `sec/managed.json`, `sec/canaries.json` | cache ของ OSV, บล็อกที่ vswarm เขียน, canary ที่วางไว้ |
+| `sec/cmdgate.json`, `sec/cloudgate.json`, `gate/` | ด่านคำสั่ง, hook ของ gcloud (พร้อมค่าเดิมที่ถูกแทน), credential ของ gcloud ที่ผ่านด่านแล้ว |
 | `try/<id>/` | สำเนาโค้ด, home ปลอม, รายงานของ `try` |
 | `ca/` | CA และใบรับรอง |
 | `agent/agent.sock`, `agent/keys/` | socket ของ ssh agent และตู้เซฟเก็บกุญแจที่ protect ไว้ |

@@ -168,6 +168,20 @@ ssh-add --apple-use-keychain ~/.ssh/<key>        # macOS: keep it in the keychai
 aws configure sso                                # replace static AKIA keys with SSO
 ```
 
+**Plain-text protocols and stored database passwords** (every scan and `vswarm secrets`; values are never read out):
+
+| What | Severity | Why, and the safer way |
+| --- | --- | --- |
+| aliases, functions, ssh `ProxyCommand`/`LocalCommand`, `~/.telnetrc` that run telnet, ftp, rsh or rlogin to a host | low | the password and everything typed cross the network in clear text; use ssh/sftp, or reach the device through a jump host or VPN |
+| shell history with telnet/ftp/rsh/rlogin to a host | low, medium with a password in the command line | only counted and the hosts named; history lines are never stored or printed |
+| `~/.rhosts` | medium | rsh/rlogin logins without a password, trusted by host name |
+| `~/.pgpass` | info when 0600 with local hosts only, low with remote hosts, medium when others can read it | only the host field is read |
+| `~/.my.cnf` with a password, `~/.mylogin.cnf` | low (medium when others can read `.my.cnf`) | `.mylogin.cnf` is obfuscated, not encrypted |
+| MongoDB URIs with a password in `~/.mongoshrc.js`, Redis passwords in `~/.config/redis` | low | let the client ask, or use short-lived credentials |
+| DBeaver `credentials-config.json`, a JetBrains (DataGrip) KeePass file with its key beside it | low | DBeaver's key is the same in every copy; use the OS keychain |
+
+Shortcuts to `localhost` and vswarm's own command gate (below) are not reported.
+
 ## 5. AI agents and MCP: agents
 
 Coding agents run code with your access, and their settings decide what they may start on their own. A malicious
@@ -361,6 +375,58 @@ users:
       command: vswarm
       args: [preflight, --quiet, --then, kubelogin, get-token, --server-id, "<id>"]
 ```
+
+### gcloud and az
+
+vswarm gates the **credential** where the tool lets a command produce it, and falls back to a shell wrapper only where
+it does not.
+
+```bash
+vswarm gate gcloud prod --cred-file ~/wif-prod.json   # hook: the token command runs preflight first
+vswarm gate gcloud "shop-*"                          # no hook for this sign-in: the command wrapper
+vswarm gate az "Prod-*"                              # Azure CLI: always the wrapper
+vswarm gate gcloud status · gate gcloud --off prod · gate az --off
+```
+
+- **gcloud with workload identity federation** (an external-account credential whose `credential_source.executable`
+  runs a command for the token): vswarm writes a copy in `~/.vswarm/gate/gcloud-<configuration>.json` whose command
+  is `vswarm preflight --quiet --then <your command>`, and sets `auth/credential_file_override` in that gcloud
+  configuration to it (the original is kept and restored by `--off`). This is the analogue of aws
+  `credential_process`: gcloud asks vswarm whenever it needs a new token, about hourly, from any shell, script or
+  program, and a BLOCK means no token. A configuration that already points at such a file is adopted without
+  `--cred-file`. The copy has no `output_file`, which would hand out a cached token without the check. gcloud runs a
+  credential's command only with `GOOGLE_EXTERNAL_ACCOUNT_ALLOW_EXECUTABLES=1` in its environment; vswarm warns when it
+  is not set. `credential_file_override` is the property Google's own `google-github-actions/auth` sets (through
+  `CLOUDSDK_AUTH_CREDENTIAL_FILE_OVERRIDE`), but it is not in the public gcloud reference.
+- **gcloud user sign-ins** (`gcloud auth login`) and service-account keys run no command for a token, so there is no
+  hook: `gate gcloud <configuration or project…>` writes the command wrapper below, matching the configuration and
+  project a command acts on (`--project`, `--configuration`, `CLOUDSDK_CORE_PROJECT`, the active configuration).
+- **az**: the Azure CLI signs in through MSAL and keeps its tokens in `~/.azure`; it has no setting that runs a command
+  for a credential, and `az account get-access-token` only reads the cache. `gate az` is therefore the wrapper, matching
+  the subscription (`--subscription`, else the default in `azureProfile.json`). Programs that call `az` themselves
+  (Terraform, the Azure SDK's `AzureCliCredential`) are not checked.
+
+### Commands with no credential hook: gate cmd
+
+```bash
+vswarm gate cmd psql "*.prod.internal" "!canary.*"   # check before psql connects to these hosts
+vswarm gate cmd telnet                               # check before every telnet
+vswarm gate cmd                                      # list
+vswarm gate cmd --off psql
+```
+
+A function in `~/.zshrc` and `~/.bashrc` (on Windows, in the PowerShell profiles), written like the install guard's.
+It reads the target host the way each tool does: `telnet host port`, `ftp host` or `ftp://…`, `nc host port`,
+`psql -h` / `postgres://…@host` / `host=` conninfo / `PGHOST`, `mysql -h` / `--host=`, `mongosh mongodb://…` /
+`--host`, `redis-cli -h` / `-u redis://…`, `sqlcmd -S`. For a tool vswarm does not know, any argument matching a
+pattern counts. When a host matches (or no patterns were given) it runs the quiet preflight: BLOCK stops the command
+with what to fix, WARN prints one line. Passwords on the command line are never read, and any `user:password@` in
+what vswarm prints is masked.
+
+**This is a reminder you can bypass, not a control.** `command psql …` (on Windows `psql.exe …`), a script, another
+shell or any other program runs the real binary unchecked, and the wrapper only exists in shells that read the rc file.
+Where a credential hook exists (ssh with `vswarm agent`, aws, kubectl, gcloud with an external account), use it
+instead; `gate cmd` refuses ssh, aws, kubectl, gcloud and az for that reason.
 
 ## 7. Short-lived SSH certificates: ca and cert
 
@@ -625,6 +691,9 @@ Maintainers: the release steps are in [SECURITY.md](../SECURITY.md#for-the-maint
 | `vswarm watch on [--every min]` · `off` · `status` · `run` | background check with notifications |
 | `vswarm preflight [--quiet] [--strict] [--fresh] [--max-age s] [--then cmd…]` | the PASS/WARN/BLOCK gate |
 | `vswarm gate ssh <pattern…> [--cert]` · `gate status` · `gate remove` | the gate in `~/.ssh/config` |
+| `vswarm gate cmd [<name> [pattern…]]` · `gate cmd --off <name>` | a reminder before commands with no credential hook |
+| `vswarm gate gcloud <configuration> [--cred-file f]` · `gate gcloud <pattern…> [--wrapper]` · `--off [name]` · `status` | gcloud: the token command runs preflight, or the wrapper |
+| `vswarm gate az [subscription…]` · `--off` · `status` | az: the wrapper |
 | `vswarm ca init [--sk] [--principal a,b] [--ttl 15m]` · `ca server <account>` · `ca status` | CA for SSH certificates |
 | `vswarm cert [--host h]` | a short-lived certificate, only when preflight passes |
 | `vswarm agent protect <key> [--confirm] [--strict]` · `unprotect <key>` · `restore <backup>` | move an ssh key into the agent's vault, and back |
@@ -659,6 +728,7 @@ Everything lives in `~/.vswarm`, readable by you only:
 | `sec/*.seal`, `sec/keystore.json` | seals of the files above, and which key store holds their key |
 | `sec/incidents/<id>/` | evidence, quarantine, reports |
 | `sec/osv-cache.json`, `sec/managed.json`, `sec/canaries.json` | OSV answers, vswarm's own blocks, planted canaries |
+| `sec/cmdgate.json`, `sec/cloudgate.json`, `gate/` | command gates, gcloud hooks (with the value they replaced), gated gcloud credentials |
 | `try/<id>/` | copies, fake homes and reports of `try` |
 | `ca/` | the CA and certificates |
 | `agent/agent.sock`, `agent/keys/` | the ssh agent's socket and its vault of protected keys |
