@@ -48,7 +48,7 @@ curl -fsSL https://raw.githubusercontent.com/kridsadar357/vswarm/main/install.sh
 ```
 
 ตัวติดตั้งจะ:
-- ดาวน์โหลด vswarm ไปไว้ที่ `~/.vswarm/app` และตรวจลายเซ็นของ release เมื่อมี release ที่เซ็นแล้ว ตอนนี้ยังไม่มี จึงติดตั้งจาก `main` และแจ้งให้รู้ (ดู[ข้อ 14](#14-อัปเดตอย่างปลอดภัย-update-และ-trust))
+- ดาวน์โหลด vswarm ไปไว้ที่ `~/.vswarm/app` และติดตั้ง release ล่าสุดหลังตรวจลายเซ็นแล้ว (ดู[ข้อ 14](#14-อัปเดตอย่างปลอดภัย-update-และ-trust))
 - ใส่คำสั่ง `vswarm` ใน PATH และติดตั้ง tab completion ของ zsh/bash
 - ถามว่าจะบันทึก baseline เลยไหม
 
@@ -447,20 +447,18 @@ vswarm ไม่นับ canary ของคุณเองเป็นคว�
 
 ## 14. อัปเดตอย่างปลอดภัย: update และ trust
 
-**สถานะตอนนี้: ระบบตรวจลายเซ็นทำเสร็จแล้ว แต่ยังไม่ได้เปิดใช้จริง** ผู้ดูแลยังไม่ได้ประกาศกุญแจ release จึงยังไม่มี release ที่เซ็น `vswarm update` จึงตาม `main` ด้วย `git pull` และขึ้นข้อความว่า "this repository has no signed releases yet" ตัวติดตั้งก็ติดตั้งจาก `main` แบบเดียวกัน ระหว่างนี้การอัปเดตปลอดภัยเท่ากับ repo บน GitHub และบัญชีที่ดูแลมันเท่านั้น
-
-เมื่อผู้ดูแลประกาศกุญแจและเซ็น release แล้ว `vswarm update` จะย้ายไปใช้ release tag ใหม่ **เฉพาะเมื่อเซ็นด้วยกุญแจ release ที่เครื่องคุณจำไว้** และไม่ยอมถอยกลับไปเวอร์ชันเก่า release แรกที่เซ็นแล้วที่คุณติดตั้งหรืออัปเดตไป จะเป็นตัวที่เครื่องจำกุญแจไว้ (trust on first use) หลังจากนั้นถ้า repo หรือบัญชี GitHub ของผู้ดูแลถูกยึด เครื่องที่ลงไว้จะไม่รับ release ปลอม
+ตั้งแต่ v2.6.0 ทุก release มีลายเซ็น `vswarm update` จะย้ายไปใช้ release tag ใหม่ **เฉพาะเมื่อเซ็นด้วยกุญแจ release ที่เครื่องคุณจำไว้** และไม่ยอมถอยกลับไปเวอร์ชันเก่า release แรกที่เซ็นแล้วที่คุณติดตั้งหรืออัปเดตไป จะเป็นตัวที่เครื่องจำกุญแจไว้ (trust on first use) หลังจากนั้นถ้า repo หรือบัญชี GitHub ของผู้ดูแลถูกยึด เครื่องที่ลงไว้จะไม่รับ release ปลอม ส่วน tag เก่าที่ไม่ได้เซ็นจะถูกข้ามและแจ้งชื่อให้รู้
 
 ```bash
-vswarm update          # ตอนนี้: main · เมื่อมี release ที่เซ็นแล้ว: release ล่าสุดที่เซ็นถูกต้อง
-vswarm trust           # กุญแจที่เครื่องนี้ยอมรับ (fingerprint) ยังไม่มีจนกว่าจะมี release แรกที่เซ็น
+vswarm update          # release ล่าสุดที่เซ็นถูกต้อง
+vswarm trust           # fingerprint ของกุญแจที่เครื่องนี้ยอมรับ: SHA256:9WDeb6hMDIq0ry94Hs8t+qW4EegPT0uRkQ0v0w4jpng
 ```
 
 ![vswarm trust](img/trust.png)
 
 เทียบ fingerprint ที่ `vswarm trust` แสดงกับที่ประกาศใน [SECURITY.md](../SECURITY.md) และหน้า release จุดอ่อนคือการติดตั้งครั้งแรก: ถ้า repo ถูกยึดตั้งแต่ก่อนคุณติดตั้ง ผู้โจมตีใส่กุญแจของตัวเองได้ ถ้าเรื่องนี้สำคัญ ให้เทียบ fingerprint ผ่านช่องทางอื่นด้วย
 
-สำหรับนักพัฒนา: `vswarm update --unsigned` ตาม branch main โดยไม่ตรวจลายเซ็น (ใช้ได้แม้หลังเปิดการเซ็นแล้ว) · ผู้ดูแล: ขั้นตอนเปิดการเซ็น release อยู่ใน [SECURITY.md](../SECURITY.md#for-the-maintainer-switching-signing-on)
+สำหรับนักพัฒนา: `vswarm update --unsigned` ตาม branch main โดยไม่ตรวจลายเซ็น (ใช้ได้แม้หลังเปิดการเซ็นแล้ว) · ผู้ดูแล: ขั้นตอนออก release อยู่ใน [SECURITY.md](../SECURITY.md#for-the-maintainer-releasing)
 
 ## 15. รายการคำสั่งทั้งหมด
 
@@ -488,7 +486,7 @@ vswarm trust           # กุญแจที่เครื่องนี้�
 | `vswarm team join <git url> [--fingerprint fp]` · `sync` · `status` · `leave` · `sign <file> --key k` | นโยบายของทีมที่เซ็นแล้ว ([team.md](team.md)) |
 | `vswarm canary plant aws\|dns\|env` · `list` · `remove <id\|all>` | credential ล่อ |
 | `vswarm selftest` | วัดอัตราการจับ |
-| `vswarm update [--unsigned]` · `vswarm trust [pin]` | อัปเดต (ตรวจลายเซ็นเมื่อมี release ที่เซ็นแล้ว) |
+| `vswarm update [--unsigned]` · `vswarm trust [pin]` | อัปเดตไป release ล่าสุดที่เซ็นถูกต้อง |
 | `vswarm doctor` · `install` · `uninstall [--purge]` · `completions zsh\|bash` · `version` | ติดตั้งและดูแล |
 
 ## 16. ไฟล์ ค่าตั้ง และความเป็นส่วนตัว

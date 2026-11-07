@@ -245,18 +245,17 @@ detected 20/20 (100%) · false alarms on the clean parts: 0
 That number covers the cases in [`src/sec/selftest.ts`](src/sec/selftest.ts), not every attack. Adding a case for
 a technique you have seen is the most useful contribution you can make.
 
-## Updates: signing is built, not switched on yet
+## Updates are signed
 
-The signature check is in the code and enforced as soon as there is a key to check against, but **no release key has
-been published yet**: [`trust/allowed_signers`](trust/allowed_signers) lists none and the existing tags are unsigned.
-So today the installer installs `main` as it is, and `vswarm update` follows `main` with `git pull`; both say so.
-That is as safe as the GitHub account behind this repository, no more.
+Releases are git tags signed with the maintainer's SSH key, from v2.6.0 on. The installer checks the newest tag's
+signature before installing it, `vswarm install` pins the key, and `vswarm update` from then on moves only to tags
+signed by a pinned key, never to an older version: a takeover of the repository or of the maintainer's account cannot
+ship code to installed copies without the signing key. `vswarm trust` shows what is pinned; compare it with the
+fingerprint in [SECURITY.md](SECURITY.md):
 
-Once the maintainer publishes a key and signs a release, the installer checks the newest tag's signature,
-`vswarm install` pins the key, and `vswarm update` from then on moves only to tags signed by a pinned key, never to an
-older version: a takeover of the repository or of the maintainer's account cannot ship code to installed copies
-without the signing key. `vswarm trust` shows what is pinned; [SECURITY.md](SECURITY.md) has the steps and, once there
-is one, the fingerprint.
+```
+SHA256:9WDeb6hMDIq0ry94Hs8t+qW4EegPT0uRkQ0v0w4jpng
+```
 
 The installer itself does not pipe a script from the network into a shell for Bun: it uses the Bun on your PATH, or
 downloads one pinned Bun release from GitHub and installs it only if its SHA-256 matches the value in the script.

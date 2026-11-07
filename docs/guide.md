@@ -57,8 +57,8 @@ curl -fsSL https://raw.githubusercontent.com/kridsadar357/vswarm/main/install.sh
 ```
 
 The installer downloads vswarm into `~/.vswarm/app`, puts `vswarm` on your PATH with zsh/bash completions, and
-offers to record a baseline. It checks the release signature once there are signed releases; today there are none, so
-it installs `main` and says so (see [§14](#14-safe-updates-update-and-trust)).
+offers to record a baseline. It installs the newest release after checking its signature (see
+[§14](#14-safe-updates-update-and-trust)).
 
 On Linux, `vswarm try` also needs `sudo apt install bubblewrap strace` (dnf / pacman have the same packages). Installing
 Bun needs `unzip`. Windows: a preview that checks the machine, see [Windows (preview)](#windows-preview).
@@ -514,19 +514,14 @@ a technique vswarm misses is the most useful contribution you can make.
 
 ## 14. Safe updates: update and trust
 
-**Status today: signing is built but not switched on.** No release key has been published yet, so there are no
-signed releases: `vswarm update` follows `main` with `git pull` and says "this repository has no signed releases yet",
-and the installer installs `main` the same way. Until then an update is as trustworthy as the GitHub repository and
-the account behind it.
-
-What happens once the maintainer publishes a key and signs a release: `vswarm update` moves to a new release tag
-**only if it is signed by the release key pinned on your machine**, and never to an older version. The first signed
-release you install or update to pins its key (trust on first use). After that, if the repository or the
-maintainer's account is taken over, installed copies refuse the attacker's release.
+Releases are signed from v2.6.0 on. `vswarm update` moves to a new release tag **only if it is signed by the release
+key pinned on your machine**, and never to an older version. The first signed release you install or update to pins
+its key (trust on first use). After that, if the repository or the maintainer's account is taken over, installed
+copies refuse the attacker's release. Older unsigned tags are skipped and named.
 
 ```bash
-vswarm update          # main today; the newest correctly signed release once there are signed releases
-vswarm trust           # the pinned key's fingerprint (none until the first signed release)
+vswarm update          # the newest correctly signed release
+vswarm trust           # the pinned key's fingerprint: SHA256:9WDeb6hMDIq0ry94Hs8t+qW4EegPT0uRkQ0v0w4jpng
 ```
 
 ![vswarm trust](img/trust.png)
@@ -536,7 +531,7 @@ first install: whoever controls the repository before it can list their own key.
 that matters to you.
 
 For development: `vswarm update --unsigned` follows `main` without signature checks, also after signing is on.
-Maintainers: the steps that switch signing on are in [SECURITY.md](../SECURITY.md#for-the-maintainer-switching-signing-on).
+Maintainers: the release steps are in [SECURITY.md](../SECURITY.md#for-the-maintainer-releasing).
 
 ## 15. Command reference
 
@@ -564,7 +559,7 @@ Maintainers: the steps that switch signing on are in [SECURITY.md](../SECURITY.m
 | `vswarm team join <git url> [--fingerprint fp]` · `sync` · `status` · `leave` · `sign <file> --key k` | a signed team policy ([team.md](team.md)) |
 | `vswarm canary plant aws\|dns\|env` · `list` · `remove <id\|all>` | decoy credentials |
 | `vswarm selftest` | measured detection rate |
-| `vswarm update [--unsigned]` · `vswarm trust [pin]` | updates (signature-checked once signed releases exist) |
+| `vswarm update [--unsigned]` · `vswarm trust [pin]` | updates to the newest correctly signed release |
 | `vswarm doctor` · `install` · `uninstall [--purge]` · `completions zsh\|bash` · `version` | set-up |
 
 ## 16. Files, settings and privacy
@@ -644,7 +639,7 @@ reuses no cached verdict and still honours a lock file; unlock the keychain or k
 Checks a Windows 10/11 machine and watches it in the background; it never changes what it finds. Needs git and
 Windows PowerShell 5.1 or newer, no administrator. The installer uses your Bun, or installs a pinned Bun release after
 checking its SHA-256 (x64, x64 without AVX2, ARM64), puts vswarm in
-`~\.vswarm\app` (the newest signed release once there is one, after checking its signature) and `vswarm.cmd` on your
+`~\.vswarm\app` (the newest signed release, after checking its signature) and `vswarm.cmd` on your
 user PATH:
 
 ```powershell

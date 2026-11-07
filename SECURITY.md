@@ -15,14 +15,14 @@ Include what an attacker could do, the steps to reproduce, and the version (`vsw
 You will get an answer within 7 days. Fixes are released before details are published, and reporters are credited
 unless they prefer not to be.
 
-## Signed releases: built, not active yet
+## Signed releases
 
-**Status today:** no release key is published. [`trust/allowed_signers`](trust/allowed_signers) holds only comments
-and the existing tags (v2.1.0, v2.2.0) are unsigned. The installer therefore installs `main` as it is, and
-`vswarm update` follows `main` with `git pull`; both print that they did so without a signature check. Until a key is
-published, an installed copy is exactly as trustworthy as this GitHub repository and the account that controls it.
+**Status:** releases are signed from v2.6.0 on. [`trust/allowed_signers`](trust/allowed_signers) lists the release
+key. The older tags (v2.1.0, v2.2.0) are unsigned; the installer and `vswarm update` skip them and name them. A copy
+installed before v2.6.0 followed `main` without a check; `vswarm update` takes it to the newest signed release and
+pins the key from then on.
 
-**What is built and enforced once a key exists:** releases are git tags signed with the maintainer's SSH key. The
+**What is checked:** releases are git tags signed with the maintainer's SSH key. The
 installer checks the newest tag's signature against the key that tag lists before installing it, and `vswarm install`
 pins that key on your machine (`~/.vswarm/trust/allowed_signers`). From then on `vswarm update` moves only to tags
 signed by a pinned key and never to an older version; tags that do not verify are skipped and named. A takeover of the
@@ -31,7 +31,7 @@ repository or of the maintainer's GitHub account cannot then ship code to instal
 Check the pinned key with `vswarm trust` and compare it with the fingerprint published here and on the release page:
 
 ```
-release key: none published yet
+release key: SHA256:9WDeb6hMDIq0ry94Hs8t+qW4EegPT0uRkQ0v0w4jpng (ED25519), principal kridsadar357@gmail.com
 ```
 
 Trust on first use is the weak point: an attacker in control of the repository before your first signed install
@@ -41,7 +41,7 @@ The installers do not run a script from the network for Bun: they use the Bun on
 Bun release from GitHub and unpack it only when its SHA-256 matches the value written in `install.sh` /
 `install.ps1` (taken from that release's `SHASUMS256.txt`).
 
-### For the maintainer: switching signing on
+### For the maintainer: releasing
 
 1. Make the key on your own machine, with a passphrase or on a hardware key; it never goes anywhere else:
    `ssh-keygen -t ed25519 -f ~/.ssh/vswarm_release` (or `-t ed25519-sk` for a FIDO key).
