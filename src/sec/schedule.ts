@@ -238,9 +238,11 @@ async function systemctl(...args: string[]): Promise<string | undefined> {
   }
 }
 
-export async function watchOn(launcher: string, everyMinutes = 60): Promise<{ done: string[]; notes: string[] }> {
+export async function watchOn(launcher: string, everyMinutes = 60): Promise<{ done: string[]; notes: string[]; info: string[] }> {
   const done: string[] = [];
   const notes: string[] = [];
+  // How it works here, not something wrong.
+  const info: string[] = [];
   for (const [path, text] of Object.entries(jobFiles(launcher, everyMinutes))) {
     mkdirSync(dirname(path), { recursive: true });
     writeFileSync(path, text);
@@ -254,7 +256,7 @@ export async function watchOn(launcher: string, everyMinutes = 60): Promise<{ do
     const r = await ps(`Register-ScheduledTask ${TASK_ARGS} -Xml ([IO.File]::ReadAllText($env:VSWARM_TASK_XML)) -Force | Out-Null`, { VSWARM_TASK_XML: taskXml() });
     if (r.code !== 0) throw new Error(`could not register the scheduled task: ${r.err.trim().split("\n")[0] || `exit ${r.code}`}`);
     done.push(`Task Scheduler ${WIN_TASK.path}${WIN_TASK.name}`);
-    notes.push("Windows checks on the schedule only: Task Scheduler cannot start a task when a file changes (use --every for more often)");
+    info.push("Windows checks on the schedule only: Task Scheduler cannot start a task when a file changes (use --every for more often)");
   } else if (mac()) {
     const uid = process.getuid?.() ?? 501;
     for (const label of [LABEL, PATHS_LABEL]) {
@@ -272,7 +274,7 @@ export async function watchOn(launcher: string, everyMinutes = 60): Promise<{ do
       if (!timer) notes.push(`real-time watch is off (${path}); the timer checks every ${everyMinutes} minutes`);
     }
   }
-  return { done, notes };
+  return { done, notes, info };
 }
 
 export async function watchOff(): Promise<string[]> {
@@ -469,6 +471,7 @@ export async function watchCommand(action: string, opt: { every: number }) {
     const r = await watchOn(launcher, every);
     for (const f of r.done) line(`${c.green("✔")} ${f.replace(homedir(), "~")}`);
     for (const n of r.notes) line(`  ${c.amber("!")} ${n}`);
+    for (const n of r.info) line(c.dim(`  · ${n}`));
     const realtime = realtimeInstalled();
     line(`  ${c.dim(`checks every ${every} minutes${realtime ? `, and within seconds when one of ${watchPaths(homedir()).length} watched paths changes` : ""}; notifies you about anything new · vswarm watch off to stop`)}`);
     await notify("vswarm watch is on", realtime ? `Checked every ${every} minutes, and when a login job, shell file, ssh or agent config changes.` : `This machine is checked every ${every} minutes.`);
