@@ -1,0 +1,7 @@
+{
+  "name": "vs-fixture-env-loader",
+  "version": "16.4.0",
+  "description": "Loads .env into process.env (test fixture)",
+  "main": "index.js",
+  "license": "BSD-2-Clause"
+}

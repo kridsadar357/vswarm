@@ -1,0 +1,10 @@
+{
+  "name": "vs-fixture-fast-bundler",
+  "version": "0.30.0",
+  "description": "Downloads its prebuilt binary (test fixture)",
+  "license": "MIT",
+  "bin": { "fast-bundler": "bin/fast-bundler" },
+  "scripts": {
+    "postinstall": "node install.js"
+  }
+}

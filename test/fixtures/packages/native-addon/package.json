@@ -1,0 +1,11 @@
+{
+  "name": "vs-fixture-hash-native",
+  "version": "5.1.0",
+  "description": "A native hashing addon (test fixture)",
+  "main": "index.js",
+  "license": "MIT",
+  "gypfile": true,
+  "scripts": {
+    "install": "node-gyp-build || node-gyp rebuild"
+  }
+}

@@ -70,6 +70,12 @@ What it does:
   seal still blocks, and an append-only incident log with chained seals keeps an incident open even when the lock
   file is deleted. This catches naive tampering and generic "set verdict to pass" tricks. It does **not** stop
   malware that reads the key the way vswarm does: any program running as you can.
+- **Reads packages before they install.** The install guard downloads the archive a package manager would install,
+  checks it against the registry's checksum, and reads it without running it (its own unpacker, with size, file-count,
+  path and time limits). It looks for install-time code that decodes and runs hidden code, reads credentials, reaches
+  the network or persists, and for what is new since the release before (an account-takeover release). This is
+  pattern reading: well-hidden code can get past it, and a package that only misbehaves later is not seen. Install
+  scripts run only when you opt in, and then only in the `try` sandbox.
 - **Is not the enforcement point** for production. The decision that cannot be bypassed from the laptop belongs on
   the server: short-lived certificates, a bastion or SSH CA that asks for a fresh signed report, device trust in your
   identity provider. See [docs/server-side.md](docs/server-side.md).
@@ -80,7 +86,9 @@ What it does:
   of reading the sealing key the way vswarm itself does.
 - Ways to make `vswarm update` or the installer accept a release that is not signed by a pinned key, or an older one.
 - Ways to make vswarm run code, change files, or send data it should not (it should only send package names and
-  versions to api.osv.dev).
+  versions to api.osv.dev and the registries, and download package archives from the registries).
+- Archives that make the package reader write outside its folder, run anything, or exhaust memory or time past its
+  limits.
 - Credential values ending up in output, reports, or files under `~/.vswarm`.
 - Weaknesses in `vswarm respond` that could destroy evidence or damage the machine beyond what the user approved.
 
