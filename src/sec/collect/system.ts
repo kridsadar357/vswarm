@@ -301,6 +301,9 @@ function windowsLocation(path: string, home: string): string | undefined {
   if (dl) return `runs from the ${dl[1] === "downloads" ? "Downloads" : "Desktop"} folder`;
   if (inHome) {
     const rel = p.slice(h.length + 1).replace(/\\/g, "/");
+    // The same folders of a profile that is not straight under C:\Users (another drive, a moved profile, a test's home).
+    const own = /^(?:onedrive[^/]*\/)?(downloads|desktop)\//.exec(rel);
+    if (own) return `runs from the ${own[1] === "downloads" ? "Downloads" : "Desktop"} folder`;
     const top = path.replace(/\//g, "\\").slice(h.length + 1).split("\\")[0];
     if (rel.startsWith(".") && !KNOWN_HIDDEN.test(rel)) return `runs from a hidden folder (~\\${top})`;
   }

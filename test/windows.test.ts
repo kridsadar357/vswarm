@@ -677,3 +677,9 @@ describe("windows: a snapshot judged against its own Windows home (the selftest 
     expect(winLive({ ...snap(), home: undefined }, posixHome)).toEqual([]);
   });
 });
+
+test("windows: Downloads and Desktop of a profile that is not straight under C:\\Users still count", () => {
+  expect(suspiciousLocation("D:\\Profiles\\nok\\Downloads\\setup.exe", "D:\\Profiles\\nok")).toBe("runs from the Downloads folder");
+  expect(suspiciousLocation("D:\\Profiles\\nok\\OneDrive - Acme\\Desktop\\x.exe", "D:\\Profiles\\nok")).toBe("runs from the Desktop folder");
+  expect(suspiciousLocation("D:\\Profiles\\nok\\tools\\x.exe", "D:\\Profiles\\nok")).toBeUndefined();
+});
