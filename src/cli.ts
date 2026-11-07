@@ -69,7 +69,7 @@ function noMoreOptions(cmd: string, args: string[], known: string[] = []) {
 }
 
 /** Commands that need a Unix shell, ssh config, launchd/systemd or a sandbox; Windows gets them in a later phase. */
-const NOT_ON_WINDOWS = new Set(["try", "ca", "cert", "canary", "shot"]);
+const NOT_ON_WINDOWS = new Set(["try", "ca", "cert", "canary", "shot", "agent"]);
 
 function usage() {
   banner("check your machine before it touches production");
@@ -89,6 +89,7 @@ function usage() {
   row("vswarm ca init · ca server <account>", "a CA for short-lived SSH certificates");
   row("vswarm canary plant aws|dns|env · list", "decoy credentials that alert you when used");
   row('vswarm cert · gate ssh --cert "prod-*"', "15-minute certificate, only when preflight passes");
+  row("vswarm agent protect <key> · agent on", "an ssh agent that holds the key and signs only when this machine passes");
   row("vswarm accept <id…> | --all | --list", "mark reviewed findings as expected");
   console.log(`\n  ${c.bold("before you install")}`);
   row("vswarm guard on [--ignore-scripts] [--sandbox] [--strict]", "npm, pip, brew … ask vswarm before installing");
@@ -113,7 +114,7 @@ function usage() {
   console.log(`\n  ${c.bold("gates for other tools")}`);
   console.log(c.dim("    ~/.aws/config     credential_process = vswarm preflight --quiet --then aws configure export-credentials --profile prod-sso --format process"));
   console.log(c.dim("    kubeconfig user   exec: { command: vswarm, args: [preflight, --quiet, --then, kubelogin, get-token, …] }"));
-  if (process.platform === "win32") console.log(c.amber("\n  Windows preview: try and agents --inspect need the sandbox, and ca, cert, canary and shot are not here yet;\n  use those inside WSL. Everything else works."));
+  if (process.platform === "win32") console.log(c.amber("\n  Windows preview: try and agents --inspect need the sandbox, and ca, cert, agent, canary and shot are not here yet;\n  use those inside WSL. Everything else works."));
   console.log(c.dim("\n  Local-first, no telemetry. Only package names and versions go to api.osv.dev for the known-malicious check (--offline skips it).\n"));
 }
 
@@ -367,6 +368,17 @@ async function main() {
       const opt = { principals: flag(args, "--principal")?.split(","), ttl: flag(args, "--ttl"), sk: has(args, "--sk"), noPassphrase: has(args, "--no-passphrase") };
       noMoreOptions(cmd, args);
       return caCommand(action, args, opt);
+    }
+
+    case "agent": {
+      // The ssh agent that signs with protected keys only while this machine passes (src/sec/agent.ts).
+      const { agentCommand } = await import("./sec/agent");
+      const action = args.shift() ?? "status";
+      const life = flag(args, "--life");
+      const opt = { confirm: has(args, "--confirm"), strict: has(args, "--strict"), global: has(args, "--global"), upstream: flag(args, "--upstream"), life: life === undefined ? undefined : Number(life), ask };
+      if (opt.life !== undefined && !(Number.isInteger(opt.life) && opt.life > 0)) throw new Error("--life takes a whole number of seconds");
+      noMoreOptions(cmd, args);
+      return agentCommand(action, args, opt);
     }
 
     case "canary": {

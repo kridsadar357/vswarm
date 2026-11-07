@@ -4,6 +4,7 @@
 //   accepted.json   findings you reviewed and accepted
 //   lock            present while an incident is open; preflight blocks until `vswarm unlock`
 //   incidents.log   every lock and unlock, each entry sealed and chained to the one before
+//   audit.log       every signature `vswarm agent` made or refused, sealed and chained the same way
 //   incidents/<id>/ evidence, quarantine and reports of one incident
 //   osv-cache.json  answers from the known-malicious database
 //   *.seal          the seal of the file of the same name (see seal.ts); keystore.json says where the key is
@@ -28,6 +29,7 @@ export const files = {
   accepted: () => join(SEC(), "accepted.json"),
   lock: () => join(SEC(), "lock"),
   log: () => join(SEC(), "incidents.log"),
+  audit: () => join(SEC(), "audit.log"),
   incidents: () => join(SEC(), "incidents"),
   osv: () => join(SEC(), "osv-cache.json"),
   managed: () => join(SEC(), "managed.json"),
@@ -220,17 +222,25 @@ export interface Lock {
 export interface LogEntry {
   n: number;
   at: number;
-  event: "lock" | "unlock" | "reset";
+  event: "lock" | "unlock" | "reset" | "sign" | "refuse";
   incident?: string;
   reason?: string;
   prev: string;
   mac: string;
 }
 
+/** A chained log and the name its last entry is kept under in the key store. */
+interface Chain {
+  file: string;
+  head: string;
+}
+const INCIDENTS = (): Chain => ({ file: files.log(), head: "log-head" });
+const AUDIT = (): Chain => ({ file: files.audit(), head: "audit-head" });
+
 /** The incident log, and why it cannot be trusted when it cannot (changed, cut short, deleted). */
-export async function readLog(k?: KeyState): Promise<{ entries: LogEntry[]; why?: string }> {
+export async function readLog(k?: KeyState, chain = INCIDENTS()): Promise<{ entries: LogEntry[]; why?: string }> {
   k ??= await stateKey();
-  const text = existsSync(files.log()) ? readText(files.log(), 64_000_000) : "";
+  const text = existsSync(chain.file) ? readText(chain.file, 64_000_000) : "";
   if (text === undefined) return { entries: [], why: "cannot be read" };
   const entries: LogEntry[] = [];
   let why: string | undefined;
@@ -252,7 +262,7 @@ export async function readLog(k?: KeyState): Promise<{ entries: LogEntry[]; why?
   // The last entry is also kept in the key store, so a log cut short or deleted does not look like a shorter, valid one.
   let head: string | undefined;
   try {
-    head = await k.store.get("log-head");
+    head = await k.store.get(chain.head);
   } catch {}
   const last = entries.at(-1);
   if (!why && head && head !== `${last?.n}:${last?.mac}`) why = last ? "was cut short or rewritten" : "was deleted";
@@ -260,15 +270,28 @@ export async function readLog(k?: KeyState): Promise<{ entries: LogEntry[]; why?
   return { entries, why };
 }
 
-async function appendEntry(k: KeyState, event: LogEntry["event"], incident?: string, reason?: string) {
-  const { entries } = await readLog(k);
+async function appendEntry(k: KeyState, event: LogEntry["event"], incident?: string, reason?: string, chain = INCIDENTS()) {
+  const { entries } = await readLog(k, chain);
   const prevMac = entries.at(-1)?.mac ?? "";
   const e: Omit<LogEntry, "mac"> = { n: entries.length + 1, at: Date.now(), event, incident, reason: reason?.slice(0, 300), prev: typeof prevMac === "string" ? prevMac : "" };
   const mac = k.key ? entryMac(k.key, e) : "";
   ensureSec();
-  appendFileSync(files.log(), JSON.stringify({ ...e, mac }) + "\n", { mode: 0o600 });
-  if (k.key) await k.store.set("log-head", `${e.n}:${mac}`);
+  appendFileSync(chain.file, JSON.stringify({ ...e, mac }) + "\n", { mode: 0o600 });
+  if (k.key) await k.store.set(chain.head, `${e.n}:${mac}`);
 }
+
+// One append at a time: two signatures at once must not both take the same place in the chain.
+let auditQueue: Promise<unknown> = Promise.resolve();
+
+/** One line in the audit log of `vswarm agent`: a signature made or refused, and on what grounds. */
+export function appendAudit(event: "sign" | "refuse", key: string, reason: string): Promise<void> {
+  const next = auditQueue.then(async () => appendEntry(await stateKey(), event, key, reason, AUDIT()));
+  auditQueue = next.catch(() => {});
+  return next;
+}
+
+/** The audit log, and why it cannot be trusted when it cannot. */
+export const readAudit = async () => readLog(await stateKey(), AUDIT());
 
 export interface LockState {
   lock?: Lock;
@@ -333,6 +356,7 @@ export async function forgetKey() {
   const s = keyStore();
   await s.remove("state-key").catch(() => {});
   await s.remove("log-head").catch(() => {});
+  await s.remove("audit-head").catch(() => {});
   keys.clear();
 }
 

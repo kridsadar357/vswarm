@@ -122,7 +122,7 @@ export async function secrets(ctx: Ctx): Promise<Finding[]> {
     bare.sort();
     out.push(finding(`ssh:${bare.join(",")}`, "medium", `${bare.length} SSH private key${bare.length > 1 ? "s" : ""} without a passphrase`,
       [...bare.map((f) => `~/.ssh/${f} · ${age(join(h, ".ssh", f))}`), "Anyone who copies these files can log in wherever they are trusted."],
-      `Add a passphrase (ssh-keygen -p -f ~/.ssh/<key>), or move production access to a hardware key or short-lived SSH certificates.`));
+      `Add a passphrase (ssh-keygen -p -f ~/.ssh/<key>), keep a production key only in vswarm agent (vswarm agent protect ~/.ssh/<key>), or move production access to a hardware key or short-lived SSH certificates.`));
   }
 
   // AWS long-term access keys

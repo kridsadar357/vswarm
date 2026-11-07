@@ -217,6 +217,7 @@ export const COMMANDS: [string, string][] = [
   ["try", "run untrusted code in a sandbox and see what it tried"],
   ["ca", "certificate authority for short-lived SSH certificates"],
   ["cert", "issue a short-lived SSH certificate after preflight"],
+  ["agent", "ssh agent that signs with protected keys only when this machine passes"],
   ["canary", "plant decoy credentials that alert you when used"],
   ["selftest", "plant fake threats in a sandbox home and measure detection"],
   ["shot", "screenshot a localhost page or local file"],
@@ -242,6 +243,7 @@ _vswarm() {
     accept) COMPREPLY=( $(compgen -W "--all --list --remove" -- "$cur") ) ;;
     gate) COMPREPLY=( $(compgen -W "ssh status remove" -- "$cur") ) ;;
     guard) COMPREPLY=( $(compgen -W "on off status" -- "$cur") ) ;;
+    agent) COMPREPLY=( $(compgen -W "on off status protect unprotect restore add log run" -- "$cur") ) ;;
   esac
 }
 complete -F _vswarm vswarm
@@ -262,6 +264,7 @@ ${lines}
     accept) _arguments '--all[accept every current finding]' '--list[show accepted]' '--remove[un-accept]:id:' ;;
     gate) _values 'action' ssh status remove ;;
     guard) _values 'action' on off status ;;
+    agent) _values 'action' on off status protect unprotect restore add log run ;;
   esac
 }
 _vswarm "$@"
@@ -362,6 +365,12 @@ export async function doctor(): Promise<boolean> {
   const sshCfg = existsSync(sshCfgPath) ? readFileSync(sshCfgPath, "utf8") : "";
   if (sshCfg.includes(GATE_START)) ok("ssh gate installed", "~/.ssh/config");
   else console.log(`  ${c.dim("·")} ssh gate not installed  ${c.dim('vswarm gate ssh "prod-*"')}`);
+  const { agentDoctor } = await import("./sec/agent");
+  for (const a of await agentDoctor()) {
+    if (a.level === "bad") good = false;
+    if (a.level === "off") console.log(`  ${c.dim("·")} ${a.text}  ${c.dim(a.detail ?? "")}`);
+    else (a.level === "ok" ? ok : a.level === "warn" ? warn : bad)(a.text, a.detail);
+  }
   if (await guardOn()) ok("install guard on", "npm, pip, brew … are checked before installing");
   else console.log(`  ${c.dim("·")} install guard off  ${c.dim("vswarm guard on")}`);
   console.log();
@@ -593,7 +602,11 @@ export async function install(args: string[]) {
 }
 
 export async function uninstall(args: string[]) {
+  // Refused before anything is removed: --purge would delete keys that live only in the agent's vault.
+  const { agentUninstall } = await import("./sec/agent");
+  const agentGone = await agentUninstall(args.includes("--purge"));
   banner("uninstall");
+  for (const f of agentGone) ok(`removed ${f}`);
   // The background check runs the launcher; it goes first, or it would fail every hour from now on.
   const { watchOff, watchState } = await import("./sec/schedule");
   if (watchState().on) for (const f of await watchOff()) ok(`removed ${f}`);
