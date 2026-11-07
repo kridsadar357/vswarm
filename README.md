@@ -165,6 +165,9 @@ A bare `npm install` / `npm ci` checks every locked version against OSV. Blockin
 `vswarm pkg npm install <name>`. If a registry cannot be reached, the install goes ahead with a notice (`guard on --strict`
 stops instead). Opt-in: `guard on --ignore-scripts` runs npm/pnpm/yarn/bun installs with their install scripts off, and
 `--sandbox` runs them in the `try` sandbox inside your project folder; see the [guide](docs/guide.md#8-check-packages-before-they-install-guard-and-pkg).
+The guard also reads what is inside a package before it installs: install-time code that decodes and runs hidden code,
+reads credentials, reaches the network or persists, and what is new since the version before (`vswarm pkg check npm <name>`
+reads one without installing).
 
 ### Run code you do not trust
 
@@ -291,7 +294,8 @@ are vswarm's steps in that direction, see [docs/server-side.md](docs/server-side
   `--offline` skips it; the quiet gate (`preflight --quiet`) asks only about package versions it has never seen,
   waits at most 3 seconds, and says so when it could not.
 - With `vswarm guard on`, the names you install also go to the registry they come from (registry.npmjs.org,
-  api.npmjs.org, api.deps.dev, pypi.org): the same names your package manager is about to send anyway.
+  api.npmjs.org, api.deps.dev, pypi.org): the same names your package manager is about to send anyway. The archives it
+  reads come from registry.npmjs.org and files.pythonhosted.org.
 - Credential checks report where and what kind, never the value.
 - `vswarm team join` / `sync` run `git clone` / `git fetch` of the team repository you name; `report --json` is written
   locally (to stdout or `--out`) and sent nowhere by vswarm.

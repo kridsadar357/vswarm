@@ -534,6 +534,56 @@ only package registries are reachable. Global installs (`-g`) change files elsew
 private registry does not work there; install those with `command npm …`. Windows has `--ignore-scripts` but not the
 sandbox yet.
 
+### What is inside a package: content analysis and the version diff
+
+The signals above come from registry metadata. The guard also reads the package itself before the install. It
+downloads the archive the package manager would install (the npm tarball, or the wheel or sdist pip would pick for
+this machine), checks it against the registry's `integrity` or `sha256`, and unpacks it in memory with its own reader.
+Nothing in the package runs. The reader has limits: 256 MB unpacked, 30,000 files, a time budget, no `..` or absolute
+paths, no links or devices. It reports what it finds, with file, line and a masked snippet:
+
+| Where the code runs | What is looked for |
+| --- | --- |
+| npm `preinstall`/`install`/`postinstall` and every file they `require`, `binding.gyp` commands, `setup.py`, a wheel's `.pth` files | decode-and-run (`eval(atob(…))`, `exec(base64.b64decode(…))`), `curl … \| sh`, reads of keys, cloud credentials, browser and wallet data or the keychain, environment dumps, network calls, raw IPs, webhooks, paste sites and tunnels, login items, shell start-up files, cron, systemd, background processes |
+| code that only runs when the package is used | the same, weighted lower, plus obfuscator output and code pushed past the edge of the screen |
+
+Combinations weigh more than parts. Reading credentials in install code that also reaches the network stops the
+install. So do decoding hidden code and running it, downloading code and running it, a raw-IP or drop-box host at
+install time, and persistence. One finding on its own (a `postinstall` that reads `~/.ssh`, an environment dump)
+**warns and asks** on a terminal, and stops under `--strict`. Fetching a prebuilt binary from an ordinary host
+(esbuild, prisma, sentry-cli) is said in one line only by `vswarm pkg check`, not during installs.
+
+**The version diff.** Each package read is compared with the release before it (semver or PEP 440 order, from the
+cache when possible). The diff reports an install script that was not there, install code that now reads secrets or
+reaches the network, newly obfuscated or decode-and-run code, new hosts, a size jump with few new files, new
+dependencies and how old they are, a publisher who was not a maintainer of the version before, and lost provenance.
+That is how account-takeover releases look (event-stream 3.3.6, ua-parser-js 0.7.29, chalk and debug in September
+2025). A release from a new publisher, or one without the provenance the release before had, gets its findings
+raised a level.
+
+**Which packages are read:** the ones you name, and every dependency that has install scripts or was published in
+the last 7 days. `--deep` (`vswarm pkg --deep npm install …`) reads the whole tree. A popular package whose version is
+over two weeks old and that runs no install script is not downloaded, so most installs take no longer than before.
+Archives over 40 MB are skipped during an install, and a note says so. Results are kept per name, version and
+checksum in `~/.vswarm/sec/pkg-content`, so a version is read once. Measured on macOS: `npm install lodash` or
+`chalk` adds nothing. A first `npm install express`, `esbuild` or `sharp` adds 0.5 to 1.2 seconds, mostly to learn
+which of the dependencies run install scripts. The same install again is within noise of the old check.
+
+```bash
+vswarm pkg check npm event-stream@3.3.6       # read it, and diff it with the version before, without installing
+vswarm pkg check pip requests==2.32.3 --deep  # the whole tree, low findings too
+vswarm pkg check npm some-pkg --sandbox       # also run its install scripts in the try sandbox
+```
+
+**In the sandbox (opt-in, macOS and Linux).** `vswarm pkg check … --sandbox`, and the guard with
+`guard on --sandbox` when contents look suspicious, run only the package's install scripts (npm hooks, `setup.py`,
+Python start-up for a `.pth`). They run in the `vswarm try` sandbox, with a fake home and no network except through
+the recording proxy. Hosts it tried, processes it left and files it planted are reported. Windows reads the contents
+but does not run them.
+
+If an archive cannot be downloaded, the install goes ahead with a notice that says which packages were not read. With
+`--strict` it stops.
+
 ## 9. Run code you do not trust: try
 
 For a recruiter's "take-home assignment", a stranger's repo, an installer. vswarm copies the code (your original is
@@ -743,7 +793,8 @@ installer `VSWARM_REPO`, `VSWARM_REF`.
 - package names and versions to `api.osv.dev` for the known-malicious check (cached a day; `--offline` skips it;
   `preflight --quiet` asks only about versions it has never seen)
 - with `guard` on, the names you install go to the registry they come from (registry.npmjs.org, api.npmjs.org,
-  api.deps.dev, pypi.org): the same names your package manager is about to send
+  api.deps.dev, pypi.org): the same names your package manager is about to send; the archives it reads come from
+  registry.npmjs.org and files.pythonhosted.org, the same files the install downloads
 - with a team policy, `vswarm team join` / `sync` fetch the git repository you named; reports (`report --json`) stay
   local unless you move them
 - nothing else: no telemetry, and credential values are never read

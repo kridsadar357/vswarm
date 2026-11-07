@@ -12,16 +12,24 @@ const CODE = /\.(c?js|mjs|ts|tsx|jsx|py|sh|bash|zsh|rb|php|ps1|bat|cmd)$/i;
 /** Config files that every dev tool loads; a loader here runs on `npm run dev`, `npm test`, a build, or an editor opening the folder. */
 const CONFIG = /^(next|vite|webpack|tailwind|postcss|babel|jest|vitest|eslint|prettier|nuxt|svelte|astro|rollup|tsup|playwright)\.config\.(c?js|mjs|ts)$|^\.eslintrc\.c?js$|^gulpfile\.js$|^Gruntfile\.js$/;
 
+/** Decoded text handed straight to something that runs it. Package content analysis (content/scan.ts) reads these too. */
+export const DECODE_RUN: [RegExp, "js" | "py", string][] = [
+  [/\beval\s*\(\s*(atob|Buffer\.from|unescape|decodeURIComponent)\b/, "js", "decodes text and runs it with eval"],
+  [/new\s+Function\s*\(\s*(atob|Buffer\.from)/, "js", "decodes text and runs it with new Function"],
+  [/\bexec\s*\(\s*(base64\.b64decode|zlib\.decompress|marshal\.loads|codecs\.decode)/, "py", "decodes text and runs it (Python)"],
+];
+const run = ([re, , why]: (typeof DECODE_RUN)[number]): [RegExp, string, Severity] => [re, why, "high"];
+
 const PATTERNS: [RegExp, string, Severity][] = [
-  [/\beval\s*\(\s*(atob|Buffer\.from|unescape|decodeURIComponent)\b/, "decodes text and runs it with eval", "high"],
-  [/new\s+Function\s*\(\s*(atob|Buffer\.from)/, "decodes text and runs it with new Function", "high"],
+  run(DECODE_RUN[0]),
+  run(DECODE_RUN[1]),
   [/require\(\s*['"]child_process['"]\s*\)[\s\S]{0,400}\b(curl|wget|powershell|bash\s+-c|sh\s+-c)\b/, "starts a shell that downloads something", "high"],
   [/\b(exec|execSync|spawn)\s*\(\s*['"`](curl|wget)\b[^'"`]*\|\s*(ba|z)?sh/, "pipes a download straight into a shell", "high"],
   [/(https?:\/\/)?\b(\d{1,3}\.){3}\d{1,3}(:\d{2,5})?\/[\w/.-]*/, "talks to a raw IP address", "medium"],
   [/\b(atob|Buffer\.from)\s*\(\s*['"][A-Za-z0-9+/=]{200,}['"]/, "carries a long encoded string", "medium"],
   [/(\\x[0-9a-f]{2}){40,}/i, "carries a long hex-escaped string", "medium"],
   [/Library\/Application Support\/(Google\/Chrome|BraveSoftware|Exodus|Electrum|atomic)|Local Extension Settings|nkbihfbeogaeaoehlefnkodbefgpgknn|login\.keychain|\.ssh\/id_|\.aws\/credentials/, "names browser, wallet, keychain or credential locations", "high"],
-  [/\bexec\s*\(\s*(base64\.b64decode|zlib\.decompress|marshal\.loads|codecs\.decode)/, "decodes text and runs it (Python)", "high"],
+  run(DECODE_RUN[2]),
   [/__import__\(\s*['"](base64|zlib|marshal)['"]\s*\)/, "imports decoders indirectly (Python)", "medium"],
   [/\b(socket\.create_connection|urllib\.request\.urlopen|requests\.(get|post))\s*\(\s*['"]https?:\/\/\d/, "connects to a raw IP (Python)", "medium"],
 ];

@@ -46,7 +46,11 @@ export async function listeningPorts(): Promise<number[]> {
   return parseListening((await run(["lsof", "-nP", "-iTCP", "-sTCP:LISTEN"], 10_000)) ?? "");
 }
 
-export function profile(realHome: string, box: Box, proxyPort: number, extraRead: string[] = [], denyPorts: number[] = [], project?: { dir: string; readOnly: string[] }): string {
+/**
+ * The Seatbelt profile. `denyRead` are files inside the box that the code may not read (decoy credentials in the fake
+ * home): the denial is what the macOS log records, so an attempt to read them is seen.
+ */
+export function profile(realHome: string, box: Box, proxyPort: number, extraRead: string[] = [], denyPorts: number[] = [], project?: { dir: string; readOnly: string[] }, denyRead: string[] = []): string {
   const tools = [...toolchains(realHome), ...extraRead];
   // An install in the sandbox (guard --sandbox) works in your project folder itself; its .git stays read-only.
   const mine = [box.work, box.home, box.tmp, ...(project ? [project.dir] : [])];
@@ -79,7 +83,7 @@ export function profile(realHome: string, box: Box, proxyPort: number, extraRead
 (allow file-read*)
 (deny file-read* (subpath ${q(realHome)}) (subpath "/private/var/folders") (subpath "/Volumes"))
 (allow file-read* (literal ${q(realHome)})${above.map((a) => ` (literal ${q(a)})`).join("")}${tools.map((t) => ` (subpath ${q(t)})`).join("")}${mine.map((m) => ` (subpath ${q(m)})`).join("")})
-(allow file-read-metadata)
+(allow file-read-metadata)${denyRead.length ? `\n(deny file-read-data${denyRead.map((d) => ` (literal ${q(d)})`).join("")})` : ""}
 (allow file-write*${mine.map((m) => ` (subpath ${q(m)})`).join("")} (literal "/dev/null") (literal "/dev/zero") (literal "/dev/dtracehelper") (regex #"^/dev/tty") (regex #"^/dev/fd/"))${keep}
 (allow file-ioctl (regex #"^/dev/tty"))
 ; network: localhost (servers the code starts itself, the vswarm proxy on port ${proxyPort}); nothing else, not even DNS

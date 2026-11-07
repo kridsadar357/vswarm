@@ -1,0 +1,7 @@
+{
+  "name": "vs-fixture-colors",
+  "version": "1.0.0",
+  "description": "Terminal colours (test fixture)",
+  "main": "index.js",
+  "license": "MIT"
+}

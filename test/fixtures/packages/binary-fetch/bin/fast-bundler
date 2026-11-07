@@ -1,0 +1,4 @@
+#!/usr/bin/env node
+// Test fixture: replaced by the downloaded binary at install.
+console.error("fast-bundler: the binary was not downloaded");
+process.exit(1);

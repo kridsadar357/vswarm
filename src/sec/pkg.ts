@@ -11,9 +11,11 @@
 //   new and unknown   package created in the last 30 days with few downloads              medium, high with an install script
 //   install script    preinstall / install / postinstall, or a Python sdist (setup.py)     low, raised by the signals above
 //   outside registry  git URLs, tarballs, third-party Homebrew taps                       medium
+//   contents          what the archive holds and what is new since the version before     graded (content/)
 //
 // Only package names and versions leave the machine (registry.npmjs.org, api.npmjs.org, api.deps.dev, pypi.org,
-// api.osv.dev). If a registry cannot be reached the install goes ahead with a notice: a broken network is not an attack.
+// api.osv.dev); archives are downloaded from registry.npmjs.org and files.pythonhosted.org to be read, never run.
+// If a registry cannot be reached the install goes ahead with a notice: a broken network is not an attack.
 
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
@@ -261,21 +263,77 @@ export interface Facts {
   versionAt?: number;
   createdAt?: number;
   weeklyDownloads?: number;
+  /** npm: the version's manifest (archive, publisher, provenance), so reading its contents asks nothing again. */
+  manifest?: Manifest;
+  /** Every published version and when, for finding the one before. */
+  versionList?: { v: string; at?: number }[];
+  /** PyPI: the project's JSON (its releases and their files). */
+  pypi?: any;
 }
 
-export type Fetcher = (url: string) => Promise<{ status: number; json(): Promise<any> }>;
+/** What one npm version's manifest says about running and publishing it. */
+export interface Manifest {
+  version: string;
+  /** Install hooks, as "name: command". */
+  scripts: string[];
+  dist?: { url: string; integrity?: string; shasum?: string; size?: number };
+  /** The account that published it. */
+  publisher?: string;
+  maintainers?: string[];
+  /** Published with a provenance attestation (built in CI). */
+  provenance?: boolean;
+}
 
-const realFetch: Fetcher = (url) => fetch(url, { headers: { accept: "application/json", "user-agent": "vswarm" }, signal: AbortSignal.timeout(6000) });
+/** One file of a PyPI release, as the JSON API lists it. */
+export interface PyFile {
+  filename: string;
+  url: string;
+  packagetype: string;
+  digests?: { sha256?: string };
+  size?: number;
+  upload_time?: string;
+  upload_time_iso_8601?: string;
+}
+
+export interface FetchInit {
+  method?: string;
+  body?: string;
+  accept?: string;
+  timeoutMs?: number;
+}
+
+export type Fetcher = (url: string, init?: FetchInit) => Promise<{ status: number; json(): Promise<any>; arrayBuffer?(): Promise<ArrayBuffer> }>;
+
+const realFetch: Fetcher = (url, init = {}) =>
+  fetch(url, {
+    method: init.method, body: init.body,
+    headers: { accept: init.accept ?? "application/json", "user-agent": "vswarm", ...(init.body ? { "content-type": "application/json" } : {}) },
+    signal: AbortSignal.timeout(init.timeoutMs ?? 6000),
+  });
 
 const enc = (n: string) => n.replace("/", "%2F");
 
-export async function npmFacts(name: string, version: string | undefined, get: Fetcher = realFetch): Promise<Facts> {
+/** One version's manifest; undefined when npm has no such package or version. */
+export async function npmManifest(name: string, version: string | undefined, get: Fetcher = realFetch): Promise<Manifest | undefined> {
   const man = await get(`https://registry.npmjs.org/${enc(name)}/${version ?? "latest"}`);
-  if (man.status === 404) return { exists: false };
+  if (man.status === 404) return;
   if (man.status !== 200) throw new Error(`registry.npmjs.org ${man.status}`);
   const m = await man.json();
-  const scripts = ["preinstall", "install", "postinstall", "prepare"].filter((s) => m.scripts?.[s]).map((s) => `${s}: ${m.scripts[s]}`);
-  const v = m.version as string;
+  const str = (x: unknown) => (typeof x === "string" ? x : undefined);
+  return {
+    version: m.version as string,
+    scripts: ["preinstall", "install", "postinstall", "prepare"].filter((s) => m.scripts?.[s]).map((s) => `${s}: ${m.scripts[s]}`),
+    dist: str(m.dist?.tarball) ? { url: m.dist.tarball, integrity: str(m.dist.integrity), shasum: str(m.dist.shasum), size: typeof m.dist.unpackedSize === "number" ? m.dist.unpackedSize : undefined } : undefined,
+    publisher: str(m._npmUser?.name),
+    maintainers: Array.isArray(m.maintainers) ? m.maintainers.map((x: any) => str(x?.name)).filter((x: any): x is string => !!x) : undefined,
+    provenance: !!m.dist?.attestations,
+  };
+}
+
+export async function npmFacts(name: string, version: string | undefined, get: Fetcher = realFetch): Promise<Facts> {
+  const m = await npmManifest(name, version, get);
+  if (!m) return { exists: false };
+  const { scripts, version: v } = m;
   const [dl, dep] = await Promise.all([
     get(`https://api.npmjs.org/downloads/point/last-week/${name}`).then((r) => (r.status === 200 ? r.json() : undefined)).catch(() => undefined),
     get(`https://api.deps.dev/v3/systems/npm/packages/${encodeURIComponent(name)}`).then((r) => (r.status === 200 ? r.json() : undefined)).catch(() => undefined),
@@ -283,14 +341,23 @@ export async function npmFacts(name: string, version: string | undefined, get: F
   const times: Record<string, number> = {};
   for (const x of dep?.versions ?? []) if (x.publishedAt) times[x.versionKey?.version] = Date.parse(x.publishedAt);
   const all = Object.values(times);
-  return { exists: true, version: v, scripts, versionAt: times[v], createdAt: all.length ? Math.min(...all) : undefined, weeklyDownloads: dl?.downloads };
+  return {
+    exists: true, version: v, scripts, versionAt: times[v], createdAt: all.length ? Math.min(...all) : undefined, weeklyDownloads: dl?.downloads,
+    manifest: m, versionList: all.length ? Object.entries(times).map(([x, at]) => ({ v: x, at })) : undefined,
+  };
+}
+
+/** PyPI's JSON for a project (every release and its files); undefined when there is no such project. */
+export async function pypiProject(name: string, get: Fetcher = realFetch): Promise<any> {
+  const r = await get(`https://pypi.org/pypi/${name}/json`);
+  if (r.status === 404) return;
+  if (r.status !== 200) throw new Error(`pypi.org ${r.status}`);
+  return r.json();
 }
 
 export async function pipFacts(name: string, version: string | undefined, get: Fetcher = realFetch): Promise<Facts> {
-  const r = await get(`https://pypi.org/pypi/${name}/json`);
-  if (r.status === 404) return { exists: false };
-  if (r.status !== 200) throw new Error(`pypi.org ${r.status}`);
-  const d = await r.json();
+  const d = await pypiProject(name, get);
+  if (!d) return { exists: false };
   const v: string = version ?? d.info?.version;
   const rel: any[] = d.releases?.[v] ?? d.urls ?? [];
   const at = (x: any) => Date.parse(x.upload_time_iso_8601 ?? x.upload_time);
@@ -302,6 +369,7 @@ export async function pipFacts(name: string, version: string | undefined, get: F
     sdistOnly: rel.length > 0 && rel.every((x) => x.packagetype === "sdist"),
     versionAt: mine.length ? Math.min(...mine) : undefined,
     createdAt: first.length ? Math.min(...first) : undefined,
+    pypi: d,
   };
 }
 
@@ -381,6 +449,29 @@ export interface PkgCheck {
   unverified: string[];
   /** Named packages whose chosen version runs install scripts. */
   scripted: string[];
+  /** Packages whose contents were read, and how much of them (content/). */
+  read: string[];
+  readFiles: number;
+  readBytes: number;
+}
+
+export interface CheckOpt {
+  get?: Fetcher;
+  offline?: boolean;
+  osvCache?: string;
+  /** Read package contents (default on; never offline). */
+  content?: boolean;
+  /** Read every package in the tree, not only named ones and those with install scripts or new versions. */
+  deep?: boolean;
+  /** Read named packages even when popular, old and script-free (vswarm pkg check). */
+  readAll?: boolean;
+  /** Run install scripts in the try sandbox (content/index.ts). */
+  sandbox?: "always" | "suspicious";
+  /** Keep low content findings (vswarm pkg check). */
+  verbose?: boolean;
+  budgetMs?: number;
+  /** Largest archive read, by what the registry says it weighs. */
+  maxBytes?: number;
 }
 
 /** Every package a version pulls in, resolved the way the registry would (api.deps.dev), with the one that brings it. */
@@ -403,7 +494,7 @@ export async function depTree(eco: "npm" | "pip", name: string, version: string,
 }
 
 /** Checks everything a command would install. Lockfiles are checked against OSV only; named packages also against the registry. */
-export async function checkInstall(p: Plan, opt: { get?: Fetcher; offline?: boolean; osvCache?: string } = {}): Promise<PkgCheck> {
+export async function checkInstall(p: Plan, opt: CheckOpt = {}): Promise<PkgCheck> {
   const t0 = Date.now();
   const get = opt.get ?? realFetch;
   const notes: string[] = [];
@@ -434,6 +525,7 @@ export async function checkInstall(p: Plan, opt: { get?: Fetcher; offline?: bool
     .filter((i) => i.version);
   // And everything those named packages pull in: most malware arrives as a dependency of something harmless.
   const via = new Map<string, string>();
+  const inTree: { eco: "npm" | "pip"; name: string; version: string; via?: string }[] = [];
   if (!opt.offline && named.length === p.wants.length) {
     const trees = await Promise.all(items.map((i) => depTree(i.kind as "npm" | "pip", i.name, i.version!, get).catch(() => [])));
     const seen = new Set(items.map((i) => `${i.kind}:${i.name}@${i.version}`));
@@ -444,6 +536,7 @@ export async function checkInstall(p: Plan, opt: { get?: Fetcher; offline?: bool
         seen.add(key);
         via.set(key, d.via === d.name ? items[k].name : `${items[k].name} → ${d.via}`);
         items.push({ kind: items[k].kind, id: d.name, name: d.name, version: d.version, meta: { dep: true } });
+        inTree.push({ eco: items[k].kind as "npm" | "pip", name: d.name, version: d.version, via: via.get(key) });
         const like = lookAlike(items[k].kind, d.name);
         if (like)
           findings.push({ id: `pkg:dep-lookalike:${items[k].kind}:${d.name}`, rule: "pkg-lookalike", severity: "medium", title: `${items[k].name} pulls in ${d.name}, which looks like ${like}`,
@@ -452,6 +545,8 @@ export async function checkInstall(p: Plan, opt: { get?: Fetcher; offline?: bool
     });
   }
   const deps = items.filter((i) => i.meta?.dep).length;
+  // What is inside: read while OSV answers, so the usual install waits no longer than before.
+  const reading = opt.content === false || opt.offline ? undefined : readContents(p, facts, inTree, get, opt).catch((e: any) => ({ error: String(e?.message ?? e) }));
   if (items.length) {
     const osv = await osvMalicious(items, opt.osvCache ?? files.osv(), { offline: opt.offline });
     if (osv.error) {
@@ -465,9 +560,46 @@ export async function checkInstall(p: Plan, opt: { get?: Fetcher; offline?: bool
         detail: [`OSV ${h.ids.join(", ")}`, ...(path ? [`pulled in by ${path}`] : [])], fix: "do not install it; if it was installed before on this machine: vswarm respond" });
     }
   }
+  const content = await reading;
+  if (content && "error" in content) {
+    notes.push(`could not read package contents (${content.error}); judged by registry facts only`);
+    unverified.push("package contents could not be read");
+  } else if (content) {
+    findings.push(...content.findings);
+    notes.push(...content.notes);
+    unverified.push(...content.unverified);
+  }
   findings.sort((a, b) => RANK[b.severity] - RANK[a.severity]);
   const scripted = [...facts].filter(([, f]) => (f.scripts?.length ?? 0) > 0 || f.sdistOnly).map(([w]) => w.name);
-  return { plan: p, findings, verdict: verdictOf(findings), notes, ms: Date.now() - t0, deps, unverified, scripted };
+  const r = content && !("error" in content) ? content : undefined;
+  return { plan: p, findings, verdict: verdictOf(findings), notes, ms: Date.now() - t0, deps, unverified, scripted, read: r?.read ?? [], readFiles: r?.files ?? 0, readBytes: r?.bytes ?? 0 };
+}
+
+/**
+ * Package contents (content/): the named packages, unless popular, weeks old and script-free; and the dependencies
+ * (from the tree, or the lockfile) that run install scripts or were published in the last 7 days.
+ */
+async function readContents(p: Plan, facts: Map<Want, Facts>, tree: { eco: "npm" | "pip"; name: string; version: string; via?: string }[], get: Fetcher, opt: CheckOpt) {
+  const c = await import("./content");
+  const copt = {
+    get, manifest: (n: string, v: string) => npmManifest(n, v, get), pypi: (n: string) => pypiProject(n, get),
+    sandbox: opt.sandbox, verbose: opt.verbose, budgetMs: opt.budgetMs, maxBytes: opt.maxBytes, perPackageMs: opt.budgetMs ? Math.max(10_000, opt.budgetMs / 2) : undefined,
+    // Next to the OSV cache it is given (tests), else ~/.vswarm/sec/pkg-content.
+    dir: opt.osvCache ? join(dirname(opt.osvCache), "pkg-content") : undefined,
+  };
+  const named: import("./content").Target[] = [];
+  for (const [w, f] of facts) {
+    if (!f.exists || !f.version || (w.eco !== "npm" && w.eco !== "pip")) continue;
+    if (opt.readAll || opt.deep || c.worthReading(w.eco, f)) named.push({ eco: w.eco, name: w.name, version: f.version, facts: f });
+  }
+  const seen = new Set(named.map((t) => `${t.eco}:${t.name}@${t.version}`));
+  // A lockfile (more than 25 packages) has no named ones: all of it is dependencies.
+  const lock = p.wants.length > 25 ? p.wants.filter((w): w is Want & { eco: "npm" | "pip"; version: string } => (w.eco === "npm" || w.eco === "pip") && !!w.version && !w.outside) : [];
+  const deps = [...tree, ...lock.map((w) => ({ eco: w.eco, name: w.name, version: w.version }))].filter((d) => !seen.has(`${d.eco}:${d.name}@${d.version}`));
+  const picked = deps.length ? await c.pickDeps(deps, { ...copt, deep: opt.deep }) : { targets: [], notes: [] };
+  const r = await c.contentCheck([...named, ...picked.targets], copt);
+  r.notes.push(...picked.notes);
+  return r;
 }
 
 /** How to run a tool once without the guard: `command npm` in sh; in PowerShell the program itself, npm.cmd or uv.exe. */
@@ -521,7 +653,7 @@ export function scriptsHint(tool: string, names: string[]): string {
  * there is something to say (one dim line on a terminal otherwise) and returns the exit code: 3 stops the install.
  * With --run (guard on --ignore-scripts or --sandbox), vswarm then runs the install itself, the way those settings say.
  */
-export async function pkgCommand(tool: string, args: string[], opt: { offline: boolean; strict?: boolean; run?: boolean; get?: Fetcher; ask: (q: string, def?: boolean) => Promise<boolean> }): Promise<number> {
+export async function pkgCommand(tool: string, args: string[], opt: { offline: boolean; strict?: boolean; run?: boolean; deep?: boolean; get?: Fetcher; ask: (q: string, def?: boolean) => Promise<boolean> }): Promise<number> {
   let checked: { code: number; scripted: string[] };
   try {
     checked = await pkgCheck(tool, args, opt);
@@ -565,35 +697,82 @@ async function runInstall(tool: string, args: string[], scripted: string[]): Pro
   return code;
 }
 
-async function pkgCheck(tool: string, args: string[], opt: { offline: boolean; strict?: boolean; get?: Fetcher; ask: (q: string, def?: boolean) => Promise<boolean> }): Promise<{ code: number; scripted: string[] }> {
+async function pkgCheck(tool: string, args: string[], opt: { offline: boolean; strict?: boolean; deep?: boolean; get?: Fetcher; ask: (q: string, def?: boolean) => Promise<boolean> }): Promise<{ code: number; scripted: string[] }> {
   const p = plan(tool, args);
   if (p.skip) return { code: 0, scripted: [] };
   // Your team's own package names are not look-alikes here either.
   const { applyAllow, loadPolicy } = await import("./team");
   applyAllow((await loadPolicy()).policy);
-  const r = await checkInstall(p, { offline: opt.offline, get: opt.get });
+  const g = loadGuardConfig();
+  // guard on --sandbox: a package whose contents look suspicious has its install scripts run in the sandbox first.
+  const r = await checkInstall(p, { offline: opt.offline, get: opt.get, deep: opt.deep, sandbox: g.sandbox && !opt.offline ? "suspicious" : undefined });
   const done = (code: number) => ({ code, scripted: r.scripted });
   // Strict: what could not be checked is a reason to stop, not a notice. Offline on purpose (--offline) is not.
-  const strict = (opt.strict || loadGuardConfig().strict) && !opt.offline && r.unverified.length > 0;
+  const strictOn = (opt.strict || g.strict) && !opt.offline;
+  const strict = strictOn && r.unverified.length > 0;
+  // Contents that are suspicious but not damning: asked about on a terminal, stopped under --strict.
+  const suspicious = r.verdict === "warn" && r.findings.some((f) => (f.rule === "pkg-content" || f.rule === "pkg-sandbox") && f.severity === "medium");
+  const read = r.read.length ? ` · contents of ${r.read.length} read` : "";
   const quietPass = !r.findings.some((f) => f.severity !== "info") && !r.notes.length;
   if (quietPass) {
-    if (process.stderr.isTTY) line(c.dim(`vswarm ✔ ${p.wants.length > 1 ? `${p.wants.length} packages` : p.from}${r.deps ? ` and ${r.deps} dependencies` : ""} checked · ${r.ms} ms`));
+    if (process.stderr.isTTY) line(c.dim(`vswarm ✔ ${p.wants.length > 1 ? `${p.wants.length} packages` : p.from}${r.deps ? ` and ${r.deps} dependencies` : ""} checked${read} · ${r.ms} ms`));
     return done(0);
   }
-  line(`${c.violet("▼ vswarm")} checked ${p.from.startsWith(tool) ? p.from : `${tool} ${p.from}`} ${c.dim(`${r.deps ? `and ${r.deps} dependencies ` : ""}· ${r.ms} ms`)}`);
+  line(`${c.violet("▼ vswarm")} checked ${p.from.startsWith(tool) ? p.from : `${tool} ${p.from}`} ${c.dim(`${r.deps ? `and ${r.deps} dependencies ` : ""}${read ? `${read.slice(3)} ` : ""}· ${r.ms} ms`)}`);
   for (const f of r.findings.filter((x) => x.severity !== "info")) printFinding({ ...f, id: "" }, f.severity !== "low");
   for (const n of r.notes) line(c.dim(`  · ${n}`));
-  if (r.verdict !== "block" && !strict) {
+  const stopSuspicious = suspicious && strictOn;
+  if (r.verdict !== "block" && !strict && !stopSuspicious) {
+    if (suspicious) {
+      if (await opt.ask(`${c.amber("Suspicious contents above.")} Install anyway?`, true)) {
+        line(c.dim("  going ahead"));
+        return done(0);
+      }
+      line(c.dim(`  not installed · read it without installing: vswarm pkg check ${tool === "pip" || tool === "pip3" || tool === "uv" || tool === "pipx" || tool === "uvx" ? "pip" : "npm"} <name>`));
+      return done(3);
+    }
     if (r.findings.length) line(c.dim(`  ${VERDICT[r.verdict]} · going ahead`));
     return done(0);
   }
   if (strict && r.verdict !== "block") line(c.amber(`  strict guard: ${r.unverified.join("; ")}, so this install was not fully checked`));
+  if (stopSuspicious && r.verdict !== "block") line(c.amber("  strict guard: suspicious package contents stop the install"));
   if (await opt.ask(`${c.red("Stop here.")} Install anyway?`, false)) {
     line(c.dim("  going ahead, as you said"));
     return done(0);
   }
   line(c.dim(`  not installed · ${strict && r.verdict !== "block" ? "try again when online, or " : ""}skip vswarm once with: ${skipOnce(tool)}`));
   return done(3);
+}
+
+/**
+ * `vswarm pkg check <npm|pip> <name>[@version]`: what the guard checks, with every package's contents read in full
+ * (no fast path, low findings too), without installing anything. --deep reads the whole tree, --sandbox runs the
+ * install scripts in the try sandbox. Exit 3 on BLOCK (and on WARN with --strict).
+ */
+export async function pkgCheckCommand(eco: string, spec: string | undefined, opt: { offline?: boolean; deep?: boolean; sandbox?: boolean; json?: boolean; strict?: boolean; get?: Fetcher }): Promise<number> {
+  if ((eco !== "npm" && eco !== "pip") || !spec) throw new Error("usage: vswarm pkg check npm|pip <name>[@version] [--deep] [--sandbox] [--json]   e.g. vswarm pkg check npm left-pad@1.3.0");
+  // name@1.2.3 for PyPI too, besides pip's own name==1.2.3.
+  const w = eco === "npm" ? npmSpec(spec) : pipSpec(spec.replace(/^([A-Za-z0-9][\w.-]*)@(?=\d)/, "$1=="));
+  if (!w || w.local || w.outside) throw new Error(`${spec}: name a package on the registry, e.g. vswarm pkg check ${eco} ${eco === "npm" ? "left-pad@1.3.0" : "requests==2.32.3"}`);
+  const { applyAllow, loadPolicy } = await import("./team");
+  applyAllow((await loadPolicy()).policy);
+  const r = await checkInstall({ wants: [w], skip: false, from: spec }, {
+    get: opt.get, offline: opt.offline, deep: opt.deep, readAll: true, verbose: true, sandbox: opt.sandbox ? "always" : undefined, budgetMs: 600_000, maxBytes: 100_000_000,
+  });
+  const code = r.verdict === "block" || (opt.strict && r.verdict === "warn") ? 3 : 0;
+  if (opt.json) {
+    console.log(JSON.stringify({ package: `${eco}:${w.name}${w.version ? `@${w.version}` : ""}`, verdict: r.verdict, findings: r.findings, notes: r.notes, unverified: r.unverified, read: r.read, files: r.readFiles, bytes: r.readBytes, ms: r.ms }, null, 2));
+    return code;
+  }
+  const size = r.readBytes >= 1e6 ? `${(r.readBytes / 1e6).toFixed(1)} MB` : `${Math.round(r.readBytes / 1000)} KB`;
+  line(`${c.violet("▼ vswarm pkg check")} ${eco} ${spec} ${c.dim(`· ${r.read.length ? `read ${r.readFiles} files (${size}) of ${r.read.join(", ")}` : "contents not read"}${r.deps ? ` · ${r.deps} dependencies checked` : ""} · ${r.ms} ms`)}`);
+  if (!r.findings.length) line(`  ${c.green("✔")} nothing found: no install-time code that reaches for secrets or the network, nothing hidden, nothing new that changes that`);
+  for (const f of r.findings) printFinding({ ...f, id: "" }, true);
+  for (const n of r.notes) line(c.dim(`  · ${n}`));
+  if (!opt.sandbox && r.findings.some((f) => f.rule === "pkg-content" && RANK[f.severity] >= RANK.medium) && process.platform !== "win32")
+    line(c.dim(`  · see what its install scripts do, in the sandbox: vswarm pkg check ${eco} ${spec} --sandbox`));
+  line(`\n${VERDICT[r.verdict]} ${c.dim(r.verdict === "block" ? "· do not install it" : r.verdict === "warn" ? "· read the findings before installing" : "· what was read looks ordinary; it is not a guarantee")}`);
+  return code;
 }
 
 // ── The shell wrapper

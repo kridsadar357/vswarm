@@ -1,0 +1,7 @@
+{
+  "name": "vs-fixture-is-arrayish",
+  "version": "2.0.1",
+  "description": "Is it array-like? (test fixture)",
+  "main": "index.js",
+  "license": "MIT"
+}

@@ -15,7 +15,7 @@ import { selftest } from "./sec/selftest";
 import { clearLock, files, loadAccepted, loadBaseline, loadLast, lockState, readLog, saveAccepted, saveBaseline } from "./sec/store";
 import { RANK } from "./sec/types";
 import { ask, banner, COMMANDS, completion, doctor, gate, guard, install, trust, uninstall, update, yes } from "./setup";
-import { pkgCommand } from "./sec/pkg";
+import { pkgCheckCommand, pkgCommand } from "./sec/pkg";
 import { shot } from "./shot";
 import { canaryCommand } from "./sec/canary";
 import { homedir } from "node:os";
@@ -96,6 +96,7 @@ function usage() {
   console.log(`\n  ${c.bold("before you install")}`);
   row("vswarm guard on [--ignore-scripts] [--sandbox] [--strict]", "npm, pip, brew … ask vswarm before installing");
   row("vswarm pkg npm install <name>", "check by hand: malicious, look-alike, brand new, scripts");
+  row("vswarm pkg check npm|pip <name>[@v] [--sandbox]", "read its contents and diff the version before, without installing");
   console.log(`\n  ${c.bold("run code you do not trust")}`);
   row("vswarm try <folder|git URL|zip> [-- cmd]", "in a sandbox: no secrets, no network; reports what it tried");
   row("vswarm try … --net registries", "allow package registries only (npm install, pip install)");
@@ -360,17 +361,28 @@ async function main() {
     case "pkg": {
       // vswarm pkg [--run] [--strict] <tool> [--] <the tool's arguments>; the shell wrapper calls this before every install.
       // With --run (guard on --ignore-scripts / --sandbox) vswarm also runs the install itself.
-      let run = false, strict = false;
-      while (args[0] === "--run" || args[0] === "--strict") (args.shift() === "--run" ? (run = true) : (strict = true));
+      // --deep reads the contents of the whole tree, not only named packages and those with install scripts.
+      let run = false, strict = false, deep = false;
+      for (let a = args[0]; a === "--run" || a === "--strict" || a === "--deep"; a = args[0]) (args.shift(), a === "--run" ? (run = true) : a === "--strict" ? (strict = true) : (deep = true));
       const tool = args.shift();
-      if (!tool) throw new Error("usage: vswarm pkg [--strict] npm|pnpm|yarn|bun|npx|bunx|pip|pip3|uv|uvx|pipx|brew [--] <arguments>   e.g. vswarm pkg npm install axois");
+      if (!tool) throw new Error("usage: vswarm pkg [--strict] [--deep] npm|pnpm|yarn|bun|npx|bunx|pip|pip3|uv|uvx|pipx|brew [--] <arguments>   e.g. vswarm pkg npm install axois");
+      // vswarm pkg check npm|pip <name>[@version]: read a package without installing it.
+      if (tool === "check") {
+        const sandbox = has(args, "--sandbox");
+        deep = has(args, "--deep") || deep;
+        strict = has(args, "--strict") || strict;
+        const [eco, spec] = args.splice(0, 2);
+        noMoreOptions("pkg check", args);
+        process.exitCode = await pkgCheckCommand(eco, spec, { offline, deep, sandbox, json, strict });
+        return;
+      }
       if (args[0] === "--") args.shift();
       if (process.env.VSWARM_GUARD === "off") {
         // Off for this command: no check, but the install the wrapper handed over still runs.
         if (run && Bun.which(tool)) process.exitCode = await Bun.spawn([Bun.which(tool)!, ...args], { stdin: "inherit", stdout: "inherit", stderr: "inherit" }).exited;
         return;
       }
-      process.exitCode = await pkgCommand(tool, args, { offline, strict, run, ask: yes });
+      process.exitCode = await pkgCommand(tool, args, { offline, strict, run, deep, ask: yes });
       return;
     }
 

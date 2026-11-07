@@ -1,0 +1,9 @@
+{
+  "name": "vs-fixture-dev-helper",
+  "version": "1.2.0",
+  "description": "Developer helper (test fixture)",
+  "license": "MIT",
+  "scripts": {
+    "postinstall": "node install.js"
+  }
+}
