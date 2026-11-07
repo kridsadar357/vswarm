@@ -5,7 +5,7 @@ import { osvMalicious } from "./intel";
 import { evaluate, uncovered } from "./rules";
 import { forBaseline, scan as runScan } from "./scan";
 import { secrets as findSecrets } from "./secrets";
-import { ensureSec, files, lockState, readAccepted, readBaseline, saveLast, type Lock } from "./store";
+import { ensureSec, files, lockState, readAccepted, readBaseline, saveLast, stateKey, type Lock } from "./store";
 import { applyAllow, loadPolicy, matches, requirements } from "./team";
 import { RANK, verdictOf, type Finding, type Scan, type Verdict } from "./types";
 
@@ -72,6 +72,10 @@ export async function check(ctx: Ctx, opt: { offline?: boolean; osvNewOnly?: boo
   if (b.nokey || a.nokey)
     state("nokey", "medium", "vswarm could not check its own files: its sealing key is not readable right now", [String((b.nokey ? b : a).untrusted)],
       "Unlock the login keychain (macOS) or keyring (Linux) and check again; vswarm doctor shows where the key is");
+  const k = await stateKey();
+  if (k.tampered)
+    state("keystore", "high", "vswarm's sealing key was moved to a plain file, and vswarm did not move it", [`${files.keystore()}: ${k.tampered}`, `vswarm uses ${k.store.where} instead.`, "A key in a file someone chose lets them seal forged state (a passing verdict, a closed incident)."],
+      `If you did not edit it, treat the machine as suspect (vswarm respond). Then remove ${files.keystore()}; vswarm goes back to ${k.store.where}`);
   // A known-malicious package can never be accepted away.
   const findings = [...own, ...all]
     .filter((f) => f.rule === "malicious" || f.rule === STATE_RULE || f.rule === "team-require" || (!acceptedIds[f.id] && !matches(team.policy?.accept, f.id)))

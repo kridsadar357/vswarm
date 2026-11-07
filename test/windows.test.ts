@@ -14,7 +14,8 @@ import { evaluate, uncovered } from "../src/sec/rules";
 import { COVERS, forBaseline, scan } from "../src/sec/scan";
 import type { Ctx } from "../src/sec/ctx";
 import type { Finding, Scan, Verdict } from "../src/sec/types";
-import { saveLast } from "../src/sec/store";
+import { chooseStore, KIND_NAME, saveLast } from "../src/sec/store";
+import { DPAPI_PROTECT, dpapiStore, fallbackDir, fileStore, platformStore, type Runner } from "../src/sec/seal";
 
 const HOME = "C:\\Users\\nok";
 const fixture = (): WinSnapshot => JSON.parse(readFileSync(join(import.meta.dir, "fixtures/windows/home-pc.json"), "utf8"));
@@ -586,5 +587,30 @@ describe("windows: a home inside %TEMP% (the selftest's fake home on a Windows r
     expect(watchTable(FAKE, "linux").length).toBeGreaterThan(5);
     expect(partsFor([`${FAKE}\\Library\\LaunchAgents\\com.x.plist`], FAKE, "darwin")).toEqual(["launchd"]);
     expect(partsFor([`${FAKE}/.zshrc`], FAKE, "linux")).toEqual(["startup files"]);
+  });
+});
+
+describe("windows: the sealing key's store (DPAPI) and a keystore.json moved to a file", () => {
+  // A runner standing in for PowerShell: DPAPI protect and unprotect as base64, so no PowerShell runs.
+  const run: Runner = async (cmd, opt = {}) => {
+    if (cmd.at(-1) === DPAPI_PROTECT) return { code: 0, out: Buffer.from(opt.env?.VSWARM_SEAL_IN ?? "").toString("base64"), err: "" };
+    return { code: 0, out: Buffer.from(opt.env?.VSWARM_SEAL_BLOB ?? "", "base64").toString("utf8"), err: "" };
+  };
+
+  test("keystore.json says file while DPAPI holds vswarm's key: a finding, and DPAPI is used; vswarm's own fallback is not one", async () => {
+    const dir = tmp("dpapi-kind");
+    const file = fileStore(join(dir, "file"));
+    const dp = dpapiStore(join(dir, "dpapi"), run, "powershell.exe");
+    await dp.set("state-key", "c".repeat(64));
+    const c = await chooseStore("file", dp, (k) => (k === "file" ? file : dp));
+    expect(c.store.kind).toBe("dpapi");
+    expect(c.tampered).toContain("DPAPI (current user)");
+    // vswarm moved to a file itself: no key left behind in DPAPI, and "file" noted there.
+    await dp.remove("state-key");
+    await dp.set(KIND_NAME, "file");
+    expect(await chooseStore("file", dp, (k) => (k === "file" ? file : dp))).toEqual({ store: file });
+    expect(platformStore("win32").kind).toBe("dpapi");
+    // The fallback file store is under %LOCALAPPDATA%, outside ~/.vswarm.
+    if (process.platform === "win32") expect(fallbackDir("C:\\Users\\nok")).toContain("vswarm\\keys");
   });
 });

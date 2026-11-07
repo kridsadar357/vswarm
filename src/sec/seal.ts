@@ -36,6 +36,20 @@ const realRun: Runner = (cmd, opt = {}) => exec(cmd, { stdin: opt.stdin, env: op
 const SERVICE = "dev.vswarm.seal";
 const first = (s: string) => s.trim().split("\n")[0]?.slice(0, 160) ?? "";
 
+/**
+ * One argument for the command parser of `security -i`: in double quotes, with backslash and double quote escaped.
+ * It reads a line at a time, so a line break (or a NUL) cannot be passed at all and is refused.
+ */
+export function securityArg(s: string): string {
+  if (/[\r\n\0]/.test(s)) throw new Error("a Keychain value cannot contain a line break");
+  return `"${s.replace(/[\\"]/g, "\\$&")}"`;
+}
+
+/** The add-generic-password line `security -i` reads on stdin: -U updates an item that is there already. */
+export function keychainAddLine(name: string, value: string): string {
+  return `${["add-generic-password", "-U", "-s", SERVICE, "-a", name, "-l", "vswarm: seal of its own state files", "-w", value].map(securityArg).join(" ")}\n`;
+}
+
 /** macOS: a generic password in the login Keychain. Items `security` creates can be read back by `security` without a prompt. */
 export function keychainStore(run: Runner = realRun): KeyStore {
   const sec = "/usr/bin/security";
@@ -50,7 +64,8 @@ export function keychainStore(run: Runner = realRun): KeyStore {
       throw new Error(`the Keychain did not answer (${first(r.err) || `security exit ${r.code}`})`);
     },
     async set(name, value) {
-      const r = await run([sec, "add-generic-password", "-U", "-s", SERVICE, "-a", name, "-l", "vswarm: seal of its own state files", "-w", value]);
+      // The value goes to `security -i` on stdin, never on the command line, where any process could read it in ps.
+      const r = await run([sec, "-i"], { stdin: keychainAddLine(name, value) });
       if (r.code !== 0) throw new Error(`could not write to the Keychain (${first(r.err) || `security exit ${r.code}`})`);
     },
     async remove(name) {

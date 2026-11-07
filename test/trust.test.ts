@@ -2,7 +2,7 @@
 // posture reports and team policy. Nothing here touches the real home, Keychain, secret service or DPAPI: keys live
 // in temp files, and the CLI runs with its state in a temp folder.
 import { describe, expect, test } from "bun:test";
-import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Ctx } from "../src/sec/ctx";
@@ -12,9 +12,9 @@ import { lookAlike, osvMalicious } from "../src/sec/intel";
 import { applyAllow, loadPolicy, matches, parsePolicy, signPolicy, teamJoin, teamSync } from "../src/sec/team";
 import { posture, REPORT_NAMESPACE, signReport, writePosture } from "../src/sec/report";
 import { forBaseline, scan } from "../src/sec/scan";
-import { DPAPI_PROTECT, DPAPI_UNPROTECT, dpapiStore, fileStore, keychainStore, platformStore, secretServiceStore, type KeyStore, type Runner } from "../src/sec/seal";
+import { DPAPI_PROTECT, DPAPI_UNPROTECT, dpapiStore, entryMac, fileStore, keychainAddLine, keychainStore, platformStore, secretServiceStore, securityArg, type KeyStore, type Runner } from "../src/sec/seal";
 import {
-  clearLock, files, keyStore, lockState, readAccepted, readBaseline, readLast, readLog, saveAccepted, saveBaseline, saveLast, setLock, stateKey, useKeyStore,
+  activeStore, appendAudit, chooseStore, clearLock, files, KIND_NAME, keyStore, lockState, readAccepted, readAudit, readBaseline, readLast, readLog, saveAccepted, saveBaseline, saveLast, setLock, stateKey, useKeyStore, useStores,
 } from "../src/sec/store";
 import type { Scan } from "../src/sec/types";
 
@@ -265,6 +265,219 @@ describe("the lock and the incident log", () => {
   }), 60_000);
 });
 
+/** A file store that can stop answering, as a locked Keychain does. A file kind, so nothing ever falls back elsewhere. */
+function flaky(dir: string) {
+  const inner = fileStore(dir);
+  const no = () => {
+    throw new Error("User interaction is not allowed");
+  };
+  const s = {
+    down: false,
+    kind: "file" as const,
+    where: dir,
+    get: async (n: string) => (s.down ? no() : inner.get(n)),
+    set: async (n: string, v: string) => (s.down ? no() : inner.set(n, v)),
+    remove: async (n: string) => (s.down ? no() : inner.remove(n)),
+  };
+  return s;
+}
+
+describe("a key store that does not always answer", () => {
+  const lock = { incident: "20260101-000000", at: Date.now(), reason: "test" };
+  const dropLock = () => {
+    rmSync(files.lock(), { force: true });
+    rmSync(`${files.lock()}.seal`, { force: true });
+  };
+
+  test("no entry is ever written without its seal: the append fails and writes nothing, and the chain verifies when the store answers again", () => withState(async (sec) => {
+    const s = flaky(join(sec, "k"));
+    useKeyStore(s);
+    expect((await stateKey()).key).toBeDefined();
+    // A later process (an agent started by launchd) finds the store not answering.
+    s.down = true;
+    useKeyStore(s);
+    // What the review did: one append while the store throws. Before, it wrote mac "" and the log read as tampered for good.
+    await expect(appendAudit("sign", "SHA256:x", "PASS · test")).rejects.toThrow("could not be sealed");
+    expect(existsSync(files.audit())).toBe(false);
+    // The lock path the same way: the lock file holds the incident open, the log gets no unsealed entry.
+    expect((await setLock(lock)).unsealed).toContain("sealing key");
+    expect(existsSync(files.log())).toBe(false);
+    expect((await lockState()).lock?.incident).toBe(lock.incident);
+    // An unlock cannot be recorded, so it is refused before anything is removed.
+    await expect(clearLock(lock.incident)).rejects.toThrow("cannot record the unlock");
+    expect(existsSync(files.lock())).toBe(true);
+    s.down = false;
+    useKeyStore(s);
+    await appendAudit("sign", "SHA256:x", "PASS · test");
+    const a = await readAudit();
+    expect([a.why, a.entries.length]).toEqual([undefined, 1]);
+    // The lock file from while the store was down has no seal: it still blocks, and says why; unlock closes it.
+    expect((await lockState()).why).toContain("no seal");
+    await clearLock(lock.incident);
+    expect((await lockState()).lock).toBeUndefined();
+    expect((await readLog()).why).toBeUndefined();
+  }));
+
+  test("a store that did not answer is asked again after a short wait; a key once read stays for the process", () => withState(async (sec) => {
+    const s = flaky(join(sec, "k"));
+    s.down = true;
+    useKeyStore(s);
+    expect((await stateKey()).error).toContain("User interaction");
+    s.down = false;
+    // Within the wait the failure stands (a gate does not hammer a locked Keychain)…
+    expect((await stateKey()).key).toBeUndefined();
+    await Bun.sleep(1100);
+    // …then it is asked again: an agent started before the Keychain answered recovers on its own.
+    expect((await stateKey()).key?.length).toBe(32);
+    s.down = true;
+    expect((await stateKey()).key?.length).toBe(32);
+  }));
+
+  test("without the key the log cannot prove an unlock: an incident it opened stays open, a forged unlock closes nothing", () => withState(async (sec) => {
+    const s = flaky(join(sec, "k"));
+    useKeyStore(s);
+    // A machine that never had an incident is not locked by a store that does not answer.
+    s.down = true;
+    expect((await lockState()).lock).toBeUndefined();
+    s.down = false;
+    useKeyStore(s);
+    await setLock(lock);
+    dropLock();
+    const good = readFileSync(files.log(), "utf8");
+    // What the review did: an unlock line written by hand, with a made-up MAC.
+    appendFileSync(files.log(), JSON.stringify({ n: 2, at: Date.now(), event: "unlock", incident: lock.incident, prev: JSON.parse(good).mac, mac: "f".repeat(64) }) + "\n");
+    expect((await lockState()).why).toContain("changed outside vswarm");
+    s.down = true;
+    useKeyStore(s);
+    let st = await lockState();
+    expect(st.lock?.incident).toBe(lock.incident);
+    expect(st.why).toContain("cannot read its sealing key");
+    expect(await verdictNow({ quiet: true, offline: true, ctx: ctxFor(tmp("home")) })).toBe("block");
+    // A real unlock cannot be shown either while the store is down; once it answers, it counts.
+    writeFileSync(files.log(), good);
+    s.down = false;
+    useKeyStore(s);
+    await clearLock(lock.incident);
+    s.down = true;
+    useKeyStore(s);
+    expect((await lockState()).lock?.incident).toBe(lock.incident);
+    s.down = false;
+    useKeyStore(s);
+    expect((await lockState()).lock).toBeUndefined();
+  }));
+
+  test("a log from 2.6 with entries written while the store did not answer: reported once, set aside, a new chain; nothing in it counts as sealed", () => withState(async (sec) => {
+    const s = flaky(join(sec, "k"));
+    useKeyStore(s);
+    await appendAudit("sign", "SHA256:x", "PASS · one");
+    await appendAudit("sign", "SHA256:x", "PASS · two");
+    const key = (await stateKey()).key!;
+    // What 2.6 wrote: an entry with an empty MAC while the store was down (the head not moved), then a sealed one after.
+    const old = (text: string) => text.trim().split("\n").map((l) => JSON.parse(l));
+    const [, two] = old(readFileSync(files.audit(), "utf8"));
+    const three = { n: 3, at: Date.now(), event: "sign", incident: "SHA256:x", reason: "PASS · while down", prev: two.mac, mac: "" };
+    const four0 = { n: 4, at: Date.now(), event: "refuse", incident: "SHA256:x", reason: "BLOCK · after", prev: "" };
+    const four = { ...four0, mac: entryMac(key, four0) };
+    appendFileSync(files.audit(), `${JSON.stringify(three)}\n${JSON.stringify(four)}\n`);
+    await s.set("audit-head", `4:${four.mac}`);
+    const a = await readAudit();
+    expect(a.why).toBeUndefined();
+    expect(a.notice).toContain("1 entry written while the key store was unavailable");
+    expect(a.entries.map((e) => e.event)).toEqual(["reset"]);
+    expect(readdirSync(sec).filter((f) => f.startsWith("audit.log.unsealed-")).length).toBe(1);
+    // Once: the next read is a clean, sealed chain.
+    const again = await readAudit();
+    expect([again.why, again.notice, again.entries.length]).toEqual([undefined, undefined, 1]);
+    // A changed entry is still a changed entry, empty MAC or not.
+    appendFileSync(files.audit(), JSON.stringify({ ...three, n: 9 }) + "\n");
+    expect((await readAudit()).why).toContain("changed outside vswarm");
+
+    // The incident log: a sealed lock, then an unlock 2.6 wrote without a seal. The unlock proves nothing: still open.
+    await setLock(lock);
+    dropLock();
+    const [l1] = old(readFileSync(files.log(), "utf8"));
+    appendFileSync(files.log(), JSON.stringify({ n: 2, at: Date.now(), event: "unlock", incident: lock.incident, prev: l1.mac, mac: "" }) + "\n");
+    const st = await lockState();
+    expect(st.lock?.incident).toBe(lock.incident);
+    expect((await readLog()).entries.map((e) => e.event)).toEqual(["reset", "lock"]);
+    await clearLock(lock.incident);
+    expect((await lockState()).lock).toBeUndefined();
+  }));
+});
+
+describe("which store holds the key: keystore.json is checked against the system's own store", () => {
+  const mem = (kind: KeyStore["kind"], init: Record<string, string> = {}, broken = false): KeyStore & { m: Record<string, string> } => {
+    const m = { ...init };
+    const no = () => {
+      throw new Error("not answering");
+    };
+    return { m, kind, where: `test ${kind}`, get: async (n) => (broken ? no() : m[n]), set: async (n, v) => void (broken ? no() : (m[n] = v)), remove: async (n) => void delete m[n] };
+  };
+  const key = "a".repeat(64);
+
+  test("a downgrade to a file that vswarm did not make is caught; one vswarm made, or a machine that only ever had a file, is not", async () => {
+    const file = mem("file");
+    const of = (k: KeyStore["kind"], p: KeyStore) => (k === "file" ? file : p);
+    for (const kind of ["keychain", "secret-service", "dpapi"] as const) {
+      // keystore.json edited to "file" while the system store still holds vswarm's key.
+      let p = mem(kind, { "state-key": key });
+      let c = await chooseStore("file", p, (k) => of(k, p));
+      expect([kind, c.store.kind, c.tampered]).toEqual([kind, kind, expect.stringContaining("vswarm did not make that change")]);
+      // …or that notes another kind.
+      p = mem(kind, { [KIND_NAME]: kind });
+      expect((await chooseStore("file", p, (k) => of(k, p))).tampered).toContain(`notes that vswarm chose ${kind}`);
+      // vswarm's own move to a file (the system store would not keep the key): noted, so not a finding.
+      p = mem(kind, { [KIND_NAME]: "file" });
+      c = await chooseStore("file", p, (k) => of(k, p));
+      expect([c.store.kind, c.tampered]).toEqual(["file", undefined]);
+      // Nothing of vswarm's in the system store, or a store that does not answer: the file, nothing to say.
+      p = mem(kind);
+      expect(await chooseStore("file", p, (k) => of(k, p))).toEqual({ store: file });
+      p = mem(kind, {}, true);
+      expect(await chooseStore("file", p, (k) => of(k, p))).toEqual({ store: file });
+      // keystore.json that agrees, or is missing.
+      p = mem(kind);
+      expect((await chooseStore(kind, p, (k) => of(k, p))).store).toBe(p);
+      expect((await chooseStore(undefined, p, (k) => of(k, p))).store).toBe(p);
+    }
+  });
+
+  test("the check reports it as a finding, and seals with the system store, not the file someone chose", () => withState(async () => {
+    const m = await machine();
+    const platform = mem("keychain");
+    const file = mem("file");
+    useStores({ recorded: "keychain", platform, file });
+    await saveBaseline(forBaseline(await scan(m.ctx, { live: false })));
+    expect(platform.m["state-key"]).toMatch(/^[0-9a-f]{64}$/);
+    expect(platform.m[KIND_NAME]).toBe("keychain");
+    // keystore.json changed to "file", with a key of the attacker's own in the file.
+    file.m["state-key"] = "b".repeat(64);
+    useStores({ recorded: "file", platform, file });
+    expect((await activeStore()).store).toBe(platform);
+    const r = await check(m.ctx, { offline: true });
+    const f = r.findings.find((x) => x.id === "vswarm-state:keystore");
+    expect(f?.severity).toBe("high");
+    expect(r.verdict).toBe("block");
+    // The baseline sealed with the system store's key still verifies: the file's key is not used.
+    expect((await readBaseline()).untrusted).toBeUndefined();
+    useStores(undefined);
+  }), 60_000);
+
+  test("vswarm's own fallback to a file leaves no key in the system store and notes it, so it is not taken for tampering", () => withState(async () => {
+    // A system store that takes the write but gives back something else (as a Keychain that will not keep it).
+    const m: Record<string, string> = {};
+    const platform: KeyStore = { kind: "keychain", where: "test keychain", get: async (n) => (n === "state-key" && m[n] ? "0".repeat(64) : m[n]), set: async (n, v) => void (m[n] = v), remove: async (n) => void delete m[n] };
+    const file = mem("file");
+    useStores({ recorded: undefined, platform, file });
+    expect((await stateKey()).store).toBe(file);
+    expect(m["state-key"]).toBeUndefined();
+    expect(m[KIND_NAME]).toBe("file");
+    useStores({ recorded: "file", platform, file });
+    expect((await stateKey()).tampered).toBeUndefined();
+    useStores(undefined);
+  }));
+});
+
 describe("key stores: the commands they run (nothing real is called)", () => {
   const recorder = (answers: { code: number; out?: string; err?: string }[]) => {
     const calls: { cmd: string[]; stdin?: string; env?: Record<string, string | undefined> }[] = [];
@@ -277,14 +490,47 @@ describe("key stores: the commands they run (nothing real is called)", () => {
   };
 
   test("macOS Keychain: found, not found (44), locked", async () => {
-    const r = recorder([{ code: 0, out: "ab\n" }, { code: 44 }, { code: 36, err: "User interaction is not allowed." }, { code: 0 }]);
+    const r = recorder([{ code: 0, out: "ab\n" }, { code: 44 }, { code: 36, err: "User interaction is not allowed." }, { code: 0 }, { code: 25 }]);
     const s = keychainStore(r.run);
     expect(await s.get("state-key")).toBe("ab");
     expect(await s.get("state-key")).toBeUndefined();
     await expect(s.get("state-key")).rejects.toThrow("User interaction is not allowed");
-    await s.set("state-key", "cd");
+    const secret = "5e3c0ffee5e3c0ffee5e3c0ffee5e3c0ffee5e3c0ffee5e3c0ffee5e3c0ffee1";
+    await s.set("state-key", secret);
     expect(r.calls[0].cmd).toEqual(["/usr/bin/security", "find-generic-password", "-s", "dev.vswarm.seal", "-a", "state-key", "-w"]);
-    expect(r.calls[3].cmd.slice(0, 7)).toEqual(["/usr/bin/security", "add-generic-password", "-U", "-s", "dev.vswarm.seal", "-a", "state-key"]);
+    // The secret never reaches the command line (any process can read that in ps): `security -i` reads it on stdin.
+    expect(r.calls[3].cmd).toEqual(["/usr/bin/security", "-i"]);
+    expect(r.calls.flatMap((c) => c.cmd).some((a) => a.includes(secret))).toBe(false);
+    expect(r.calls[3].stdin).toBe(`"add-generic-password" "-U" "-s" "dev.vswarm.seal" "-a" "state-key" "-l" "vswarm: seal of its own state files" "-w" "${secret}"\n`);
+    // security -i exits with the status of the command it ran.
+    await expect(s.set("state-key", secret)).rejects.toThrow("could not write to the Keychain");
+  });
+
+  test("macOS Keychain: values are quoted for the command parser of security -i (quotes, spaces, backslashes); a line break is refused", () => {
+    // How `security -i` splits a line, as checked against /usr/bin/security itself (show-keychain-info on a path that
+    // does not exist echoes the argument it got): a double-quoted word, \ escaping the next character.
+    const split = (line: string) => {
+      const out: string[] = [];
+      let i = 0;
+      while (i < line.length) {
+        while (line[i] === " ") i++;
+        if (i >= line.length) break;
+        let w = "";
+        const q = line[i] === '"' ? (i++, true) : false;
+        for (; i < line.length; i++) {
+          if (line[i] === "\\") w += line[++i] ?? "";
+          else if (q ? line[i] === '"' : line[i] === " ") break;
+          else w += line[i];
+        }
+        if (q) i++;
+        out.push(w);
+      }
+      return out;
+    };
+    for (const v of ['a b"c\\d', "'x' \\\\ \"\" end\\", "tab\there $HOME `x`", "", "-w"]) expect(split(securityArg(v))).toEqual([v]);
+    expect(split(keychainAddLine("state-key", 'q"\\ v').trimEnd()).slice(-2)).toEqual(["-w", 'q"\\ v']);
+    expect(() => securityArg("a\nfind-generic-password")).toThrow("line break");
+    expect(() => securityArg("a\rb")).toThrow("line break");
   });
 
   test("Linux Secret Service: the value goes in on stdin; no D-Bus is an error, not 'no key'", async () => {
