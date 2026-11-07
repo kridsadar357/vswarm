@@ -762,6 +762,17 @@ describe("coverage: login items in apps, extensions, shell start-up folders, mor
     expect(f.map((x: any) => `${x.severity} ${x.title}`)).toEqual(["high New kernel extension: Evil.kext", "medium New system extension: Tailscale Network Extension"]);
   });
 
+  test("a package source over http or at a bare IP warns even before a baseline; the official one and comments do not", async () => {
+    const pip = { kind: "tool-config", id: ".config/pip/pip.conf", name: ".config/pip/pip.conf", hash: "p" };
+    const npmrc = { kind: "rc", id: ".npmrc", name: ".npmrc", hash: "n" };
+    const texts = { ".config/pip/pip.conf": "[global]\nindex-url = http://203.0.113.9/simple\n", ".npmrc": "# registry=http://10.0.0.1/\nregistry=https://registry.npmjs.org/\n" };
+    const f = await evaluate({ scan: scanOf([pip, npmrc], texts), malicious: [], secrets: [] });
+    expect(f.filter((x: any) => x.rule === "pkg-source").map((x: any) => `${x.severity} ${x.title}`)).toEqual(["medium ~/.config/pip/pip.conf takes packages from an unsafe source"]);
+    // With a baseline the added line is reported with the file's changes instead, once.
+    const g = await evaluate({ scan: scanOf([pip], texts), baseline: scanOf([pip], { ".config/pip/pip.conf": "[global]\n" }), malicious: [], secrets: [] });
+    expect(g.filter((x: any) => x.rule === "pkg-source")).toEqual([]);
+  });
+
   test("fish conf.d snippets are read; vswarm's own fish file is not; a downloader line added to one blocks", async () => {
     const home = tmpd("fish");
     const confd = join(home, ".config/fish/conf.d");
