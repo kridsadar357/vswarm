@@ -258,6 +258,12 @@ or change them after you approved it. `--inspect` starts each server the way the
 - **stdio servers run inside the vswarm sandbox**: no home (except the server's own project folder, read-only), no
   keychain or clipboard, network only to package registries. `--no-sandbox` starts them as your agent would.
 - remote servers are asked over HTTP; servers that need an OAuth sign-in are listed as not inspected.
+- a **relative command** (`./bin/server`) is read from the folder the agent starts the server in: for Codex and
+  Gemini CLI the entry's `cwd` when it is absolute, for Claude Code a project's own servers start in that project.
+  Anywhere else the folder depends on where the agent was started, or is not documented (Claude Desktop, Cursor,
+  Windsurf, VS Code), so the server is listed as "relative command, not inspected" instead of started from a guessed
+  folder, and scans warn about it: whatever sits at that path in the agent's folder would run. The command and its
+  arguments are kept as the config gives them, so a path with spaces stays one word.
 - **prompts and resources** are read too when the server offers them (`prompts/list`, `resources/list`): they reach
   the model as text just like tool descriptions, and get the same checks and pins.
 - every tool, prompt and resource definition is **pinned** (hashed), together with the server's definition in the
