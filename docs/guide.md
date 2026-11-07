@@ -112,6 +112,11 @@ Login" items are not read either, because asking System Events would pop up an A
 connection from a program you built yourself (in `~/develop`, `~/code` …), from Homebrew or from a language toolchain
 is not reported as unsigned: those are ad-hoc signed for ordinary reasons.
 
+A program or login entry in a hidden folder of its own straight in your home (`~/.lib`, `~\.keepalive.vbs`) warns
+(MED) rather than blocks: people and dev tools keep their own things there too. Temp, cache, Downloads and a hidden
+folder inside another (`~/.config/.x`) stay HIGH, and after a baseline any new login entry is reported as new. When a
+login entry starts a program that is running right now, that is one finding, which says it is running.
+
 | Severity | Meaning | Verdict |
 | --- | --- | --- |
 | CRIT, HIGH | wrong on its face: a malicious package, a login job running from `~/.cache` | **BLOCK**: no production access |

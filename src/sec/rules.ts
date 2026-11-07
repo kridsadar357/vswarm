@@ -23,6 +23,15 @@ const RISKY_PS = /\b(invoke-expression|iex|downloadstring|downloadfile|frombase6
 
 const capital = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
 
+/**
+ * How much a program's place weighs. A hidden folder of its own straight in the home (~/.lib, ~\.wsl-keepalive.vbs) is
+ * where people and dev tools also keep their own things, so on its own it warns; temp, Downloads, Public and a hidden
+ * folder inside another stay high. Once there is a baseline, a new one is reported as new anyway.
+ */
+export function placeSeverity(where: string): "high" | "medium" {
+  return /^runs from a hidden folder \(~[\\/][^\\/)]+\)/.test(where) ? "medium" : "high";
+}
+
 // ── lines that change what a tool runs, or where packages come from
 
 /** A program in a hidden folder inside another one (~/.config/.x/run): tools do not install there. */
@@ -243,14 +252,14 @@ export async function evaluate(input: RuleInput): Promise<Finding[]> {
   }
   for (const i of scan.items) {
     if (i.kind === "proc") {
-      add({ id: `proc:${i.id}`, rule: "proc-location", severity: "high", title: `Program running from an unusual place: ${i.path}`,
+      add({ id: `proc:${i.id}`, rule: "proc-location", severity: placeSeverity(String(i.meta?.where ?? "")), title: `Program running from an unusual place: ${i.path}`,
         detail: [String(i.meta?.where ?? ""), `pid ${i.meta?.pid}`], fix: `Find out what started it (${parentOf(i.meta?.pid)}); if you do not know it, vswarm respond`, item: i });
     }
     if (i.kind === "conn") {
       const where = i.meta?.where as string | undefined;
       const fresh = i.path && newBins.has(i.path);
       if (where || fresh) {
-        add({ id: `conn:${i.id}`, rule: "conn", severity: "high",
+        add({ id: `conn:${i.id}`, rule: "conn", severity: where ? placeSeverity(where) : "high",
           title: `${i.name} is connected to other machines${where ? ` and ${where}` : " and is new since the baseline"}`,
           detail: [`remotes: ${i.meta?.remotes}`, i.path ?? ""], fix: "If you do not recognise it, disconnect from the network and run vswarm respond", item: i });
       } else if (i.path && !buildPlace(i.path, home) && (i.meta?.signed === "unsigned" || i.meta?.signed === "adhoc" || i.meta?.loose)) {
@@ -302,14 +311,14 @@ export async function evaluate(input: RuleInput): Promise<Finding[]> {
       if (what) {
         const r = winLaunchRisk(prog, home);
         if (r.risky || r.where) {
-          add({ id: `launch-location:${i.id}`, rule: "launch-location", severity: "high", title: `${what} ${i.name} ${r.risky ?? `starts a program that ${r.where}`}`,
+          add({ id: `launch-location:${i.id}`, rule: "launch-location", severity: r.risky ? "high" : placeSeverity(r.where!), title: `${what} ${i.name} ${r.risky ?? `starts a program that ${r.where}`}`,
             detail: [i.path ?? "", redact(prog.slice(0, 300))], fix: "Unless you set this up yourself, vswarm respond", item: i });
         }
       } else {
         const exe = prog.split(" ").find((p) => p.startsWith("/") && !/^\/(bin|usr\/bin)\/(ba|z)?sh$/.test(p) && !/^\/usr\/bin\/(env|python3?|osascript|open)$/.test(p)) ?? "";
         const where = exe ? suspiciousLocation(exe, home) : undefined;
         if (where) {
-          add({ id: `launch-location:${i.id}`, rule: "launch-location", severity: "high", title: `Login job ${i.name} starts a program that ${where}`,
+          add({ id: `launch-location:${i.id}`, rule: "launch-location", severity: placeSeverity(where), title: `Login job ${i.name} starts a program that ${where}`,
             detail: [i.path ?? "", prog], fix: "Unless you set this up yourself, vswarm respond", item: i });
         }
       }
@@ -492,5 +501,24 @@ export async function evaluate(input: RuleInput): Promise<Finding[]> {
   }
 
   out.push(...input.secrets);
-  return out;
+  return foldRunning(out);
+}
+
+/**
+ * A program that a login entry starts and that is running now is one finding, not two: the entry keeps it, and says
+ * it is running. Paths compare the way the system does (case-insensitive on Windows).
+ */
+function foldRunning(findings: Finding[]): Finding[] {
+  // A command line starts with a quote as often as with the drive letter.
+  const norm = (p: string) => (/[A-Za-z]:[\\/]/.test(p) ? p.replace(/\//g, "\\").toLowerCase() : p);
+  const launches = findings.filter((f) => f.rule === "launch-location");
+  if (!launches.length) return findings;
+  return findings.filter((f) => {
+    if (f.rule !== "proc-location" || !f.item?.path) return true;
+    const exe = norm(f.item.path);
+    const entry = launches.find((l) => norm(String(l.item?.meta?.program ?? "")).includes(exe));
+    if (!entry) return true;
+    entry.detail = [...(entry.detail ?? []), `running now: pid ${f.item.meta?.pid}`];
+    return false;
+  });
 }

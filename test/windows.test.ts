@@ -614,3 +614,36 @@ describe("windows: the sealing key's store (DPAPI) and a keystore.json moved to 
     if (process.platform === "win32") expect(fallbackDir("C:\\Users\\nok")).toContain("vswarm\\keys");
   });
 });
+
+describe("windows: a program kept in a hidden folder of its own in the home", () => {
+  // Seen on a real PC: a receipt-printer service in ~\.lib started from the Run key, and a WSL keepalive script.
+  const exe = "C:\\Users\\nok\\.lib\\printer\\.venv\\Scripts\\pythonw.exe";
+  const items = [
+    { kind: "launch", id: "reg:HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run\\PrinterReceiptService", name: "PrinterReceiptService", source: "user", hash: "a",
+      meta: { what: "HKCU Run value", program: `"${exe}" printer_cli.py --minimized` } },
+    { kind: "proc", id: exe.toLowerCase(), name: "pythonw.exe", path: exe, hash: "b", meta: { pid: "20128", where: "runs from a hidden folder (~\\.lib)" } },
+    { kind: "launch", id: "task:\\Start WSL", name: "Start WSL", source: "system-agent", hash: "c",
+      meta: { what: "scheduled task", program: "C:\\Windows\\System32\\wscript.exe C:\\Users\\nok\\.wsl-keepalive.vbs" } },
+    { kind: "launch", id: "reg:HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run\\Updater", name: "Updater", source: "user", hash: "d",
+      meta: { what: "HKCU Run value", program: "C:\\Users\\nok\\AppData\\Local\\Temp\\u.exe" } },
+  ] as any[];
+  const s: Scan = { version: 1, host: "pc", user: "nok", home: HOME, at: Date.now(), items, texts: {}, gaps: [], covers: COVERS };
+
+  test("warns instead of blocking, and the running program folds into the entry that starts it", async () => {
+    const fs = await run(s);
+    const t = titles(fs);
+    expect(t).toContain("medium HKCU Run value PrinterReceiptService starts a program that runs from a hidden folder (~\\.lib)");
+    expect(t.some((x) => x.startsWith("medium Scheduled task Start WSL"))).toBe(true);
+    // One finding for the printer service, which says it is running.
+    expect(fs.filter((f) => f.rule === "proc-location")).toEqual([]);
+    expect(fs.find((f) => f.item?.name === "PrinterReceiptService")?.detail).toContain("running now: pid 20128");
+    // A temp folder stays high.
+    expect(t).toContain("high HKCU Run value Updater starts a program that runs from a temp folder");
+  });
+
+  test("a hidden folder inside another stays high", async () => {
+    const nested = { ...items[1], id: "x", path: "C:\\Users\\nok\\.config\\.x\\run.exe", meta: { pid: "1", where: "runs from a hidden folder (~/.config/.x)" } };
+    const fs = await run({ ...s, items: [nested] });
+    expect(fs.find((f) => f.rule === "proc-location")?.severity).toBe("high");
+  });
+});
