@@ -23,7 +23,7 @@ import { grade, type Analysis, type Meta } from "./grade";
 import { keepFor, scanPackage, type Kind } from "./scan";
 
 /** Bumped when the scanner changes, so results read by an older one are read again. */
-export const SCANNER = 1;
+export const SCANNER = 2;
 export const CONTENT_DIR = () => join(SEC(), "pkg-content");
 
 const DAY = 86_400_000;
@@ -91,8 +91,13 @@ function cached(dir: string, eco: string, name: string, version: string, file: s
   if (!c || c.v !== SCANNER || !c.analysis?.scanned) return;
   // The same name and version with another checksum is another archive: read it again (and integrity decides).
   if (integrity && c.integrity && c.integrity !== integrity) return;
+  // Never a read that stopped part way or met a damaged archive, whoever wrote it.
+  if (!readClean(c.analysis.scanned)) return;
   return c.analysis;
 }
+
+/** Whether an archive was read whole and undamaged: only such a read may stand for the archive later. */
+export const readClean = (a: { partial?: string; problems?: Archive["problems"] }) => !a.partial && !(a.problems ?? []).some((p) => p.kind === "damaged" || p.kind === "limit");
 
 function keep(dir: string, a: Analysis, integrity?: string) {
   try {
@@ -275,7 +280,7 @@ async function readArtifact(meta: Meta, art: Artifact, opt: ContentOpt, deadline
   if (art.kind !== "wheel") a = stripTop(a);
   const analysis: Analysis = { meta, scanned: scanPackage(a, art.kind) };
   // Integrity unknown (no checksum given) or a partial read: not kept, so the next look reads it again.
-  if (ok && !a.partial) keep(dirFor(opt), analysis, art.integrity ?? art.sha256 ?? art.shasum);
+  if (ok && readClean(a)) keep(dirFor(opt), analysis, art.integrity ?? art.sha256 ?? art.shasum);
   return { analysis, archive: a, findings: [], notes: a.partial ? [`${lbl}: only part of it was read (${a.partial})`] : [] };
 }
 

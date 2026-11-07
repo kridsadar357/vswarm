@@ -130,54 +130,88 @@ const str = (b: Buffer, at: number, len: number) => {
   return s.subarray(0, nul < 0 ? s.length : nul).toString("utf8");
 };
 
-/** A tar number: octal text, or base-256 when the top bit is set (GNU, for sizes past 8 GB). */
-function tarNum(b: Buffer, at: number, len: number): number {
+/**
+ * A tar number: octal text (ended by NUL or space, as node-tar and Python's tarfile read it), or base-256 when the top
+ * bit is set (GNU, for sizes past 8 GB; 0xff first is a negative number). NaN for anything else: not octal, negative,
+ * or past what a double holds exactly. parseInt would read "12zz" as 10, and the next header from the wrong place.
+ */
+export function tarNum(b: Buffer, at: number, len: number): number {
+  if (b[at] === 0xff) return NaN;
   if (b[at] & 0x80) {
     let n = b[at] & 0x7f;
     for (let i = 1; i < len; i++) n = n * 256 + b[at + i];
-    return n;
+    return Number.isSafeInteger(n) ? n : NaN;
   }
   const t = str(b, at, len).trim();
-  return t ? parseInt(t, 8) : 0;
+  if (!t) return 0;
+  return /^[0-7]+$/.test(t) ? parseInt(t, 8) : NaN;
 }
 
-/** pax extended header records: "<len> key=value\n". */
-function pax(data: Buffer): Record<string, string> {
+/** A pax size: decimal digits, or NaN for anything else; undefined when the record is not there. */
+const paxSize = (v: string | undefined) => (v === undefined ? undefined : /^\d{1,15}$/.test(v) ? Number(v) : NaN);
+
+/** pax extended header records: "<len> key=value\n". Undefined when a record is malformed, as tarfile refuses it. */
+function pax(data: Buffer): Record<string, string> | undefined {
   const out: Record<string, string> = {};
   let i = 0;
-  while (i < data.length) {
+  // Padding after the last record is NULs.
+  while (i < data.length && data[i] !== 0) {
     const sp = data.indexOf(0x20, i);
-    if (sp < 0) break;
-    const len = Number(data.subarray(i, sp).toString());
-    if (!Number.isInteger(len) || len <= 0 || i + len > data.length) break;
+    if (sp < 0) return;
+    const lenText = data.subarray(i, sp).toString("latin1");
+    const len = /^\d{1,9}$/.test(lenText) ? Number(lenText) : NaN;
+    if (!(len > sp - i + 1) || i + len > data.length || data[i + len - 1] !== 0x0a) return;
     const rec = data.subarray(sp + 1, i + len - 1).toString("utf8");
     const eq = rec.indexOf("=");
-    if (eq > 0) out[rec.slice(0, eq)] = rec.slice(eq + 1);
+    if (eq <= 0) return;
+    out[rec.slice(0, eq)] = rec.slice(eq + 1);
     i += len;
   }
   return out;
 }
 
+/**
+ * Reads a tar the way node-tar (npm) and Python's tarfile (pip) do, so the files checked are the files installed: pax
+ * `path`, `linkpath` and `size` records apply to the entry after them, GNU long names too, sizes may be base-256. A
+ * header whose checksum or size is not what a tar header holds, a malformed pax record, or a global pax header that
+ * would move paths or sizes (node-tar applies it to every entry, tarfile does not) ends the read as damaged: what
+ * follows could be read differently by the installer, so nothing after it is guessed at.
+ */
 export function readTar(buf: Buffer, lim: Limits = LIMITS): Archive {
   const r = new Reader(lim);
+  const damaged = (path: string, detail: string) => {
+    r.problems.push({ kind: "damaged", path: path.slice(0, 200), detail });
+    r.partial ??= "the archive is damaged";
+  };
   let off = 0;
-  let next: { path?: string; link?: string } = {};
+  let next: { path?: string; link?: string; size?: number } = {};
   while (off + 512 <= buf.length) {
     const h = buf.subarray(off, off + 512);
     if (h[0] === 0 && h.every((x) => x === 0)) break;
-    // The checksum counts its own field as spaces; anything else is not a tar header.
-    let sum = 0;
-    for (let i = 0; i < 512; i++) sum += i >= 148 && i < 156 ? 32 : h[i];
-    if (sum !== tarNum(h, 148, 8)) {
-      r.problems.push({ kind: "damaged", path: "", detail: `bad header at byte ${off}` });
-      r.partial ??= "the archive is damaged";
+    // The checksum counts its own field as spaces; tarfile also takes the sum of the bytes read as signed.
+    let sum = 0, signed = 0;
+    for (let i = 0; i < 512; i++) {
+      const x = i >= 148 && i < 156 ? 32 : h[i];
+      sum += x;
+      signed += x > 127 ? x - 256 : x;
+    }
+    const want = tarNum(h, 148, 8);
+    if (want !== sum && want !== signed) {
+      damaged("", `bad header checksum at byte ${off}`);
       break;
     }
-    const size = tarNum(h, 124, 12);
     const type = h[156] === 0 ? "0" : String.fromCharCode(h[156]);
     const ustar = h.subarray(257, 262).toString("latin1") === "ustar";
     const prefix = ustar ? str(h, 345, 155) : "";
     const name = (prefix ? `${prefix}/` : "") + str(h, 0, 100);
+    const own = tarNum(h, 124, 12);
+    if (Number.isNaN(own)) {
+      damaged(name, `the size field of the header at byte ${off} is not a number`);
+      break;
+    }
+    // A pax size describes the entry after it, never another pax or long-name header.
+    const meta = type === "x" || type === "g" || type === "L" || type === "K";
+    const size = meta ? own : (next.size ?? own);
     const start = off + 512;
     if (start + size > buf.length) {
       r.problems.push({ kind: "damaged", path: name.slice(0, 200), detail: "cut short" });
@@ -186,12 +220,28 @@ export function readTar(buf: Buffer, lim: Limits = LIMITS): Archive {
     }
     const data = buf.subarray(start, start + size);
     off = start + Math.ceil(size / 512) * 512;
-    if (type === "x") {
+    if (type === "x" || type === "g") {
       const p = pax(data);
-      next = { path: p.path ?? next.path, link: p.linkpath ?? next.link };
+      if (!p) {
+        damaged(name, `a malformed pax header at byte ${start - 512}`);
+        break;
+      }
+      const ps = paxSize(p.size);
+      if (Number.isNaN(ps)) {
+        damaged(name, `a pax size that is not a number (${String(p.size).slice(0, 40)})`);
+        break;
+      }
+      if (type === "g") {
+        const moves = ["path", "linkpath", "size"].filter((k) => k in p);
+        if (moves.length) {
+          damaged(name, `a global pax header sets ${moves.join(", ")} for every entry, which npm and pip apply differently`);
+          break;
+        }
+        continue;
+      }
+      next = { path: p.path ?? next.path, link: p.linkpath ?? next.link, size: ps ?? next.size };
       continue;
     }
-    if (type === "g") continue;
     if (type === "L") {
       next.path = str(data, 0, data.length);
       continue;
@@ -229,12 +279,22 @@ export function readTgz(buf: Buffer, lim: Limits = LIMITS): Archive {
   return readTar(tar, lim);
 }
 
+/**
+ * Reads a zip from its central directory, as Python's zipfile (pip) does. Where pip would read a file differently or
+ * refuse it, the archive counts as damaged and is read again next time: a local header whose name is not the
+ * directory's (zipfile refuses that entry; other unzippers take the local name), two entries that land on the same
+ * path, and a name with non-ASCII bytes not marked UTF-8 (zipfile reads that as code page 437).
+ */
 export function readZip(buf: Buffer, lim: Limits = LIMITS): Archive {
   const r = new Reader(lim);
   const damaged = (detail: string) => {
     r.problems.push({ kind: "damaged", path: "", detail });
     r.partial ??= "the archive is damaged";
     return r.done();
+  };
+  const odd = (name: string, detail: string) => {
+    r.problems.push({ kind: "damaged", path: safePath(name) ?? name.slice(0, 200), detail });
+    r.partial ??= "the archive is damaged";
   };
   // The end-of-central-directory record: 22 bytes, plus a comment of up to 64 KB.
   let eocd = -1;
@@ -251,6 +311,7 @@ export function readZip(buf: Buffer, lim: Limits = LIMITS): Archive {
     r.stop("a ZIP64 archive (over 4 GB or 65,535 files), which vswarm does not read");
     return r.done();
   }
+  const names = new Set<string>();
   for (let n = 0; n < count; n++) {
     if (p + 46 > buf.length || buf.readUInt32LE(p) !== 0x02014b50) return damaged("bad central directory");
     const flags = buf.readUInt16LE(p + 8);
@@ -261,12 +322,21 @@ export function readZip(buf: Buffer, lim: Limits = LIMITS): Archive {
     const ext = buf.readUInt32LE(p + 38);
     const lho = buf.readUInt32LE(p + 42);
     if (p + 46 + nlen > buf.length) return damaged("bad central directory");
-    const name = buf.toString("utf8", p + 46, p + 46 + nlen);
+    const rawName = buf.subarray(p + 46, p + 46 + nlen);
+    const name = rawName.toString("utf8");
     p += 46 + nlen + xlen + clen;
+    if (!(flags & 0x800) && rawName.some((b) => b > 0x7f)) odd(name, "a name with non-ASCII bytes not marked UTF-8: pip reads it as code page 437, so it names another file there");
+    const local = readLocal(buf, lho, csize);
+    if (local && !local.name.equals(rawName)) odd(name, `its local header names ${JSON.stringify(local.name.toString("utf8").slice(0, 120))}: pip refuses the entry, other unzippers unpack that name`);
     const mode = ext >>> 16;
     if (name.endsWith("/") || (mode & 0o170000) === 0o040000) continue;
+    const key = safePath(name);
+    if (key !== undefined) {
+      if (names.has(key)) odd(name, "a second entry for the same path: which one counts depends on the tool that unpacks it");
+      names.add(key);
+    }
     if ((mode & 0o170000) === 0o120000) {
-      r.link(name, readLocal(buf, lho, csize)?.toString("utf8").slice(0, 300) ?? "?", false);
+      r.link(name, local?.data.toString("utf8").slice(0, 300) ?? "?", false);
       continue;
     }
     if (flags & 1) {
@@ -275,7 +345,7 @@ export function readZip(buf: Buffer, lim: Limits = LIMITS): Archive {
     }
     let bad: string | undefined;
     const ok = r.file(name, usize, mode & 0o7777, (keep) => {
-      const raw = readLocal(buf, lho, csize);
+      const raw = local?.data;
       // A file nobody reads is counted, not inflated.
       if (!keep && raw && method !== 0) return Buffer.alloc(0);
       if (!raw) return ((bad = "bad local header"), Buffer.alloc(0));
@@ -289,17 +359,18 @@ export function readZip(buf: Buffer, lim: Limits = LIMITS): Archive {
         return Buffer.alloc(0);
       }
     });
-    if (bad) r.problems.push({ kind: "damaged", path: safePath(name) ?? name.slice(0, 200), detail: bad });
+    if (bad) odd(name, bad);
     if (!ok) break;
   }
   return r.done();
 }
 
-function readLocal(buf: Buffer, at: number, csize: number): Buffer | undefined {
+function readLocal(buf: Buffer, at: number, csize: number): { name: Buffer; data: Buffer } | undefined {
   if (at + 30 > buf.length || buf.readUInt32LE(at) !== 0x04034b50) return;
-  const start = at + 30 + buf.readUInt16LE(at + 26) + buf.readUInt16LE(at + 28);
+  const nlen = buf.readUInt16LE(at + 26);
+  const start = at + 30 + nlen + buf.readUInt16LE(at + 28);
   if (start + csize > buf.length) return;
-  return buf.subarray(start, start + csize);
+  return { name: buf.subarray(at + 30, at + 30 + nlen), data: buf.subarray(start, start + csize) };
 }
 
 /** Drops the one folder every entry sits in (npm's package/, an sdist's name-1.0/), as npm and pip do. */

