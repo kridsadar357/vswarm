@@ -989,7 +989,7 @@ export async function agentCommand(action: string, args: string[], opt: AgentCom
 
   if (action === "on") {
     const launcher = join(paths.bin(), "vswarm");
-    if (!existsSync(launcher)) throw new Error("install the launcher first: vswarm install");
+    if (!existsSync(launcher)) throw new Error("install the launcher first: vswarm install (or vswarm install --no-path to keep it inside VSWARM_HOME)");
     if (opt.upstream !== undefined || opt.upstreamTimeout !== undefined) {
       if (opt.upstream !== undefined && opt.upstream !== "none" && same(opt.upstream, sock)) throw new Error("--upstream names this agent itself");
       safeDir(agentPaths.dir());

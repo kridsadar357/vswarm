@@ -464,7 +464,7 @@ export async function watchCommand(action: string, opt: { every: number }) {
   }
   if (action === "on") {
     const launcher = join(paths.bin(), win() ? "vswarm.cmd" : "vswarm");
-    if (!existsSync(launcher)) throw new Error("install the launcher first: vswarm install");
+    if (!existsSync(launcher)) throw new Error("install the launcher first: vswarm install (or vswarm install --no-path to keep it inside VSWARM_HOME)");
     const every = opt.every;
     const r = await watchOn(launcher, every);
     for (const f of r.done) line(`${c.green("✔")} ${f.replace(homedir(), "~")}`);

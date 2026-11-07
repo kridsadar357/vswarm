@@ -70,6 +70,8 @@ sudo apt install bubblewrap strace      # Fedora: dnf · Arch: pacman
 
 ถอนการติดตั้งด้วย `vswarm uninstall` (ข้อมูลใน `~/.vswarm` ยังอยู่) หรือ `vswarm uninstall --purge` เพื่อลบทั้งหมด
 
+ถ้าอยากลองใช้โดยไม่ให้แตะไฟล์ shell หรือ PATH ให้ตั้ง `VSWARM_HOME` เป็นโฟลเดอร์แยก แล้วรัน `vswarm install --no-path --yes` จาก checkout ตัว launcher, completions และข้อมูลทั้งหมดจะอยู่ในโฟลเดอร์นั้น และจะยังไม่ทำ baseline ส่วน `watch`, `agent` และ `gate cmd` ต้องมี launcher นี้ก่อน
+
 ## 2. เริ่มต้นใน 5 นาที
 
 ```bash
@@ -704,7 +706,7 @@ vswarm trust           # fingerprint ของกุญแจที่เคร�
 | `vswarm canary plant aws\|dns\|env` · `list` · `remove <id\|all>` | credential ล่อ |
 | `vswarm selftest [--all] [--json]` | วัดอัตราการจับและการแจ้งผิด แยกตามเทคนิค |
 | `vswarm update [--unsigned]` · `vswarm trust [pin]` | อัปเดตไป release ล่าสุดที่เซ็นถูกต้อง |
-| `vswarm doctor` · `install` · `uninstall [--purge]` · `completions zsh\|bash` · `version` | ติดตั้งและดูแล |
+| `vswarm doctor` · `install [--no-path] [--yes]` · `uninstall [--purge]` · `completions zsh\|bash` · `version` | ติดตั้งและดูแล |
 
 ## 16. ไฟล์ ค่าตั้ง และความเป็นส่วนตัว
 

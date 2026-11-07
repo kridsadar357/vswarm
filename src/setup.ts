@@ -535,7 +535,7 @@ export async function guard(args: string[]) {
   }
   if (action !== "on" && action !== "off") throw new Error("usage: vswarm guard on [--ignore-scripts] [--sandbox] [--strict] | off | status");
   const launcher = existsSync(launcherPath()) ? launcherPath() : undefined;
-  if (action === "on" && !launcher) throw new Error("install the launcher first: vswarm install");
+  if (action === "on" && !launcher) throw new Error("install the launcher first: vswarm install (or vswarm install --no-path to keep it inside VSWARM_HOME)");
   if (action === "on") saveGuardConfig(want);
   const body = action === "off" ? null : guardBody(launcher!, want);
   for (const f of await guardFiles(action === "on")) {

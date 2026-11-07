@@ -73,6 +73,10 @@ All commands: `vswarm help`
 
 Remove it with `vswarm uninstall` (keeps `~/.vswarm` data) or `vswarm uninstall --purge`.
 
+To try vswarm without touching your shell files or PATH, point `VSWARM_HOME` at a folder of its own and run
+`vswarm install --no-path --yes` from a checkout: the launcher, completions and data all stay in that folder, and no
+baseline is taken. `watch`, `agent` and `gate cmd` need that launcher.
+
 ## 2. Five-minute start
 
 ```bash
@@ -927,7 +931,7 @@ Maintainers: the release steps are in [SECURITY.md](../SECURITY.md#for-the-maint
 | `vswarm canary plant aws\|dns\|env` · `list` · `remove <id\|all>` | decoy credentials |
 | `vswarm selftest [--all] [--json]` | measured detection and false alarms, per technique |
 | `vswarm update [--unsigned]` · `vswarm trust [pin]` | updates to the newest correctly signed release |
-| `vswarm doctor` · `install` · `uninstall [--purge]` · `completions zsh\|bash` · `version` | set-up |
+| `vswarm doctor` · `install [--no-path] [--yes]` · `uninstall [--purge]` · `completions zsh\|bash` · `version` | set-up |
 
 ## 16. Files, settings and privacy
 

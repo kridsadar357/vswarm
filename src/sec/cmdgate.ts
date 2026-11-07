@@ -408,7 +408,7 @@ export async function realGateFiles(adding: boolean): Promise<GateFiles> {
   const { CLI, guardFiles, launcherPath } = await import("../setup");
   const win = process.platform === "win32";
   const launcher = launcherPath();
-  if (adding && !win && !existsSync(launcher)) throw new Error("install the launcher first: vswarm install");
+  if (adding && !win && !existsSync(launcher)) throw new Error("install the launcher first: vswarm install (or vswarm install --no-path to keep it inside VSWARM_HOME)");
   return {
     files: await guardFiles(adding),
     body: (g, f) => (f.toLowerCase().endsWith(".ps1") ? psCmdGateBlock(process.execPath, CLI, g) : cmdGateBlock(launcher, g)),
