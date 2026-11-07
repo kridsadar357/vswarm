@@ -26,7 +26,11 @@ export interface Check {
 /** Findings about vswarm's own files. They can never be accepted away: accepting them would need the files they doubt. */
 export const STATE_RULE = "vswarm-state";
 
-export async function check(ctx: Ctx, opt: { offline?: boolean; osvNewOnly?: boolean; sign?: Parameters<typeof evaluate>[0]["sign"] } = {}): Promise<Check> {
+/**
+ * `only` checks just those parts of the scan (see scan.ts), without credentials or the team's requirements, and does
+ * not save the result: a gate must never reuse a verdict that looked at part of the machine.
+ */
+export async function check(ctx: Ctx, opt: { offline?: boolean; osvNewOnly?: boolean; sign?: Parameters<typeof evaluate>[0]["sign"]; only?: string[] } = {}): Promise<Check> {
   const t0 = Date.now();
   ensureSec();
   const own: Finding[] = [];
@@ -38,7 +42,8 @@ export async function check(ctx: Ctx, opt: { offline?: boolean; osvNewOnly?: boo
   if (b.untrusted && !b.nokey)
     state("baseline", "high", "vswarm's baseline was changed outside vswarm", [`${files.baseline()} ${b.untrusted}`, "Code that adds itself to the baseline would never be reported as new."],
       "If you did not edit it, treat the machine as suspect (vswarm respond). Otherwise review vswarm diff, then record a new one: vswarm baseline");
-  const [scanned, secretFindings] = await Promise.all([runScan(ctx), findSecrets(ctx)]);
+  const partial = opt.only !== undefined;
+  const [scanned, secretFindings] = await Promise.all([runScan(ctx, partial ? { only: opt.only, live: false } : {}), partial ? [] : findSecrets(ctx)]);
   // A quiet gate asks OSV only about packages it has never asked about, with a short wait, so a package installed a
   // minute ago is checked before production access while a slow network still cannot hold up a login.
   const osv = await osvMalicious(scanned.items, files.osv(), { offline: opt.offline, onlyNew: opt.osvNewOnly, timeoutMs: opt.osvNewOnly ? 3000 : undefined });
@@ -49,7 +54,7 @@ export async function check(ctx: Ctx, opt: { offline?: boolean; osvNewOnly?: boo
   if (team.untrusted)
     state("team-policy", "medium", "the team policy on this machine was changed outside vswarm; it is not used", [`policy.json ${team.untrusted}`], "Fetch the signed one again: vswarm team sync");
   const all = await evaluate({ scan: scanned, baseline, malicious: osv.hits, secrets: secretFindings, sign: opt.sign });
-  if (team.policy) own.push(...(await requirements(team.policy, ctx, baseline?.at)));
+  if (team.policy && !partial) own.push(...(await requirements(team.policy, ctx, baseline?.at)));
   // MCP servers against what `agents --inspect` saw last, without starting any of them.
   const { loadPins, mcpDrift } = await import("./mcp");
   const pinned = await loadPins();
@@ -90,6 +95,6 @@ export async function check(ctx: Ctx, opt: { offline?: boolean; osvNewOnly?: boo
   let verdict = verdictOf(findings);
   if (lock) verdict = "block";
   const result: Check = { scan: scanned, baseline, findings, accepted: all.length - findings.length + own.length, verdict, lock, notes, ms: Date.now() - t0, osvUnchecked: osv.unchecked };
-  await saveLast({ scan: forBaseline(scanned), findings, verdict, at: Date.now() });
+  if (!partial) await saveLast({ scan: forBaseline(scanned), findings, verdict, at: Date.now() });
   return result;
 }

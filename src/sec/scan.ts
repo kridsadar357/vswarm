@@ -11,7 +11,11 @@ import type { Item, Scan } from "./types";
 /** Every item kind the collectors produce; stored with a baseline so later checks know what it covered. */
 export const COVERS = ["brew", "brew-tap", "npm", "pip", "cargo", "editor-ext", "browser-ext", "launch", "rc", "ssh", "cron", "git-hooks", "hosts", "preload", "bin", "proc", "conn", "mcp", "agent-hook", "agent-perm", "agent-plugin", "wmi", "shell-d", "app-agent", "sysext", "tool-config", "tool-exec", "browser-sideload"];
 
-export async function scan(ctx: Ctx, opt: { live?: boolean } = {}): Promise<Scan> {
+/**
+ * One pass, or with `only` just the named parts (the real-time watch reads only what a changed path can affect). A
+ * partial scan is never stored as a baseline or as the last check.
+ */
+export async function scan(ctx: Ctx, opt: { live?: boolean; only?: string[] } = {}): Promise<Scan> {
   const gaps: Record<string, string> = {};
   ctx = { ...ctx, gap: (what, why) => (gaps[what] = why) };
   const items: Item[] = [];
@@ -50,7 +54,11 @@ export async function scan(ctx: Ctx, opt: { live?: boolean } = {}): Promise<Scan
     // Processes and connections change every second; they are checked now, never kept in a baseline.
     ...(opt.live === false ? [] : ([["processes", () => running(ctx)]] as [string, () => Promise<Item[]>][])),
   ];
-  await Promise.all(parts.map(async ([name, fn]) => {
+  if (opt.only) {
+    const unknown = opt.only.filter((n) => !parts.some(([p]) => p === n) && n !== "processes");
+    if (unknown.length) throw new Error(`no such part of the scan: ${unknown.join(", ")}`);
+  }
+  await Promise.all(parts.filter(([name]) => !opt.only || opt.only.includes(name)).map(async ([name, fn]) => {
     try {
       items.push(...(await fn()));
     } catch (e: any) {

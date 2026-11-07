@@ -78,7 +78,7 @@ function usage() {
   row("vswarm scan [--all] [--json]", "everything that can run code, persist or hold access");
   row("vswarm baseline", "record this machine as clean (after a scan you trust)");
   row("vswarm diff", "only what changed since the baseline");
-  row("vswarm watch on", "check every hour in the background, notify on anything new");
+  row("vswarm watch on", "check hourly, and within seconds when a login job, rc or agent config changes");
   row("vswarm secrets", "long-lived credentials on this machine (never prints values)");
   row("vswarm agents", "MCP servers, hooks and permissions of AI coding agents");
   row("vswarm agents --inspect [--show] [--timeout s]", "start each MCP server sandboxed, read its tools for hidden instructions");

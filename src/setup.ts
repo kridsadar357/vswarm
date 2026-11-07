@@ -359,8 +359,10 @@ export async function doctor(): Promise<boolean> {
   if (lock) bad(`incident ${lock.incident} is open`, `${why ? `${why} · ` : ""}preflight blocks until vswarm unlock`);
   const { watchState } = await import("./sec/schedule");
   const w = watchState();
-  if (w.on) ok("background watch on", w.state ? `last check ${new Date(w.state.at).toLocaleString()}` : "no check yet");
+  if (w.on) ok("background watch on", w.state?.at ? `last check ${new Date(w.state.at).toLocaleString()}` : "no check yet");
   else console.log(`  ${c.dim("·")} background watch off  ${c.dim("vswarm watch on")}`);
+  if (w.on && w.realtime) ok("real-time watch on", w.state?.quick ? `last real-time check ${new Date(w.state.quick.at).toLocaleString()}` : "no change seen yet");
+  else if (w.on && !WIN) warn("real-time watch off", "only the hourly check runs · vswarm watch on again adds it");
   const sshCfgPath = join(homedir(), ".ssh/config");
   const sshCfg = existsSync(sshCfgPath) ? readFileSync(sshCfgPath, "utf8") : "";
   if (sshCfg.includes(GATE_START)) ok("ssh gate installed", "~/.ssh/config");
@@ -624,7 +626,8 @@ export async function uninstall(args: string[]) {
   for (const f of agentGone) ok(`removed ${f}`);
   // The background check runs the launcher; it goes first, or it would fail every hour from now on.
   const { watchOff, watchState } = await import("./sec/schedule");
-  if (watchState().on) for (const f of await watchOff()) ok(`removed ${f}`);
+  const w = watchState();
+  if (w.on || w.realtime) for (const f of await watchOff()) ok(`removed ${f}`);
   if (existsSync(launcherPath())) rmSync(launcherPath());
   ok("launcher removed");
   if (WIN) await windowsPath(false);

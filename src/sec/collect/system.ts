@@ -163,7 +163,7 @@ export async function preload(ctx: Ctx): Promise<Item[]> {
   return libs.length ? [{ kind: "preload", id: "/etc/ld.so.preload", name: "/etc/ld.so.preload", path: "/etc/ld.so.preload", hash: sha256(t!), meta: { libs: libs.join(" ") } }] : [];
 }
 
-const RC_FILES = [".zshrc", ".zprofile", ".zshenv", ".zlogin", ".bashrc", ".bash_profile", ".bash_login", ".profile", ".ssh/rc", ".xprofile", ".xinitrc", ".config/fish/config.fish", ".gitconfig", ".ssh/config", ".ssh/authorized_keys", ".npmrc", ".curlrc"];
+export const RC_FILES = [".zshrc", ".zprofile", ".zshenv", ".zlogin", ".bashrc", ".bash_profile", ".bash_login", ".profile", ".ssh/rc", ".xprofile", ".xinitrc", ".config/fish/config.fish", ".gitconfig", ".ssh/config", ".ssh/authorized_keys", ".npmrc", ".curlrc"];
 
 export async function startupFiles(ctx: Ctx): Promise<{ items: Item[]; texts: Record<string, string> }> {
   const items: Item[] = [];
