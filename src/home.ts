@@ -6,8 +6,10 @@
 import { existsSync, mkdirSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import pkg from "../package.json";
 
-export const VERSION = "2.5.0";
+// One place for the version: a release bumps package.json, and scripts/release.sh checks the tag against it.
+export const VERSION: string = pkg.version;
 
 export const HOME = process.env.VSWARM_HOME ?? join(homedir(), ".vswarm");
 
