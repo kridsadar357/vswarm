@@ -987,7 +987,8 @@ describe("parsing, CLI and collectors", () => {
       expect(argvOf(by("tool"))).toEqual(["./My Tools/srv"]);
       const f = await evaluate({ scan: scanOf(home, items), malicious: [], secrets: [] });
       expect(f.map((x) => `${x.rule}:${x.item?.name}`).sort()).toEqual(["agent-risky:script", "agent-risky:tool"]);
-      expect(f.find((x) => x.item?.name === "tool")!.title).toContain("runs from ~/Downloads");
+      // Windows says "the Downloads folder", macOS and Linux "~/Downloads".
+      expect(f.find((x) => x.item?.name === "tool")!.title).toMatch(/runs from (~\/Downloads|the Downloads folder)/);
     });
 
     test.skipIf(WIN)("Codex: a server given as a relative path with spaces starts from its cwd (no-sandbox inspection)", async () => {
