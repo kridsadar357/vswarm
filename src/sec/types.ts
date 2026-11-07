@@ -37,6 +37,8 @@ export const ADDED_KINDS: Record<string, string> = {
   mcp: "AI agents and MCP", "agent-hook": "AI agents and MCP", "agent-perm": "AI agents and MCP", "agent-plugin": "AI agents and MCP",
   wmi: "Windows WMI subscriptions",
   "shell-d": "shell start-up folders (fish conf.d, /etc/profile.d)", "app-agent": "login items inside apps", sysext: "system and kernel extensions",
+  "tool-config": "package manager config (pip, uv, yarn, cargo …) and environment.d", "tool-exec": "programs other tools run (kubectl, aws, docker, editor tasks, Python start-up hooks)",
+  "browser-sideload": "browser extensions side-loaded through External Extensions",
 };
 
 export type Severity = "critical" | "high" | "medium" | "low" | "info";

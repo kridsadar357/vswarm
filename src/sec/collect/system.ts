@@ -8,6 +8,7 @@ import { fileHash, ls, readJson, readText, sha256, type Ctx } from "../ctx";
 import { signature, type Signature } from "../intel";
 import { isManagedFile, SEC, stripManaged, writePrivate } from "../store";
 import type { Item } from "../types";
+import { maskSecrets } from "./tools";
 import { winLive } from "./windows";
 
 function isFile(p: string): boolean {
@@ -179,10 +180,10 @@ export async function startupFiles(ctx: Ctx): Promise<{ items: Item[]; texts: Re
     const t = stripManaged(raw);
     // A file that holds nothing but vswarm's own blocks (a ~/.ssh/config vswarm created for the gate) is not a new file.
     if (t !== raw && !t.trim()) continue;
-    // Credentials in .npmrc are never stored; only the fact that the file changed.
-    const keep = rel !== ".npmrc";
     items.push({ kind: rel.startsWith(".ssh/") ? "ssh" : "rc", id: rel, name: rel, path, hash: sha256(t), meta: { lines: t.split("\n").length } });
-    if (keep) texts[rel] = t;
+    // Credentials in .npmrc are never stored: its lines are kept with each token replaced by a fingerprint, so a
+    // changed registry shows in the diff and a changed token only as changed.
+    texts[rel] = rel === ".npmrc" ? maskSecrets(t) : t;
   }
   // Folders of start-up snippets, read by every login shell: fish's conf.d, and /etc/profile.d (Linux). Their own kind,
   // so a baseline from before vswarm read them does not report every existing snippet as new.
@@ -199,8 +200,9 @@ export async function startupFiles(ctx: Ctx): Promise<{ items: Item[]; texts: Re
       texts[id] = t;
     }
   }
+  // The user's own crontab, through crontab -l (the spool itself is root's). A test context answers with a fake one.
   const cron = await ctx.run(["crontab", "-l"], 5000);
-  if (cron !== undefined && ctx.system) {
+  if (cron !== undefined) {
     items.push({ kind: "cron", id: "crontab", name: "crontab", hash: sha256(cron), meta: { lines: cron.split("\n").filter((l) => l.trim() && !l.startsWith("#")).length } });
     texts.crontab = cron;
   }
@@ -213,10 +215,15 @@ export async function startupFiles(ctx: Ctx): Promise<{ items: Item[]; texts: Re
       texts[path] = t;
     }
   }
-  const hooksPath = (await ctx.run(["git", "config", "--global", "core.hooksPath"], 5000))?.trim();
-  if (hooksPath && ctx.system) {
+  // git config --global follows includes and XDG; it reads the real home, so a test context reads the fake ~/.gitconfig.
+  const hooksPath = ctx.system ? (await ctx.run(["git", "config", "--global", "core.hooksPath"], 5000))?.trim() : gitValue(readText(join(ctx.home, ".gitconfig")) ?? "", "core", "hookspath");
+  if (hooksPath) {
     const dir = hooksPath.replace(/^~/, ctx.home);
-    for (const h of ls(dir)) items.push({ kind: "git-hooks", id: join(dir, h), name: h, path: join(dir, h), hash: fileHash(join(dir, h)) });
+    for (const h of ls(dir)) {
+      if (h.endsWith(".sample")) continue;
+      const text = readText(join(dir, h), 200_000) ?? "";
+      items.push({ kind: "git-hooks", id: join(dir, h), name: h, path: join(dir, h), hash: fileHash(join(dir, h)), meta: { risky: RUNS_FETCHED.test(text) || undefined } });
+    }
   }
   if (ctx.system) {
     const hostsFile = process.platform === "win32" ? join(process.env.SystemRoot ?? "C:\\Windows", "System32", "drivers", "etc", "hosts") : "/etc/hosts";
@@ -227,6 +234,22 @@ export async function startupFiles(ctx: Ctx): Promise<{ items: Item[]; texts: Re
     }
   }
   return { items, texts };
+}
+
+/** Script lines that fetch, decode or start something in the background (a short form of the rules' RISKY_LINE). */
+const RUNS_FETCHED = /\b(curl|wget|nc|ncat|socat|base64|openssl\s+enc|python3?\s+-c|node\s+-e|perl\s+-e|nohup)\b|\|\s*(ba|z)?sh\b|&\s*$/m;
+
+/** One value from git config text: the last `key = value` in a [section], as git reads it. */
+export function gitValue(text: string, section: string, key: string): string | undefined {
+  let cur = "";
+  let val: string | undefined;
+  for (const l of text.replace(/\r/g, "").split("\n")) {
+    const sec = /^\s*\[\s*([\w.-]+)(?:\s+"[^"]*")?\s*\]/.exec(l);
+    if (sec) cur = sec[1].toLowerCase();
+    const kv = /^\s*([\w-]+)\s*=\s*(.*?)\s*$/.exec(l);
+    if (kv && cur === section && kv[1].toLowerCase() === key) val = kv[2].replace(/^"|"$/g, "");
+  }
+  return val;
 }
 
 /** What Windows runs by name from PATH. */
@@ -280,10 +303,12 @@ function windowsLocation(path: string, home: string): string | undefined {
 
 export function suspiciousLocation(path: string, home: string): string | undefined {
   if (WIN_PATH.test(path)) return windowsLocation(path, home);
-  if (/^\/(private\/)?(tmp|var\/tmp)\//.test(path)) return "runs from a temp folder";
-  if (path.startsWith("/dev/shm/")) return "runs from shared memory (/dev/shm)";
-  if (path.startsWith("/Users/Shared/")) return "runs from /Users/Shared";
-  if (path.startsWith(home + "/")) {
+  // The home folder first: a home that sits in a temp folder (a test's fake one) is judged as a home.
+  if (!path.startsWith(home + "/")) {
+    if (/^\/(private\/)?(tmp|var\/tmp)\//.test(path)) return "runs from a temp folder";
+    if (path.startsWith("/dev/shm/")) return "runs from shared memory (/dev/shm)";
+    if (path.startsWith("/Users/Shared/")) return "runs from /Users/Shared";
+  } else {
     const rel = path.slice(home.length + 1);
     if (rel.startsWith("Library/Caches/")) return "runs from a cache folder";
     if (rel.startsWith(".") && !KNOWN_HIDDEN.test(rel)) return `runs from a hidden folder (~/${rel.split("/")[0]})`;

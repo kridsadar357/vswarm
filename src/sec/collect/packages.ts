@@ -135,15 +135,35 @@ export async function cargo(ctx: Ctx): Promise<Item[]> {
   });
 }
 
+/**
+ * Which extension folders the editor installed from its marketplace, from the extensions.json it keeps beside them
+ * (VS Code and its forks record the gallery id of each). Undefined when there is no such file to go by.
+ */
+export function galleryInstalled(root: string): Set<string> | undefined {
+  const list = readJson(join(root, "extensions.json"));
+  if (!Array.isArray(list)) return;
+  const out = new Set<string>();
+  for (const e of list) {
+    const m = e?.metadata;
+    const folder = typeof e?.relativeLocation === "string" ? e.relativeLocation : typeof e?.location?.path === "string" ? e.location.path.split("/").pop() : undefined;
+    if (folder && m && (m.source === "gallery" || (m.id && m.publisherId && m.source !== "vsix" && m.source !== "resource"))) out.add(folder);
+  }
+  return out;
+}
+
 export async function editors(ctx: Ctx): Promise<Item[]> {
   const out: Item[] = [];
   for (const [ed, dir] of [["vscode", ".vscode/extensions"], ["cursor", ".cursor/extensions"], ["windsurf", ".windsurf/extensions"], ["vscodium", ".vscode-oss/extensions"]]) {
     const root = join(ctx.home, dir);
+    const gallery = galleryInstalled(root);
     for (const e of ls(root)) {
       const p = readJson(join(root, e, "package.json"));
       if (!p?.name) continue;
       const id = `${p.publisher ?? "?"}.${p.name}`;
-      out.push({ kind: "editor-ext", id: `${ed}:${id}`, name: id, version: p.version, source: ed, path: join(root, e) });
+      // Starts with the editor itself, not when one of its languages or commands is used.
+      const events: unknown[] = Array.isArray(p.activationEvents) ? p.activationEvents : [];
+      const startup = events.includes("*") || events.includes("onStartupFinished");
+      out.push({ kind: "editor-ext", id: `${ed}:${id}`, name: id, version: p.version, source: ed, path: join(root, e), meta: { gallery: gallery ? gallery.has(e) : undefined, startup: startup || undefined } });
     }
   }
   return [...new Map(out.map((i) => [i.id, i])).values()];
@@ -169,6 +189,14 @@ export async function browsers(ctx: Ctx): Promise<Item[]> {
     if (blocked(root)) {
       ctx.gap?.(`${b} extensions`, "macOS privacy protection; give your terminal Full Disk Access (System Settings → Privacy & Security) to include them");
       continue;
+    }
+    // Extensions Chrome installs on its own from a JSON file in "External Extensions": an update URL, or a .crx on disk.
+    for (const f of ls(join(root, "External Extensions")).filter((x) => x.endsWith(".json"))) {
+      const j = readJson(join(root, "External Extensions", f));
+      if (!j || typeof j !== "object") continue;
+      const id = f.replace(/\.json$/, "");
+      out.push({ kind: "browser-sideload", id: `${b}:${id}`, name: id, source: b, path: join(root, "External Extensions", f),
+        meta: { crx: typeof j.external_crx === "string" ? j.external_crx : undefined, update: typeof j.external_update_url === "string" ? j.external_update_url : undefined } });
     }
     for (const profile of ls(root)) {
       const ext = join(root, profile, "Extensions");

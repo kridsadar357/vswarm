@@ -4,11 +4,12 @@ import type { Ctx } from "./ctx";
 import { brew, browsers, cargo, editors, node, python } from "./collect/packages";
 import { appLoginItems, autostart, binaries, extensions, launchd, preload, running, startupFiles } from "./collect/system";
 import { agents } from "./collect/agents";
+import { toolConfigs, toolHelpers } from "./collect/tools";
 import { windows } from "./collect/windows";
 import type { Item, Scan } from "./types";
 
 /** Every item kind the collectors produce; stored with a baseline so later checks know what it covered. */
-export const COVERS = ["brew", "brew-tap", "npm", "pip", "cargo", "editor-ext", "browser-ext", "launch", "rc", "ssh", "cron", "git-hooks", "hosts", "preload", "bin", "proc", "conn", "mcp", "agent-hook", "agent-perm", "agent-plugin", "wmi", "shell-d", "app-agent", "sysext"];
+export const COVERS = ["brew", "brew-tap", "npm", "pip", "cargo", "editor-ext", "browser-ext", "launch", "rc", "ssh", "cron", "git-hooks", "hosts", "preload", "bin", "proc", "conn", "mcp", "agent-hook", "agent-perm", "agent-plugin", "wmi", "shell-d", "app-agent", "sysext", "tool-config", "tool-exec", "browser-sideload"];
 
 export async function scan(ctx: Ctx, opt: { live?: boolean } = {}): Promise<Scan> {
   const gaps: Record<string, string> = {};
@@ -33,6 +34,12 @@ export async function scan(ctx: Ctx, opt: { live?: boolean } = {}): Promise<Scan
       Object.assign(texts, r.texts);
       return r.items;
     }],
+    ["package manager and session config", async () => {
+      const r = await toolConfigs(ctx);
+      Object.assign(texts, r.texts);
+      return r.items;
+    }],
+    ["programs other tools run", () => toolHelpers(ctx)],
     // Run keys, Startup folders, tasks, services, WMI and PowerShell profiles; nothing outside Windows.
     ["Windows start-up places", async () => {
       const r = await windows(ctx);

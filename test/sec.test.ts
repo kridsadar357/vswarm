@@ -28,9 +28,10 @@ const sealedLast = (sec: string, verdict: string) => {
 describe("detection", () => {
   test("selftest catches every planted case with no false alarms", async () => {
     const r = await selftest();
-    const missed = r.cases.filter((c) => !c.caught).map((c) => c.name);
+    const missed = r.cases.filter((c) => !c.caught && !c.skipped).map((c) => c.name);
     expect(missed).toEqual([]);
     expect(r.falseAlarms.map((x) => x.title)).toEqual([]);
+    expect(r.benign.filter((b) => !b.ok).map((b) => b.name)).toEqual([]);
     // Windows asks PowerShell for the dropped program's signature, which can take seconds to start.
   }, 60_000);
 

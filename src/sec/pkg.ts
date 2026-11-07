@@ -20,7 +20,7 @@
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { exec, readJson, shq } from "./ctx";
-import { lookAlike, osvMalicious } from "./intel";
+import { lookAlike, nameSignals, osvMalicious } from "./intel";
 import { c, finding as printFinding, line, VERDICT } from "./print";
 import { files, SEC, writePrivate } from "./store";
 import { RANK, verdictOf, type Finding, type Item, type Severity, type Verdict } from "./types";
@@ -398,6 +398,8 @@ export function judge(w: Want, f: Facts | undefined, now = Date.now()): Finding[
     return out;
   }
   const near = lookAlike(w.eco, w.name);
+  // What the name says of itself (a proof-of-concept, a dependency-confusion probe), whatever the registry answers.
+  for (const s of nameSignals(w.eco, w.name)) add("name", "high", `${label(w)}: ${s.split(":")[0]}`, [s], `do not install it unless it is your own test package`);
   if (!f) {
     if (near) add("lookalike", "high", `${label(w)}: looks like ${near}`, ["Close to a popular package name: the classic typo-squat, which runs its install script as soon as it lands."], `did you mean ${near}? If ${w.name} is really what you want, check its page on the registry first`);
     return out;
@@ -517,7 +519,7 @@ export async function checkInstall(p: Plan, opt: CheckOpt = {}): Promise<PkgChec
       unverified.push(`the registry did not answer (${failed})`);
     }
   }
-  for (const w of p.wants.length <= 25 ? p.wants : p.wants.filter((x) => x.outside || lookAlike(x.eco, x.name))) findings.push(...judge(w, facts.get(w)));
+  for (const w of p.wants.length <= 25 ? p.wants : p.wants.filter((x) => x.outside || lookAlike(x.eco, x.name) || nameSignals(x.eco, x.name).length)) findings.push(...judge(w, facts.get(w)));
   // Known-malicious: every exact version we know, from the command line, the registry answer, or the lockfile.
   const items: Item[] = p.wants
     .filter((w) => w.eco !== "brew" && !w.outside)

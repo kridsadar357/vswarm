@@ -445,17 +445,29 @@ async function main() {
     }
 
     case "selftest": {
+      const all = has(args, "--all");
       noMoreOptions(cmd, args);
-      banner("selftest");
-      console.log(c.dim("  fake home in a temp folder · harmless stand-ins for real attack steps · this machine is not touched\n"));
       const r = await selftest();
-      for (const x of r.cases) {
-        console.log(`  ${x.caught ? c.green("✔") : c.red("✖")} ${x.name} ${c.dim(x.severity ? `(${x.severity}, needs ${x.min}+)` : "(missed)")}`);
-        console.log(`      ${c.dim(x.like)}`);
+      if (json) {
+        console.log(JSON.stringify({ ...r, falseAlarms: r.falseAlarms.map((f) => ({ rule: f.rule, severity: f.severity, title: f.title })) }, null, 2));
+        process.exitCode = r.caught === r.total && !r.falseAlarms.length ? 0 : 1;
+        return;
       }
-      console.log(`\n  ${c.bold(`detected ${r.caught}/${r.total}`)} ${c.dim(`(${Math.round((r.caught / r.total) * 100)}%) · false alarms on the clean parts: ${r.falseAlarms.length} · ${r.ms} ms`)}`);
-      for (const f of r.falseAlarms) console.log(`    ${c.amber("!")} ${f.title}`);
-      console.log(c.dim("\n  This measures the cases in src/sec/selftest.ts, not every possible attack. Add cases there.\n"));
+      banner("selftest");
+      console.log(c.dim("  fake home in a temp folder · harmless stand-ins for real attack steps, each planted alone · this machine is not touched\n"));
+      for (const [t, x] of Object.entries(r.techniques)) {
+        const mark = x.caught === x.total && !x.alarms ? c.green("✔") : c.red("✖");
+        console.log(`  ${mark} ${t.padEnd(40)} ${c.dim(`${x.total ? `caught ${x.caught}/${x.total}` : "no cases here"}${x.benign ? ` · false alarms ${x.alarms}/${x.benign} benign` : ""}`)}`);
+        for (const k of r.cases.filter((k) => k.technique === t && !k.skipped && (all || !k.caught)))
+          console.log(`      ${k.caught ? c.green("✔") : c.red("✖")} ${k.name} ${c.dim(k.severity ? `(${k.severity}, needs ${k.min}+)` : "(missed)")}`);
+        for (const b of r.benign.filter((b) => b.technique === t && (all || !b.ok)))
+          console.log(`      ${b.ok ? c.green("✔") : c.red("✖")} benign: ${b.name} ${c.dim(b.severity ? `(${b.severity}${b.when === "change" ? `, may be ${b.max} at most` : ""})` : "(quiet)")}`);
+      }
+      const skipped = r.cases.filter((k) => k.skipped).length;
+      const quiet = r.benign.filter((b) => b.ok).length;
+      console.log(`\n  ${c.bold(`detected ${r.caught}/${r.total}`)} ${c.dim(`(${Math.round((r.caught / r.total) * 100)}%)${skipped ? ` · ${skipped} not on this system` : ""} · benign look-alikes quiet ${quiet}/${r.benign.length} · false alarms ${r.falseAlarms.length} · ${r.ms} ms`)}`);
+      for (const f of r.falseAlarms) console.log(`    ${c.amber("!")} ${f.severity}: ${f.title}`);
+      console.log(c.dim(`\n  This measures the cases in src/sec/selftest-cases.ts, not every possible attack. Add cases there · --all lists each one.\n`));
       process.exitCode = r.caught === r.total && !r.falseAlarms.length ? 0 : 1;
       return;
     }

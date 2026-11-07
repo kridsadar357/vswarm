@@ -3,8 +3,9 @@
 //   change   things that appeared or changed since the baseline you marked as clean
 
 import { redact } from "./ctx";
-import { lookAlike, signature, type Malicious, type Signature } from "./intel";
-import { buildPlace, suspiciousLocation } from "./collect/system";
+import { distance, lookAlike, nameSignals, signature, type Malicious, type Signature } from "./intel";
+import { buildPlace, suspiciousLocation, WIN_PATH } from "./collect/system";
+import { TOOL_CONFIGS } from "./collect/tools";
 import { stockWmi, winLaunchRisk } from "./collect/windows";
 import { ADDED_KINDS, type Finding, type Item, type Scan, type Severity } from "./types";
 
@@ -21,6 +22,154 @@ const RISKY_LINE = /\b(curl|wget|nc|ncat|socat|base64|openssl\s+enc|eval|osascri
 const RISKY_PS = /\b(invoke-expression|iex|downloadstring|downloadfile|frombase64string)\b|\b(invoke-webrequest|iwr|invoke-restmethod|irm)\b.*\|\s*(iex|invoke-expression)\b|\s-(encodedcommand|enc|ec|e)\s|\bstart-process\b.*\s-w(indowstyle)?\s+h(idden)?\b|\badd-mppreference\b.*-exclusion|\bset-mppreference\b.*-disable/i;
 
 const capital = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
+
+// ── lines that change what a tool runs, or where packages come from
+
+/** A program in a hidden folder inside another one (~/.config/.x/run): tools do not install there. */
+function nestedHidden(path: string, home: string): string | undefined {
+  // Either separator, and Windows does not care about case.
+  const win = WIN_PATH.test(home);
+  const norm = (s: string) => (win ? s.replace(/\\/g, "/").toLowerCase() : s);
+  const p = norm(path), h = norm(home).replace(/\/+$/, "");
+  if (!p.startsWith(h + "/")) return;
+  const dirs = p.slice(h.length + 1).split("/").slice(0, -1);
+  const deep = dirs.findIndex((d, i) => i > 0 && d.startsWith("."));
+  if (deep > 0) return `runs from a hidden folder (~/${dirs.slice(0, deep + 1).join("/")})`;
+}
+
+/**
+ * Where the program a config value starts lives, when that is somewhere software is not installed to: temp and cache
+ * folders, Downloads, or a hidden folder inside another. A hidden folder of its own in the home (~/.krew, ~/.yarn) is
+ * where many installers put their tools, so it does not count here.
+ */
+export function hiddenProgram(value: string, home: string): string | undefined {
+  const v = value.trim().replace(/^!/, "");
+  const first = (/^"([^"]+)"|^'([^']+)'|^(\S+)/.exec(v) ?? []).slice(1).find(Boolean) ?? "";
+  const prog = first.replace(/^~(?=\/)/, home).replace(/^\$\{?HOME\}?(?=\/)/, home).replace(/^%h(?=\/)/, home);
+  if (!prog.startsWith("/") && !WIN_PATH.test(prog)) return;
+  const where = suspiciousLocation(prog, home);
+  const topHidden = where?.startsWith("runs from a hidden folder") && !/\(~[\\/]\.cache\)/.test(where);
+  return (topHidden ? undefined : where) ?? nestedHidden(prog, home);
+}
+
+/** The registries and indexes a package manager trusts by default. */
+const OFFICIAL_HOSTS = ["registry.npmjs.org", "registry.yarnpkg.com", "npm.pkg.github.com", "pypi.org", "files.pythonhosted.org", "pypi.python.org", "test.pypi.org",
+  "crates.io", "index.crates.io", "static.crates.io", "rubygems.org", "conda.anaconda.org", "repo.anaconda.com"];
+const flatHost = (h: string) => h.replace(/[.-]/g, "");
+const domainOf = (h: string) => h.split(".").slice(-2).join(".");
+
+/**
+ * Why a registry or index URL is dangerous: no TLS, a bare IP address, or a host made to pass for an official one
+ * (registry.npmjss.org, pypi-org.mirror.net). A company's own registry over https (npm.corp.example.com) is not.
+ */
+export function urlRisk(url: string): string | undefined {
+  const m = /^(https?):\/\/(?:[^@/\s]*@)?(\[[^\]]+\]|[^:/\s"']+)/i.exec(url);
+  if (!m) return;
+  const host = m[2].toLowerCase();
+  if (/^(localhost|127\.\d+\.\d+\.\d+|\[::1\])$/.test(host)) return;
+  if (/^\d+\.\d+\.\d+\.\d+$|^\[/.test(host)) return `is the bare IP address ${host}`;
+  if (m[1].toLowerCase() === "http") return `is fetched from ${host} without TLS`;
+  if (OFFICIAL_HOSTS.includes(host)) return;
+  for (const o of OFFICIAL_HOSTS) if (distance(domainOf(host), domainOf(o), 1) === 1 || flatHost(host).includes(flatHost(o))) return `is ${host}, made to look like ${o}`;
+}
+
+/** Shell lines that make other programs load code, run code at every prompt, capture passwords, or hide history. */
+function shellRisk(l: string, home: string): string | undefined {
+  if (/\b(LD_PRELOAD|LD_AUDIT|DYLD_INSERT_LIBRARIES)\s*=/.test(l)) return "makes programs started from here load a library first";
+  if (/\bNODE_OPTIONS\s*=.*(--require|--import|--loader|--experimental-loader|["'\s=]-r\s)/.test(l)) return "makes every node process load a script first";
+  if (/\bPROMPT_COMMAND\+?=["'(]?\s*(~|\$\{?HOME\}?|\/)[\w./-]/.test(l)) return "runs a program at every prompt";
+  if (/\btrap\s+.+\s(DEBUG|RETURN)\s*$/.test(l)) return "runs a command before every command you type";
+  // alias sudo='sudo ' and alias sudo='nocorrect sudo' still run the real one.
+  const alias = /^alias\s+(sudo|su|doas|passwd|pkexec)=(["']?)(.*)\2$/.exec(l);
+  if (alias && !new RegExp(`^((nocorrect|noglob|command|builtin)\\s+)*${alias[1]}(\\s[^;&|]*)?$`).test(alias[3].trim())) return `replaces ${alias[1]}, which is handed your password`;
+  if (/^(function\s+(sudo|su|doas|passwd|pkexec)\b|(sudo|su|doas|passwd|pkexec)\s*\(\s*\))/.test(l)) return "replaces sudo with a function, which is handed your password";
+  if (/^(unset\s+HISTFILE\b|(export\s+)?HISTFILE=["']?\/dev\/null|(export\s+)?(HISTSIZE|SAVEHIST|HISTFILESIZE)=["']?0\b|set\s+\+o\s+history\b)/.test(l)) return "switches off the shell history";
+  const docker = /\bDOCKER_HOST=["']?tcp:\/\/([^:/"'\s]+)/.exec(l);
+  if (docker && !/^(localhost|127\.)/.test(docker[1])) return `sends every docker command to ${docker[1]} without TLS`;
+  // PATH=<dir>:$PATH, path=(<dir> $path), fish_add_path <dir>: a folder put before the system's own.
+  const path = /^(?:export\s+)?PATH=["']?([^"'\s]+)/.exec(l)?.[1].split(":") ?? /^path=\(([^)]*)\)/.exec(l)?.[1].split(/\s+/) ?? /^(?:fish_add_path|set\s+-\w*x\w*\s+PATH)\s+(.+)$/.exec(l)?.[1].split(/\s+/);
+  for (const d of path ?? []) {
+    if (/^["']?\$\{?(PATH|path)\}?/.test(d)) break;
+    const why = hiddenProgram(`${d.replace(/["']/g, "")}/x`, home);
+    if (why) return `puts a folder first on PATH that ${why.replace(/^runs from/, "is")}`;
+  }
+}
+
+/** git settings that run a program: fsmonitor on every status, sshCommand on every fetch and push, askpass, pager, gpg. */
+function gitRisk(l: string, home: string): string | undefined {
+  const kv = /^([\w.-]+)\s*=\s*(.*)$/.exec(l);
+  if (!kv) return;
+  const key = kv[1].toLowerCase();
+  const val = kv[2].replace(/^"|"$/g, "");
+  if (key === "fsmonitor" && !/^(true|false|yes|no|on|off|1|0)$/i.test(val)) return "makes git run this program on every status, in every repository";
+  if (["sshcommand", "askpass", "pager", "editor", "program", "helper"].includes(key)) {
+    const why = hiddenProgram(val, home);
+    if (why) return `makes git start a program that ${why}`;
+  }
+}
+
+/** ssh client settings that run commands: LocalCommand, KnownHostsCommand, Match exec, and proxies from odd places. */
+function sshRisk(l: string, home: string): string | undefined {
+  if (/^match\b.*\bexec\b/i.test(l)) return "makes ssh run this command to choose settings, for every connection";
+  const kv = /^(\w+)(?:\s*=\s*|\s+)(.*)$/.exec(l);
+  if (!kv) return;
+  const key = kv[1].toLowerCase();
+  if (key === "localcommand" || key === "knownhostscommand") return `makes ssh run this command itself (${kv[1]})`;
+  if (["proxycommand", "pkcs11provider", "securitykeyprovider"].includes(key)) {
+    const why = hiddenProgram(kv[2], home);
+    if (why) return `makes ssh start a program that ${why}`;
+  }
+}
+
+/** Package manager settings: the registry or index, and the programs npm and cargo start for you. */
+function configRisk(l: string, home: string): string | undefined {
+  for (const u of l.match(/https?:\/\/[^\s"',]+/gi) ?? []) {
+    const why = urlRisk(u);
+    if (why) return `the package source ${why}`;
+  }
+  const kv = /^["']?([\w.:@/-]+)["']?\s*[=:]\s*(.*)$/.exec(l);
+  if (!kv) return;
+  const key = kv[1].toLowerCase().replace(/^.*\./, "");
+  const val = kv[2].trim().replace(/^["']|["']$/g, "");
+  if (key === "node-options" && /--require|--import|--loader|(^|\s)-r\s/.test(val)) return "makes every node process npm starts load a script first";
+  if (["script-shell", "shell", "git", "onload-script", "runner", "rustc-wrapper", "rustc-workspace-wrapper", "linker", "rustc", "rustdoc"].includes(key)) {
+    const why = hiddenProgram(val, home);
+    if (why) return `starts a program that ${why}`;
+  }
+}
+
+/**
+ * Why one line added to a start-up or config file is dangerous, beyond RISKY_LINE's downloads and background jobs.
+ * Undefined for an ordinary line. Which reading applies depends on the file.
+ */
+export function lineRisk(id: string, line: string, home: string): string | undefined {
+  const l = line.trim();
+  if (id === ".gitconfig") return gitRisk(l, home);
+  if (id === ".ssh/config") return sshRisk(l, home);
+  if (id === ".npmrc" || TOOL_CONFIGS.includes(id)) return configRisk(l, home);
+  if (/\.ps1$/i.test(id) || id === "crontab" || id.startsWith("/") || /^[A-Za-z]:/.test(id)) return;
+  return shellRisk(l, home);
+}
+
+/** Python code that fetches, decodes or starts something: what malicious .pth files and sitecustomize hooks do. */
+const PY_RISKY = /\b(exec|eval)\s*\(|b64decode|base64|subprocess|os\.system|os\.popen|urllib|urlopen|requests\.get|socket\.|__import__\(\s*["'](base64|subprocess|os|socket|urllib)/;
+
+/** Why a program another tool runs for you is dangerous, if it is. */
+function toolExecRisk(i: Item, home: string): string | undefined {
+  const prog = String(i.meta?.program ?? "");
+  if (String(i.id).startsWith("docker-context:")) {
+    const m = /^tcp:\/\/([^:/]+)(?::(\d+))?/.exec(prog);
+    if (m && i.meta?.current && !/^(localhost|127\.)/.test(m[1]) && (m[2] !== "2376" || i.meta?.skipTls)) return `sends every docker command to ${prog} without TLS`;
+    return;
+  }
+  if (String(i.id).startsWith("python:")) return !i.meta?.stock && (PY_RISKY.test(prog) || RISKY_LINE.test(prog)) ? "runs code that downloads, decodes or starts a program, at every Python start" : undefined;
+  if (RISKY_LINE.test(prog.replace(/\.cache\//g, ""))) return "runs a command that downloads, decodes or backgrounds something";
+  const where = hiddenProgram(prog, home);
+  if (where) return `starts a program that ${where}`;
+}
+
+/** Commands that are handed passwords and tokens: a copy found earlier on PATH sees them first. */
+const SHADOWED = new Set(["sudo", "su", "doas", "pkexec", "passwd", "login", "ssh", "scp", "sftp", "ssh-add", "ssh-agent", "ssh-keygen", "git", "gpg", "gpg2", "security"]);
 
 /** The program an MCP server or hook runs, and the package it pulls when it is started through npx/uvx/bunx. */
 function launcher(cmd: string, home: string): { exe?: string; pkg?: { eco: "npm" | "pip"; name: string } } {
@@ -133,6 +282,12 @@ export async function evaluate(input: RuleInput): Promise<Finding[]> {
         add({ id: `agent-secret:${i.id}`, rule: "secret", severity: "medium", title: `${what} keeps a token in plain text: ${i.meta.secrets}`, detail: [i.path ?? ""],
           fix: "Reference an environment variable or the OS keychain instead of pasting the value into the config", item: i });
     }
+    if (i.kind === "tool-exec") {
+      const why = toolExecRisk(i, home);
+      if (why)
+        add({ id: `tool-exec-risky:${i.id}:${i.hash?.slice(0, 12)}`, rule: "tool-exec-risky", severity: "high", title: `${capital(String(i.meta?.what ?? "helper"))} ${i.name} ${why}`,
+          detail: [redact(String(i.meta?.program ?? "").slice(0, 200)), i.path ?? ""], fix: "It runs with your access every time that tool does. Remove it unless you set it up yourself; then vswarm respond", item: i });
+    }
     if (i.kind === "agent-perm" && i.meta?.bypass)
       add({ id: `agent-bypass:${i.id}`, rule: "agent-perm", severity: "low", title: `${i.name}: the agent may run commands without asking (bypass permissions)`, detail: [i.path ?? ""], item: i });
     if (i.kind === "preload") {
@@ -191,10 +346,15 @@ export async function evaluate(input: RuleInput): Promise<Finding[]> {
         case "pip":
         case "cargo": {
           if (!fresh) break;
-          const like = lookAlike(i.kind === "npm" ? "npm" : i.kind === "pip" ? "pip" : "", i.name);
+          const eco = i.kind === "npm" ? "npm" : i.kind === "pip" ? "pip" : "";
+          const like = lookAlike(eco, i.name);
+          const says = eco ? nameSignals(eco, i.name) : [];
           if (like) {
             add({ id: `lookalike:${i.kind}:${i.name}`, rule: "lookalike", severity: "high", title: `New ${i.kind} package ${i.name} looks like "${like}"`,
               detail: [`${i.name}@${i.version ?? "?"}`, i.path ?? ""], fix: `Check you meant ${i.name}, not ${like}; if not, remove it and vswarm respond`, item: i });
+          } else if (says.length) {
+            add({ id: `name-signal:${i.kind}:${i.name}`, rule: "lookalike", severity: "high", title: `New ${i.kind} package ${i.name}: ${says[0].split(":")[0]}`,
+              detail: [...says, `${i.name}@${i.version ?? "?"}`, i.path ?? ""], fix: "Remove it unless it is your own test package, then vswarm respond", item: i });
           } else if (i.kind === "npm" && i.meta?.scripts) {
             add({ id: `npm-scripts:${i.id}`, rule: "install-scripts", severity: "medium", title: `New global npm package runs scripts at install: ${i.name}`,
               detail: [`scripts: ${i.meta.scripts}`, `${i.name}@${i.version ?? "?"}`], fix: "Make sure you installed it on purpose and know its publisher", item: i });
@@ -204,7 +364,25 @@ export async function evaluate(input: RuleInput): Promise<Finding[]> {
           break;
         }
         case "editor-ext":
-          if (fresh) add({ id: `ext:${i.id}`, rule: "editor-ext", severity: "low", title: `New ${i.source} extension: ${i.name} ${i.version ?? ""}`, detail: [i.path ?? ""], item: i });
+          if (!fresh) break;
+          // Not in the editor's own list of marketplace installs: copied into the folder, or installed from a .vsix.
+          if (i.meta?.gallery === false)
+            add({ id: `ext:${i.id}`, rule: "editor-ext", severity: i.meta?.startup ? "high" : "medium",
+              title: `New ${i.source} extension that did not come from the marketplace${i.meta?.startup ? ", and it starts with the editor" : ""}: ${i.name} ${i.version ?? ""}`,
+              detail: [i.path ?? "", "Its folder is not in extensions.json as a marketplace install: it was copied in, or installed from a .vsix file."],
+              fix: "Remove the folder unless you installed it from a file yourself; extensions run with your access", item: i });
+          else add({ id: `ext:${i.id}`, rule: "editor-ext", severity: "low", title: `New ${i.source} extension: ${i.name} ${i.version ?? ""}`, detail: [i.path ?? ""], item: i });
+          break;
+        case "browser-sideload":
+          if (fresh)
+            add({ id: `bside:${i.id}`, rule: "browser-ext", severity: i.meta?.crx ? "high" : "medium",
+              title: i.meta?.crx ? `New ${i.source} extension side-loaded from a file: ${i.name}` : `New extension ${i.source} installs on its own: ${i.name}`,
+              detail: [i.path ?? "", String(i.meta?.crx ?? i.meta?.update ?? "")].filter(Boolean), fix: "Remove the file unless an app you trust put it there, then remove the extension in the browser", item: i });
+          break;
+        case "tool-exec":
+          add({ id: `tool-exec:${i.id}:${i.hash?.slice(0, 12)}`, rule: fresh ? "tool-exec-new" : "tool-exec-changed", severity: i.meta?.stock ? "low" : "medium",
+            title: `${fresh ? "New" : "Changed"} ${i.meta?.what ?? "helper"} ${i.name}: ${redact(String(i.meta?.program ?? "")).slice(0, 80)}`, detail: [i.path ?? ""],
+            fix: "Another tool runs this for you, with your access; keep it only if you set it up", item: i });
           break;
         case "browser-ext": {
           if (!fresh) break;
@@ -223,17 +401,21 @@ export async function evaluate(input: RuleInput): Promise<Finding[]> {
         case "shell-d":
         case "ssh":
         case "cron":
-        case "hosts": {
+        case "hosts":
+        case "tool-config": {
           const lines = addedLines(baseline.texts[i.id], scan.texts[i.id]);
           const ps = /\.ps1$/i.test(i.id);
-          const risky = lines.filter((l) => RISKY_LINE.test(l) || (ps && RISKY_PS.test(l)));
+          // Each risky line with why, when there is more to say than "downloads or backgrounds something".
+          const why = new Map(lines.map((l) => [l, lineRisk(i.id, l, home)]));
+          const risky = lines.filter((l) => RISKY_LINE.test(l) || (ps && RISKY_PS.test(l)) || why.get(l));
           const authKeys = i.id === ".ssh/authorized_keys";
           // Only lines removed: less risky than anything added, but still a change you should recognise.
           const sev: Severity = authKeys || risky.length || i.kind === "cron" ? "high" : lines.length ? "medium" : "low";
           add({ id: `file:${i.id}:${i.hash?.slice(0, 12)}`, rule: "startup-file", severity: sev,
             title: authKeys ? "~/.ssh/authorized_keys changed: someone may have added a way to log in" : `${i.id === "crontab" ? "crontab" : /^(\/|[A-Za-z]:[\\/])/.test(i.name) ? i.name : "~/" + i.name} changed`,
-            detail: (risky.length ? risky : lines).slice(0, 6).map((l) => `+ ${l.slice(0, 160)}`).concat(lines.length > 6 ? [`… ${lines.length - 6} more added lines`] : []),
-            fix: risky.length ? "These lines download, decode or start something in the background; remove them unless you wrote them" : "Check the change is yours", item: i });
+            detail: (risky.length ? risky : lines).slice(0, 6).map((l) => `+ ${l.slice(0, 160)}${why.get(l) ? ` · ${why.get(l)}` : ""}`).concat(lines.length > 6 ? [`… ${lines.length - 6} more added lines`] : []),
+            fix: risky.some((l) => why.get(l)) ? "These lines change what runs, or where packages come from; remove them unless you wrote them"
+              : risky.length ? "These lines download, decode or start something in the background; remove them unless you wrote them" : "Check the change is yours", item: i });
           break;
         }
         case "wmi":
@@ -260,7 +442,9 @@ export async function evaluate(input: RuleInput): Promise<Finding[]> {
           if (fresh) add({ id: `agent-plugin:${i.id}`, rule: "agent-plugin", severity: "low", title: `New agent plugin (${i.source}): ${i.name}`, detail: [], item: i });
           break;
         case "git-hooks":
-          if (fresh) add({ id: `hook:${i.id}`, rule: "git-hook", severity: "medium", title: `New global git hook: ${i.name}`, detail: [i.path ?? ""], item: i });
+          if (fresh || i.meta?.risky)
+            add({ id: `hook:${i.id}`, rule: "git-hook", severity: i.meta?.risky ? "high" : "medium", title: `${fresh ? "New" : "Changed"} global git hook: ${i.name}${i.meta?.risky ? ", which downloads, decodes or starts something" : ""}`,
+              detail: [i.path ?? "", "It runs in every repository on this machine."], fix: i.meta?.risky ? "Remove it unless you wrote it, then vswarm respond" : undefined, item: i });
           break;
         case "app-agent": {
           if (!fresh) break;
@@ -286,6 +470,13 @@ export async function evaluate(input: RuleInput): Promise<Finding[]> {
           // Formulae link into the Cellar; their origin is judged by the tap rules above.
           if (link.includes("/Cellar/") || link.includes("/Caskroom/")) break;
           const sig = await sign(i.path!);
+          const base = i.name.replace(/\.(exe|cmd|bat|ps1)$/i, "").toLowerCase();
+          if (SHADOWED.has(base) && sig.kind !== "developer-id" && sig.kind !== "apple") {
+            add({ id: `bin:${i.id}`, rule: "new-bin", severity: "high", title: `New program on PATH named like the system's ${base}: ${i.path}`,
+              detail: [i.path ?? "", link ? `→ ${link}` : "", `Found before the real ${base}, it sees what you type into it: passwords, tokens, the hosts you reach.`].filter(Boolean),
+              fix: "Remove it unless you put it there; then vswarm respond", item: i });
+            break;
+          }
           if (sig.kind === "developer-id" || sig.kind === "apple") {
             add({ id: `bin:${i.id}`, rule: "new-bin", severity: "info", title: `New signed program on PATH: ${i.name}`, detail: [`${sig.who}`, i.path ?? ""], item: i });
           } else if (sig.kind === "script") {
