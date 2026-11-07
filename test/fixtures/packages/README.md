@@ -7,7 +7,7 @@ public write-ups of real incidents, defanged:
 |---|---|
 | `colors-v1`, `colors-v2` | an account-takeover release (event-stream, ua-parser-js, chalk/debug 2025): v1 is clean, v2 adds a postinstall that reads keys and the environment and posts them out |
 | `obfuscated-lib` | a wallet-stealer injected into a library (chalk/debug, September 2025): obfuscated code that decodes and runs itself on import |
-| `curl-pipe` | a preinstall that downloads a script and pipes it into a shell |
+| `curl-pipe` | a preinstall that downloads a script and pipes it into a shell (built at test time in `test/content.test.ts`, not kept as a file: Defender deleted it from a Windows checkout) |
 | `persist` | a postinstall that adds a login item, a line to `~/.zshrc` and a crontab entry |
 | `py-setup` | a PyPI sdist whose `setup.py` decodes and runs code and contacts a raw IP address |
 | `py-pth` | a wheel with a `.pth` file that decodes and runs code at every Python start |

