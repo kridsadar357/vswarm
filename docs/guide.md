@@ -163,14 +163,18 @@ Claude Desktop, Cursor, Windsurf, Gemini, VS Code, Codex), editor task files and
 site-packages, `~/.local/bin` and `~/bin`, and the global npm and bun folders.
 
 When one of them changes, the job waits 1.5 s for the burst of writes to settle (an installer writes many files; that
-is one check), works out from modification times which paths changed, and checks **only the parts of the scan that
+is one check), works out which paths changed (from their modification and status-change times; the second cannot be
+set back by hand, so a file put back to its old date still counts), and checks **only the parts of the scan that
 read them**, offline (the known-malicious lookup uses its cache, so a slow network cannot delay it). If more changed
 while it ran, it checks again; a second trigger while one check runs is covered by that check. It notifies only about
 findings at medium or above that it has not announced before, the same ones the hourly check would. A partial check
 is never saved as the verdict `preflight` reuses.
 
 vswarm's own writes do not set it off: its state folder is never watched, its blocks in your rc files and its job
-files are recognised as its own, so a check they trigger finds nothing new.
+files are recognised as its own, so a check they trigger finds nothing new. When nothing among the watched paths
+changed, no check runs at all: `~/.ssh` is watched as a folder (so an `authorized_keys` or `rc` that was not there
+appears), but ssh writing `known_hosts` at a new host, and its `.old` and temporary copies, do not count as a change,
+and neither does launchd starting the job once after the hourly run writes it again.
 
 Measured with a fake home on an M-series Mac, `fs.watch` standing in for launchd: a planted LaunchAgent reaches the
 notification in 1.52 s with the job's 1.5 s wait (five runs, 1,515–1,522 ms; the check itself takes 13–14 ms, and
@@ -330,25 +334,42 @@ ssh prod-wallet-01                     # signed while preflight passes, refused 
 vswarm agent status                    # vswarm agent log: every signature and refusal
 ```
 
-**When it signs.** On every signature request for a key it holds, the agent takes the same verdict preflight does:
-the sealed verdict from the last two minutes, or a fresh quiet check (a forged `last.json` is never reused), and an
-open incident always blocks. BLOCK is refused. WARN signs, unless the key was protected with `--strict`. A key
-protected with `--confirm` (or added with `--confirm`) asks in a dialog every time, and no answer within 30 seconds
-is a no.
+**When it signs.** On every signature request for a key it holds, the agent decides the way preflight does, on a
+fresher verdict: the sealed verdict if it is at most **30 seconds** old (preflight reuses one for two minutes), or
+else a fresh quiet check, which the next 30 seconds reuse, so a burst of ssh connections costs one check. A forged
+`last.json` is never reused, and an open incident always blocks. BLOCK is refused. For a **protected** key WARN is
+refused too, unless the key was protected with `--allow-warn`. A key protected with `--confirm` (or added with
+`--confirm`) asks in a dialog every time, and no answer within 30 seconds is a no. Keys added with `agent add` sign
+on WARN, as preflight lets WARN through.
+
+> **Changed in 2.7: protected keys are strict by default.** Before, WARN signed unless you gave `--strict`. Keys you
+> protected with 2.6 or earlier are strict now too, whatever they were protected with. To let one sign on WARN again:
+> `vswarm agent policy ~/.ssh/prod_key --allow-warn` (`--strict` turns it back). `vswarm agent status` shows each
+> key's policy. `--strict` is still accepted by `protect`, and changes nothing.
 
 **When it refuses**, ssh gets `SSH_AGENT_FAILURE` and stops cleanly (`agent refused operation`), and a desktop
 notification says why and what to do (`vswarm preflight --fresh`, or `vswarm unlock` after an incident). Every
 signature and every refusal goes into `~/.vswarm/sec/audit.log`, sealed and chained like the incident log, with the
 time, the key fingerprint and what it was for: the account and algorithm of an ssh login, the server's host key when
-the client says, or the namespace of `ssh-keygen -Y sign` (git commit signing).
+the client says, or the namespace of `ssh-keygen -Y sign` (git commit signing). No signature leaves without its
+sealed line: when the key store does not answer (the login Keychain still locked when the agent starts, no keyring
+yet), the line cannot be sealed, so the signature is refused and the notification says so. Nothing unsealed is ever
+written to the log. The agent asks the key store again after a short wait (from a second, doubling up to a minute),
+so it recovers on its own once the Keychain answers. A log from 2.6 or earlier that holds lines written without a
+seal (2.6 wrote them while the store did not answer, and then reported the log as tampered with) is recognised once:
+those lines are set aside in `audit.log.unsealed-<time>`, `vswarm agent log` and `vswarm doctor` say so, and a new
+chain starts. They are not taken as valid.
 
 **Getting keys in.**
-- `vswarm agent protect <key> [--confirm] [--strict]`: ssh-add reads the key (a passphrase is typed at ssh's own
+- `vswarm agent protect <key> [--confirm] [--allow-warn]`: ssh-add reads the key (a passphrase is typed at ssh's own
   prompt, never into vswarm). vswarm encrypts it (AES-256-GCM, the wrapping key in the same store as the sealing key:
   Keychain, Secret Service, or an owner-only file), writes `<key>.vswarm-backup` encrypted with a recovery code it
   prints **once**, opens both again to check them, and only then overwrites and removes the key file. The `.pub`
   stays, so `IdentityFile ~/.ssh/prod_key` still picks the right key from the agent. Write the recovery code down
-  somewhere off this machine.
+  somewhere off this machine. If the key file cannot be removed at the end, the recovery code is still shown, and
+  `agent status` and `doctor` say the file is still there; running `vswarm agent protect <key>` again removes it (only
+  while it is still that key, byte for byte).
+- `vswarm agent policy <key> --allow-warn | --strict` changes whether WARN signs with a protected key.
 - `vswarm agent unprotect <key>` puts the file back byte for byte (with its passphrase, if it had one) and removes the
   vault entry and the backup.
 - `vswarm agent restore <key>.vswarm-backup` asks for the recovery code and writes the original file back, for when
@@ -362,7 +383,7 @@ the client says, or the namespace of `ssh-keygen -Y sign` (git commit signing).
 | --- | --- | --- |
 | `IdentityAgent` per host (default) | `agent on` writes a `Match originalhost …` block with `IdentityAgent` at the top of `~/.ssh/config` for the hosts of your ssh gate, or the patterns you name (`agent on "prod-*"`) | least surprising: your `SSH_AUTH_SOCK`, git and every other ssh are untouched |
 | one socket for everything | `agent on --global` prints the `export SSH_AUTH_SOCK=…` line for your shell's rc file | GUI clients, paramiko and libssh2 read only `SSH_AUTH_SOCK` |
-| upstream | keys the agent does not hold are passed to your usual agent untouched: the `SSH_AUTH_SOCK` the service starts with, or `agent on --upstream <path>` (`none` for no upstream) | always on; it is what keeps git and other keys working through the one socket |
+| upstream | keys the agent does not hold are passed to your usual agent untouched: the `SSH_AUTH_SOCK` the service starts with, or `agent on --upstream <path>` (`none` for no upstream). `ssh-add -d` and `ssh-add -D` reach it too (protected keys stay; only `unprotect` takes them out). A signature there may take up to 60 s, for a key that asks first (`ssh-add -c`) or a hardware key waiting for a touch; `agent on --upstream-timeout <seconds>` changes that | always on; it is what keeps git and other keys working through the one socket |
 
 The config block is a convenience, not the control. A client that goes around it reaches your usual agent, which no
 longer has the production key, so the login fails; a client that reaches vswarm agent gets a signature only while
@@ -576,7 +597,13 @@ The signals above come from registry metadata. The guard also reads the package 
 downloads the archive the package manager would install (the npm tarball, or the wheel or sdist pip would pick for
 this machine), checks it against the registry's `integrity` or `sha256`, and unpacks it in memory with its own reader.
 Nothing in the package runs. The reader has limits: 256 MB unpacked, 30,000 files, a time budget, no `..` or absolute
-paths, no links or devices. It reports what it finds, with file, line and a masked snippet:
+paths, no links or devices. It reads an archive the way the installer will: pax `size`, `path` and `linkpath` records
+and GNU long names and base-256 sizes in a tarball (as npm's node-tar and pip's tarfile do), the central directory of
+a wheel (as pip's zipfile does). Where a tool could read the same bytes differently, the archive counts as damaged and
+nothing after that point is guessed at: a tar size or checksum that is not a number, a malformed pax record, a global
+pax header that moves paths, a zip entry whose local header names another file, two entries for one path, a name that
+is not marked UTF-8. A damaged or partly read archive is reported and is never kept as a clean result, so it is read
+again next time. It reports what it finds, with file, line and a masked snippet:
 
 | Where the code runs | What is looked for |
 | --- | --- |
@@ -684,6 +711,13 @@ Every lock and unlock is also written to `~/.vswarm/sec/incidents.log`, each ent
 before. Deleting the `lock` file does not close an incident: preflight keeps blocking while the log says it is open.
 A log that was edited, cut short or deleted keeps the machine locked too; `vswarm unlock` then says so, and
 `vswarm unlock --force` starts a new log once you know why (the old one is kept next to it).
+
+All of that needs the sealing key. While the key store does not answer (a locked Keychain, no keyring), vswarm cannot
+check the log, and fails closed: an incident the log ever opened counts as open, whatever unlock follows it, until the
+store answers again; a lock file still blocks; `vswarm respond` still writes the lock file and says that the log got
+no entry for it (an entry without its seal would break the chain), so that incident is held open by the lock file
+alone; and `vswarm unlock` refuses, since an unlock it cannot seal would not count. Unlock the Keychain or keyring and
+run it again.
 
 `vswarm report [incident]` writes the report again; everything is in `~/.vswarm/sec/incidents/<id>/`.
 `vswarm report --json [--sign key] [--out dir]` is something else: this machine's current state as JSON, optionally
@@ -874,8 +908,8 @@ Maintainers: the release steps are in [SECURITY.md](../SECURITY.md#for-the-maint
 | `vswarm gate az [subscription…]` · `--off` · `status` | az: the wrapper |
 | `vswarm ca init [--sk] [--principal a,b] [--ttl 15m]` · `ca server <account>` · `ca status` | CA for SSH certificates |
 | `vswarm cert [--host h]` | a short-lived certificate, only when preflight passes |
-| `vswarm agent protect <key> [--confirm] [--strict]` · `unprotect <key>` · `restore <backup>` | move an ssh key into the agent's vault, and back |
-| `vswarm agent on [hosts…] [--global] [--upstream path\|none]` · `off` · `status` · `log` · `add <key>` · `run` | the ssh agent that signs only while the machine passes |
+| `vswarm agent protect <key> [--confirm] [--allow-warn]` · `policy <key> --allow-warn\|--strict` · `unprotect <key>` · `restore <backup>` | move an ssh key into the agent's vault, and back; whether WARN signs with it |
+| `vswarm agent on [hosts…] [--global] [--upstream path\|none] [--upstream-timeout s]` · `off` · `status` · `log` · `add <key>` · `run` | the ssh agent that signs only while the machine passes |
 | `vswarm guard on [--ignore-scripts] [--sandbox] [--strict]` · `off` · `status` | the install guard in your shell |
 | `vswarm pkg <tool> [--] <args…>` | check an install command; exit 3 when it should stop |
 | `vswarm try <target> [--net none\|registries\|all] [--localhost] [--yes] [-- cmd…]` · `--list` · `--clean [id]` | run code in a sandbox |
@@ -902,8 +936,8 @@ Everything lives in `~/.vswarm`, readable by you only:
 | `sec/last.json` | the last check, reused by preflight |
 | `sec/accepted.json` | accepted findings |
 | `sec/lock` | present while an incident is open |
-| `sec/incidents.log` | every lock and unlock, sealed and chained; keeps an incident open when `lock` is deleted |
-| `sec/*.seal`, `sec/keystore.json` | seals of the files above, and which key store holds their key |
+| `sec/incidents.log` | every lock and unlock, sealed and chained; keeps an incident open when `lock` is deleted (and, while the key store does not answer, any incident it ever opened) |
+| `sec/*.seal`, `sec/keystore.json` | seals of the files above, and which key store holds their key (a change to "file" that vswarm did not make is a finding) |
 | `sec/incidents/<id>/` | evidence, quarantine, reports |
 | `sec/osv-cache.json`, `sec/managed.json`, `sec/canaries.json` | OSV answers, vswarm's own blocks, planted canaries |
 | `sec/cmdgate.json`, `sec/cloudgate.json`, `gate/` | command gates, gcloud hooks (with the value they replaced), gated gcloud credentials |
@@ -937,9 +971,13 @@ vswarm runs as you, on the machine it checks. Be clear about what that means:
 - **What vswarm does about it:** it seals its own state. `last.json`, `lock`, `baseline.json` and `accepted.json`
   carry an HMAC whose key lives outside `~/.vswarm`: the login Keychain on macOS, the Secret Service (`secret-tool`)
   on a Linux desktop, DPAPI on Windows, or an owner-only file under `~/.config/vswarm` when none of those answers
-  (`vswarm doctor` warns then). A verdict without a valid seal is never reused, a lock with a bad seal still blocks,
-  an edited baseline is set aside and blocks, an edited accepted list accepts nothing, and the incident log keeps an
-  incident open when the lock file is deleted.
+  (`vswarm doctor` warns then). The key goes to the Keychain on `security`'s standard input, never on its command
+  line, where other programs could read it. A verdict without a valid seal is never reused, a lock with a bad seal
+  still blocks, an edited baseline is set aside and blocks, an edited accepted list accepts nothing, and, while the
+  key store answers, the incident log keeps an incident open when the lock file is deleted. `keystore.json`, which
+  says where the key is, is checked against the system store itself: changed to a plain file while the Keychain (or
+  Secret Service, or DPAPI) still holds vswarm's key, it is a high finding, and the system store is used. Remove
+  `keystore.json` once you know why, and vswarm goes back to the system store.
 - **What that does not stop:** a program running as you can read the key the same way vswarm does. The seals catch
   hand-edited files and generic "set the verdict to pass" tricks, not malware written against vswarm.
 - **Keys kept by `vswarm agent`** cannot be used by going around the ssh config, and are no longer a file to copy;
@@ -950,7 +988,11 @@ vswarm runs as you, on the machine it checks. Be clear about what that means:
   fresh signed report, or device trust in your identity provider. See [server-side.md](server-side.md).
 
 If the key store does not answer (a locked keychain over ssh, no D-Bus in a cron job), vswarm says so with a WARN,
-reuses no cached verdict and still honours a lock file; unlock the keychain or keyring and check again.
+reuses no cached verdict, still honours a lock file, and fails closed on the incident log: nothing in it can be
+verified, so an incident it ever opened counts as open (a forged "unlock" line cannot close it) until the store
+answers. Nothing is written to a log without its seal: `vswarm agent` refuses to sign, and `vswarm unlock` refuses to
+unlock. vswarm asks the store again after a short wait, so a long-running agent or watch recovers on its own; unlock
+the keychain or keyring and check again.
 
 ## 17. Troubleshooting
 
@@ -968,6 +1010,9 @@ reuses no cached verdict and still honours a lock file; unlock the keychain or k
 | `vswarm's incident log … was changed outside vswarm` / `was deleted` | if you did not touch `~/.vswarm`, treat the machine as compromised (`vswarm respond`); if you restored a backup or deleted files yourself, `vswarm unlock --force` |
 | `vswarm's baseline was changed outside vswarm` | review `vswarm diff`, then `vswarm baseline` records and seals a new one |
 | `vswarm could not check its own files: its sealing key is not readable` | unlock the login keychain (`security unlock-keychain`) or the desktop keyring; `vswarm doctor` shows where the key is |
+| `vswarm agent: refused … its audit line could not be sealed and written` · `vswarm unlock`: `cannot record the unlock` · an old incident counts as open again | the same: the key store does not answer, and nothing is signed, unlocked or logged without a seal. It works again once the store answers (the agent retries by itself) |
+| `vswarm agent: refused … preflight warns and this key is strict` after upgrading to 2.7 | protected keys refuse on WARN by default now. Fix or accept the findings, or let that key sign on WARN: `vswarm agent policy <key> --allow-warn` |
+| `vswarm's sealing key was moved to a plain file, and vswarm did not move it` | someone changed `~/.vswarm/sec/keystore.json`. If it was not you, treat the machine as suspect (`vswarm respond`); then remove `keystore.json` |
 
 ### Windows (preview)
 

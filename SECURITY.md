@@ -71,13 +71,20 @@ What it does:
 - **Seals its own state.** The last verdict, the lock, the baseline and the accepted findings carry an HMAC whose key
   is kept outside `~/.vswarm` (macOS Keychain, the Linux Secret Service when there is one, Windows DPAPI). A file
   edited or forged by hand is not trusted: a cached verdict without a valid seal is never reused, a lock with a bad
-  seal still blocks, and an append-only incident log with chained seals keeps an incident open even when the lock
-  file is deleted. This catches naive tampering and generic "set verdict to pass" tricks. It does **not** stop
-  malware that reads the key the way vswarm does: any program running as you can.
+  seal still blocks, and, while the key store answers, an append-only incident log with chained seals keeps an
+  incident open when the lock file is deleted. While the key store does not answer nothing can be verified, so vswarm
+  fails closed: an incident the log ever opened counts as open (a forged "unlock" line cannot close it), and nothing
+  is written to a log without its seal, so the agent refuses to sign and `unlock` refuses to unlock until the store
+  answers. `keystore.json` (where the key is) is checked against the system store: switched to a plain file while
+  the system store still holds vswarm's key, it is a finding. The key reaches the Keychain on `security`'s standard
+  input, not its command line. This catches naive tampering and generic "set verdict to pass" tricks. It does
+  **not** stop malware that reads the key the way vswarm does: any program running as you can.
 - **Moves the ssh check onto the key** with `vswarm agent`. A protected key exists only in the agent's vault
   (encrypted, its wrapping key in the same store as the sealing key), and the agent signs only while the machine
   passes, whatever client or route asks: `ssh -F /dev/null`, an IP address, a GUI client, paramiko, or a deleted
-  config block get no signature from a blocked machine, and a copy of `~/.ssh` no longer holds the key. It does
+  config block get no signature from a blocked machine, and a copy of `~/.ssh` no longer holds the key. Every
+  signature is sealed and chained in its audit log: one whose line cannot be sealed is not made. A protected key
+  signs on a verdict at most 30 seconds old, and on PASS only unless protected with `--allow-warn`. It does
   **not** stop malware running as you from asking the agent to sign while the machine passes, reading the agent's
   memory, or reading the wrapping key the way vswarm does. Hardware keys (`-sk`) and short-lived certificates are
   stronger, and combine with it.
@@ -105,6 +112,8 @@ What it does:
 - Ways to make `vswarm update` or the installer accept a release that is not signed by a pinned key, or an older one.
 - Ways to make vswarm run code, change files, or send data it should not (it should only send package names and
   versions to api.osv.dev and the registries, and download package archives from the registries).
+- Archives that the package reader reads differently from npm (node-tar) or pip (tarfile, zipfile) without calling
+  them damaged: a file the installer would write that vswarm does not see, or sees with other contents.
 - Archives that make the package reader write outside its folder, run anything, or exhaust memory or time past its
   limits.
 - Credential values ending up in output, reports, or files under `~/.vswarm`.
