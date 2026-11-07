@@ -192,7 +192,7 @@ async function main() {
         for (const i of xs) {
           if (kind === "agent-perm") line(`    ${i.meta?.bypass ? c.amber("bypass") : c.green("asks  ")}  ${i.name}${i.meta?.wide ? c.dim(`  allows ${i.meta.wide}`) : ""}`);
           else if (kind === "agent-plugin") line(`    ${i.name} ${c.dim(String(i.source))}`);
-          else line(`    ${c.cyan(String(i.source).padEnd(26))} ${i.name.replace(`${i.source} `, "")}\n      ${c.dim(redact(String(i.meta?.command ?? i.meta?.url ?? short(i.path))).slice(0, 140))}${i.meta?.secrets ? c.amber(`  token in plain text: ${i.meta.secrets}`) : ""}`);
+          else line(`    ${c.cyan(String(i.source).padEnd(26))} ${i.name.replace(`${i.source} `, "")}\n      ${c.dim(redact(String(i.meta?.command ?? i.meta?.url ?? short(i.path))).slice(0, 140))}${i.meta?.secrets ? c.amber(`  token in plain text: ${i.meta.secrets}`) : ""}${i.meta?.disabled ? c.dim("  (disabled)") : ""}`);
         }
       }
       line(c.dim("\n  Changes from your baseline show up in vswarm diff and block or warn in preflight."));

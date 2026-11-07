@@ -15,6 +15,8 @@ export interface Server {
   args?: string[];
   /** The folder the server is started in (Codex, Gemini CLI). */
   cwd?: string;
+  /** Codex: `enabled = false` keeps the server from starting. */
+  enabled?: boolean;
   url?: string;
   type?: string;
   env?: Record<string, string>;
@@ -87,7 +89,26 @@ export function launchOf(app: string, s: Server, project?: string): Launch {
   return { relative };
 }
 
-function serverItem(app: string, file: string, name: string, s: Server, project?: string): Item {
+// ── servers the agent will not start
+//
+// Only switches the agent itself reads count; one it ignores would let a planted server hide behind it:
+//   Codex        `enabled = false` on the entry (codex-rs mcp_types: `enabled`, default true)
+//   Gemini CLI   the server's name in excludeMCPServers / mcp.excluded, or missing from a set allowMCPServers /
+//                mcp.allowed (settings.json; exclusion wins)
+//   Claude Code, Claude Desktop, Cursor, Windsurf, VS Code: no switch in the files read here that the agent is
+//   documented to honour (Cursor and VS Code keep the toggle in their own state; Claude Code's
+//   disabledMcpjsonServers is for project .mcp.json files), so their entries count as enabled.
+// A disabled server stays an item, so turning it on later is a change since the baseline.
+
+/** Whether Gemini CLI connects to server `name`, from its settings. */
+export function geminiOff(settings: any, name: string): boolean {
+  const list = (v: unknown) => (Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : undefined);
+  const excluded = [...(list(settings?.excludeMCPServers) ?? []), ...(list(settings?.mcp?.excluded) ?? [])];
+  const allowed = list(settings?.allowMCPServers) ?? list(settings?.mcp?.allowed);
+  return excluded.includes(name) || (allowed !== undefined && !allowed.includes(name));
+}
+
+function serverItem(app: string, file: string, name: string, s: Server, project?: string, off = false): Item {
   // One malformed entry (args that is not a list) must not take the whole collector down.
   const args = Array.isArray(s.args) ? s.args.map(String) : [];
   const cmd = typeof s.command === "string" ? s.command : undefined;
@@ -103,13 +124,15 @@ function serverItem(app: string, file: string, name: string, s: Server, project?
     meta: {
       command: command.slice(0, 300) || undefined, argv: argv && argv.length <= 4000 ? argv : undefined, exe: l.exe, base: l.base, relative: l.relative,
       url: s.url ?? (s as any).httpUrl ?? (s as any).serverUrl, secrets: literalSecrets(s).join(",") || undefined,
+      // Not in the hash: switching a server off and on is not a new definition (pins and drift stay as they were).
+      disabled: off || (app === "codex" && s.enabled === false) || undefined,
     },
   };
 }
 
-function servers(app: string, file: string, map: unknown, prefix = "", project?: string): Item[] {
+function servers(app: string, file: string, map: unknown, prefix = "", project?: string, off?: (name: string) => boolean): Item[] {
   if (!map || typeof map !== "object") return [];
-  return Object.entries(map as Record<string, Server>).filter(([, s]) => s && typeof s === "object").map(([n, s]) => serverItem(app, file, prefix + n, s, project));
+  return Object.entries(map as Record<string, Server>).filter(([, s]) => s && typeof s === "object").map(([n, s]) => serverItem(app, file, prefix + n, s, project, off?.(n) ?? false));
 }
 
 /** The command and arguments a scan recorded for an MCP server, as the config gave them. */
@@ -211,10 +234,16 @@ export function codexServers(toml: string): Record<string, Server> {
       if (url) s.url = tomlStr(url);
       const args = /(?:^\{|,)\s*args\s*=\s*\[([^\]]*)\]/.exec(val)?.[1];
       if (args !== undefined) s.args = tomlStrs(args);
+      // Only the entry's own `enabled`, not one inside a nested table (tools = { x = { enabled = false } }).
+      let inner = val.replace(/"(?:[^"\\]|\\.)*"|'[^']*'/g, '""');
+      inner = inner.slice(1, inner.lastIndexOf("}") > 0 ? inner.lastIndexOf("}") : undefined);
+      for (let n = 0; n < 16 && /\{[^{}]*\}/.test(inner); n++) inner = inner.replace(/\{[^{}]*\}/g, "");
+      if (/(?:^|,)\s*enabled\s*=\s*false\b/.test(inner)) s.enabled = false;
       continue;
     }
     if (key.length !== 1) continue;
-    if (key[0] === "command") cur!.command = tomlStr(val);
+    if (key[0] === "enabled") cur!.enabled = /^false\b/.test(val.trim()) ? false : undefined;
+    else if (key[0] === "command") cur!.command = tomlStr(val);
     else if (key[0] === "cwd") cur!.cwd = tomlStr(val);
     else if (key[0] === "url") cur!.url = tomlStr(val);
     else if (key[0] === "args" && val.startsWith("[")) cur!.args = tomlStrs(val);
@@ -243,7 +272,7 @@ export async function agents(ctx: Ctx): Promise<Item[]> {
   ];
   for (const [app, f, key] of plain) {
     const j = cfg(f);
-    if (j) out.push(...servers(app, f, key === "mcp.servers" ? j["mcp"]?.servers ?? j["mcp.servers"] : j[key]));
+    if (j) out.push(...servers(app, f, key === "mcp.servers" ? j["mcp"]?.servers ?? j["mcp.servers"] : j[key], "", undefined, app === "gemini" ? (n) => geminiOff(j, n) : undefined));
   }
   // Codex: TOML, [mcp_servers.<name>] tables with command / args / url.
   const codexFile = join(h, ".codex/config.toml");

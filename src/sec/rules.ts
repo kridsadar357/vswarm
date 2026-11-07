@@ -286,19 +286,22 @@ export async function evaluate(input: RuleInput): Promise<Finding[]> {
       const l = launcher(argvOf(i) ?? cmd.split(/\s+/).filter(Boolean), home, i.meta?.base ? String(i.meta.base) : undefined);
       const where = (exe ? suspiciousLocation(exe, home) : undefined) ?? (l.exe ? suspiciousLocation(l.exe, home) : undefined);
       const like = l.pkg ? lookAlike(l.pkg.eco, l.pkg.name) : undefined;
-      if (where || like || (cmd && RISKY_LINE.test(cmd.replace(/\.cache\//g, "")))) {
+      // A server its agent will not start (Codex enabled = false, Gemini CLI excluded) runs nothing and connects nowhere;
+      // a token pasted into it is still stored, and turning it on is reported as a change below.
+      const off = i.kind === "mcp" && i.meta?.disabled === true;
+      if (!off && (where || like || (cmd && RISKY_LINE.test(cmd.replace(/\.cache\//g, ""))))) {
         add({ id: `agent-risky:${i.kind}:${i.id}:${i.hash?.slice(0, 12)}`, rule: "agent-risky", severity: "high",
           title: `${what} ${where ? `starts a program that ${where}` : like ? `runs ${l.pkg!.name}, which looks like ${like}` : "runs a command that downloads, decodes or backgrounds something"}`,
           detail: [redact(cmd.slice(0, 200)), i.path ?? ""], fix: "An agent runs this with your access. Remove it unless you set it up yourself; then vswarm respond", item: i });
       }
       // A relative command whose folder is not known cannot be judged by place, and it need not be the program you
       // set up: whatever sits at that path in the folder the agent was started in runs instead.
-      if (i.kind === "mcp" && i.meta?.relative && !where)
+      if (i.kind === "mcp" && !off && i.meta?.relative && !where)
         add({ id: `agent-relative:${i.id}:${i.hash?.slice(0, 12)}`, rule: "agent-relative", severity: "medium", title: `${what} starts a program by a relative path (${redact(String(argvOf(i)?.[0] ?? cmd).slice(0, 120))})`,
           detail: [String(i.meta.relative), i.path ?? ""], fix: "Give the command as an absolute path, so the same program runs wherever the agent is started", item: i });
       const url = String(i.meta?.url ?? "");
       // Read the host with a regex: a URL that does not parse ("http://") must not stop the whole check.
-      if (/^http:\/\//.test(url) && !/^http:\/\/(localhost|127\.|\[::1\])/.test(url)) {
+      if (!off && /^http:\/\//.test(url) && !/^http:\/\/(localhost|127\.|\[::1\])/.test(url)) {
         // Shown, not stored: a password in the URL's userinfo or a token in its query is masked.
         const shown = redact(url);
         add({ id: `agent-http:${i.id}`, rule: "agent-http", severity: "medium", title: `${what} talks to ${/^http:\/\/([^/?#]+)/.exec(shown)?.[1] ?? shown} without TLS`, detail: [shown], fix: "Anyone on the network path can read or change what the agent sends and gets; use https", item: i });
@@ -372,7 +375,17 @@ export async function evaluate(input: RuleInput): Promise<Finding[]> {
         fix: "If you did not mean to trust this publisher: brew untap " + t.name + " and remove what came from it", item: t });
     }
     for (const i of scan.items) {
+      // An MCP server switched on since the baseline starts from now on: reported like a new one.
+      const was = i.kind === "mcp" ? before.get(key(i)) : undefined;
+      if (was && was.meta?.disabled === true && i.meta?.disabled !== true) {
+        add({ id: `agent-mcp-enabled:${i.id}:${i.hash?.slice(0, 12)}`, rule: "agent-mcp-enabled", severity: "medium",
+          title: `MCP server for ${i.source} turned on: ${i.name}${changed(i) ? ", with a different definition" : ""}`, detail: [redact(String(i.meta?.command ?? i.meta?.url ?? "")), i.path ?? ""],
+          fix: "It was switched off when you took the baseline; an MCP server acts with the agent's access to your files and shell, so keep it on only if you turned it on", item: i });
+        continue;
+      }
       if (!isNew(i) && !changed(i)) continue;
+      // Added or changed while switched off: nothing runs yet; turning it on is what gets reported.
+      if (i.kind === "mcp" && i.meta?.disabled === true) continue;
       const fresh = isNew(i);
       switch (i.kind) {
         case "brew":

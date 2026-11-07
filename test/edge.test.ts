@@ -9,7 +9,7 @@ import { checkInstall, depTree, guardBlock, npmSpec, pipSpec, pkgCommand, plan, 
 import { sandboxRun } from "../src/sec/try/spawn";
 import { profile } from "../src/sec/try/sandbox";
 import { kubeUsers, secretNames, secrets as findSecrets } from "../src/sec/secrets";
-import { absolute, agents, argvOf, launchOf, literalSecrets, under } from "../src/sec/collect/agents";
+import { absolute, agents, argvOf, geminiOff, launchOf, literalSecrets, under } from "../src/sec/collect/agents";
 import { startupFiles } from "../src/sec/collect/system";
 import { evaluate, launcher } from "../src/sec/rules";
 import { inspect, judgeTools, loadPins, mcpDrift, pinTools, promptAsTool, resourceAsTool, savePins, type Pins, type Tool } from "../src/sec/mcp";
@@ -960,7 +960,7 @@ describe("parsing, CLI and collectors", () => {
     test("Codex: a relative command under cwd \".\" is kept whole, not placed, not started, and said so", async () => {
       const home = tmp("home");
       mkdirSync(join(home, ".codex"), { recursive: true });
-      writeFileSync(join(home, ".codex/config.toml"), `[mcp_servers.computer-use]\ncommand = "${APP}"\nargs = [ "mcp" ]\ncwd = "."\nenabled = false\n`);
+      writeFileSync(join(home, ".codex/config.toml"), `[mcp_servers.computer-use]\ncommand = "${APP}"\nargs = [ "mcp" ]\ncwd = "."\n`);
       const [i] = await agents(ctxFor(home));
       expect(argvOf(i)).toEqual([APP, "mcp"]);
       expect(i.meta?.exe).toBeUndefined();
@@ -1042,6 +1042,88 @@ describe("parsing, CLI and collectors", () => {
       // A program in a Windows user's Downloads, reached through a relative argument, is still seen.
       const l = launcher(["node", ".\\evil.js"], "C:\\Users\\me", "C:\\Users\\me\\Downloads");
       expect(l.exe).toBe("C:\\Users\\me\\Downloads\\evil.js");
+    });
+
+    describe("servers the agent will not start", () => {
+      const tok = ["gh", "p_", "x".repeat(36)].join("");
+      const codexHome = (toml: string) => {
+        const home = tmp("home");
+        mkdirSync(join(home, ".codex"), { recursive: true });
+        writeFileSync(join(home, ".codex/config.toml"), toml);
+        return home;
+      };
+
+      test("Codex enabled = false, in a table or inline; not one inside a nested table; the hash does not change", async () => {
+        const home = codexHome([
+          `[mcp_servers]`,
+          `inline = { command = "/tmp/x", enabled = false }`,
+          `nested = { command = "/tmp/y", tools = { a = { enabled = false } } }`,
+          `quoted = { command = "/tmp/z", args = ["enabled = false"] }`,
+          `[mcp_servers.computer-use]`, `command = "${APP}"`, `cwd = "."`, `enabled = false`,
+          `[mcp_servers.on]`, `command = "/tmp/w"`, `enabled = true`,
+        ].join("\n"));
+        const by = Object.fromEntries((await agents(ctxFor(home))).map((i) => [i.name, i]));
+        expect(Object.fromEntries(Object.entries(by).map(([n, i]) => [n, i.meta?.disabled ?? false]))).toEqual({ inline: true, nested: false, quoted: false, "computer-use": true, on: false });
+        const off = by["computer-use"].hash;
+        writeFileSync(join(home, ".codex/config.toml"), `[mcp_servers.computer-use]\ncommand = "${APP}"\ncwd = "."\n`);
+        expect((await agents(ctxFor(home)))[0].hash).toBe(off);
+      });
+
+      test("Gemini CLI: excludeMCPServers, mcp.excluded and an allow-list; other clients' flags are not taken on trust", async () => {
+        expect(geminiOff({ excludeMCPServers: ["a"] }, "a")).toBe(true);
+        expect(geminiOff({ mcp: { excluded: ["a"] } }, "a")).toBe(true);
+        expect(geminiOff({ allowMCPServers: ["b"] }, "a")).toBe(true);
+        expect(geminiOff({ mcp: { allowed: ["a"] }, excludeMCPServers: ["a"] }, "a")).toBe(true);
+        expect(geminiOff({ mcp: { allowed: ["a"] } }, "a")).toBe(false);
+        expect(geminiOff({}, "a")).toBe(false);
+        const home = tmp("home");
+        mkdirSync(join(home, ".gemini"), { recursive: true });
+        mkdirSync(join(home, ".cursor"), { recursive: true });
+        writeFileSync(join(home, ".gemini/settings.json"), JSON.stringify({ excludeMCPServers: ["gx"], mcpServers: { gx: { command: "/tmp/g" }, gy: { command: "npx" } } }));
+        // Cursor ignores "disabled" in mcp.json (its toggle lives in its own state): a planted server cannot hide behind it.
+        writeFileSync(join(home, ".cursor/mcp.json"), JSON.stringify({ mcpServers: { cx: { command: "/tmp/c", disabled: true } } }));
+        const by = Object.fromEntries((await agents(ctxFor(home))).map((i) => [i.name, i.meta?.disabled ?? false]));
+        expect(by).toEqual({ gx: true, gy: false, cx: false });
+      });
+
+      test("no risky, relative, http or drift findings for a disabled server; a pasted token still counts; --inspect does not start it", async () => {
+        const home = codexHome([
+          `[mcp_servers.computer-use]`, `command = "${APP}"`, `cwd = "."`, `enabled = false`,
+          `[mcp_servers.tmp]`, `command = "/tmp/evil"`, `enabled = false`,
+          `[mcp_servers.web]`, `url = "http://198.51.100.9/mcp"`, `enabled = false`,
+          `[mcp_servers.web.env]`, `X = "1"`,
+        ].join("\n"));
+        mkdirSync(join(home, ".gemini"), { recursive: true });
+        writeFileSync(join(home, ".gemini/settings.json"), JSON.stringify({ excludeMCPServers: ["tokened"], mcpServers: { tokened: { command: "/tmp/t", env: { GITHUB_TOKEN: tok } } } }));
+        const items = await agents(ctxFor(home));
+        expect(items.every((i) => i.meta?.disabled)).toBe(true);
+        const f = await evaluate({ scan: scanOf(home, items), malicious: [], secrets: [] });
+        expect(f.map((x) => `${x.rule}:${x.item?.name}`)).toEqual(["secret:tokened"]);
+        for (const i of items) expect((await inspect(i, { sandbox: false })).error).toBe("disabled, not inspected");
+        // Pinned before, changed since: no drift while it is off, and not counted as never inspected.
+        const pins: Pins = Object.fromEntries(items.map((i) => [i.id, { at: 1, tools: {}, def: "old", changed: { id: "c", at: 1, names: ["x"] } }]));
+        expect(mcpDrift(items, pins)).toEqual({ findings: [], never: [] });
+      });
+
+      test("switched on since the baseline: reported like a new server; added or changed while off: quiet", async () => {
+        const home = codexHome(`[mcp_servers.cu]\ncommand = "/opt/cu/bin/srv"\nenabled = false\n`);
+        const baseline = scanOf(home, await agents(ctxFor(home)));
+        // Changed while still off: nothing.
+        writeFileSync(join(home, ".codex/config.toml"), `[mcp_servers.cu]\ncommand = "/opt/cu/bin/srv2"\nenabled = false\n[mcp_servers.later]\ncommand = "/opt/l"\nenabled = false\n`);
+        expect(await evaluate({ scan: scanOf(home, await agents(ctxFor(home))), baseline, malicious: [], secrets: [] })).toEqual([]);
+        // Turned on, same definition.
+        writeFileSync(join(home, ".codex/config.toml"), `[mcp_servers.cu]\ncommand = "/opt/cu/bin/srv"\n`);
+        const on = await evaluate({ scan: scanOf(home, await agents(ctxFor(home))), baseline, malicious: [], secrets: [] });
+        expect(on.map((x) => `${x.rule}:${x.severity}:${x.title}`)).toEqual(["agent-mcp-enabled:medium:MCP server for codex turned on: cu"]);
+        // Turned on with another command: one finding, which says so.
+        writeFileSync(join(home, ".codex/config.toml"), `[mcp_servers.cu]\ncommand = "/opt/cu/bin/srv2"\n`);
+        const both = await evaluate({ scan: scanOf(home, await agents(ctxFor(home))), baseline, malicious: [], secrets: [] });
+        expect(both.map((x) => x.title)).toEqual(["MCP server for codex turned on: cu, with a different definition"]);
+        // Switched off after a baseline with it on: nothing to report.
+        const onBase = scanOf(home, await agents(ctxFor(home)));
+        writeFileSync(join(home, ".codex/config.toml"), `[mcp_servers.cu]\ncommand = "/opt/cu/bin/srv2"\nenabled = false\n`);
+        expect(await evaluate({ scan: scanOf(home, await agents(ctxFor(home))), baseline: onBase, malicious: [], secrets: [] })).toEqual([]);
+      });
     });
 
     test("a scan from before argv was recorded is not split again for inspection", async () => {

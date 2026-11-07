@@ -131,7 +131,8 @@ export const savePins = (p: Pins) => writeSealed(pinFile(), p);
 export function mcpDrift(items: Item[], pins: Pins): { findings: Finding[]; never: Item[] } {
   const findings: Finding[] = [];
   const never: Item[] = [];
-  for (const i of items.filter((x) => x.kind === "mcp")) {
+  // A server its agent will not start has nothing to drift from: turning it on is reported by the rules instead.
+  for (const i of items.filter((x) => x.kind === "mcp" && x.meta?.disabled !== true)) {
     const p = Object.hasOwn(pins, i.id) ? pins[i.id] : undefined;
     if (!p) {
       never.push(i);
@@ -348,6 +349,8 @@ export interface InspectOpt {
 }
 
 export async function inspect(i: Item, opt: InspectOpt): Promise<Inspection> {
+  // Its agent will not start it, so neither does vswarm.
+  if (i.meta?.disabled === true) return { item: i, error: "disabled, not inspected" };
   try {
     const def = definition(i);
     if (!def) return { item: i, error: "no command or URL in its config" };

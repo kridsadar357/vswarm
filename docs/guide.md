@@ -264,6 +264,10 @@ or change them after you approved it. `--inspect` starts each server the way the
   Windsurf, VS Code), so the server is listed as "relative command, not inspected" instead of started from a guessed
   folder, and scans warn about it: whatever sits at that path in the agent's folder would run. The command and its
   arguments are kept as the config gives them, so a path with spaces stays one word.
+- a **disabled server** (Codex `enabled = false`; Gemini CLI `excludeMCPServers` / `mcp.excluded`, or left out of an
+  allow-list) is not started and raises nothing but a token pasted into it; turning it on later is reported like a
+  new server. Other clients keep their on/off switch outside the files vswarm reads (or document none), so a
+  `"disabled": true` in their JSON is not taken on trust.
 - **prompts and resources** are read too when the server offers them (`prompts/list`, `resources/list`): they reach
   the model as text just like tool descriptions, and get the same checks and pins.
 - every tool, prompt and resource definition is **pinned** (hashed), together with the server's definition in the
