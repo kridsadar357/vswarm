@@ -398,8 +398,15 @@ async function main() {
       const { agentCommand } = await import("./sec/agent");
       const action = args.shift() ?? "status";
       const life = flag(args, "--life");
-      const opt = { confirm: has(args, "--confirm"), strict: has(args, "--strict"), global: has(args, "--global"), upstream: flag(args, "--upstream"), life: life === undefined ? undefined : Number(life), ask };
+      const upTimeout = flag(args, "--upstream-timeout");
+      // --strict is the default for protected keys since 2.7; it is still accepted, and `agent policy` takes it.
+      const opt = {
+        confirm: has(args, "--confirm"), allowWarn: has(args, "--allow-warn"), strict: has(args, "--strict"), global: has(args, "--global"), upstream: flag(args, "--upstream"),
+        upstreamTimeout: upTimeout === undefined ? undefined : Number(upTimeout), life: life === undefined ? undefined : Number(life), ask,
+      };
       if (opt.life !== undefined && !(Number.isInteger(opt.life) && opt.life > 0)) throw new Error("--life takes a whole number of seconds");
+      if (opt.upstreamTimeout !== undefined && !(Number.isInteger(opt.upstreamTimeout) && opt.upstreamTimeout > 0 && opt.upstreamTimeout <= 600)) throw new Error("--upstream-timeout takes a whole number of seconds, at most 600");
+      if (opt.allowWarn && opt.strict) throw new Error("--allow-warn and --strict say opposite things; give one");
       noMoreOptions(cmd, args);
       return agentCommand(action, args, opt);
     }

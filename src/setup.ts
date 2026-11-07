@@ -243,7 +243,7 @@ _vswarm() {
     accept) COMPREPLY=( $(compgen -W "--all --list --remove" -- "$cur") ) ;;
     gate) COMPREPLY=( $(compgen -W "ssh status remove cmd gcloud az" -- "$cur") ) ;;
     guard) COMPREPLY=( $(compgen -W "on off status" -- "$cur") ) ;;
-    agent) COMPREPLY=( $(compgen -W "on off status protect unprotect restore add log run" -- "$cur") ) ;;
+    agent) COMPREPLY=( $(compgen -W "on off status protect policy unprotect restore add log run" -- "$cur") ) ;;
   esac
 }
 complete -F _vswarm vswarm
@@ -264,7 +264,7 @@ ${lines}
     accept) _arguments '--all[accept every current finding]' '--list[show accepted]' '--remove[un-accept]:id:' ;;
     gate) _values 'action' ssh status remove cmd gcloud az ;;
     guard) _values 'action' on off status ;;
-    agent) _values 'action' on off status protect unprotect restore add log run ;;
+    agent) _values 'action' on off status protect policy unprotect restore add log run ;;
   esac
 }
 _vswarm "$@"
@@ -337,6 +337,10 @@ export async function doctor(): Promise<boolean> {
   }
   // The key that seals vswarm's own files, and where it is.
   const k = await stateKey();
+  if (k.tampered) {
+    bad("sealing key moved to a file outside vswarm", `${k.tampered} · vswarm uses ${k.store.where} · treat this machine as suspect: vswarm respond`);
+    good = false;
+  }
   if (!k.key) {
     bad("sealing key not readable", `${k.error} · ${k.store.where}`);
     good = false;

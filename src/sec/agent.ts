@@ -3,9 +3,10 @@
 // The ssh gate in ~/.ssh/config is advice to one client: `ssh -F /dev/null`, an IP address instead of the host name,
 // VS Code Remote, a GUI client, paramiko or libssh2 never read it. The agent moves the control to the key. Once
 // `vswarm agent protect ~/.ssh/prod_key` has run, that key exists only inside the agent's vault, and every signature
-// with it is decided at the moment it is asked for: the sealed recent verdict, or a fresh quiet check, exactly as
-// preflight decides (an open incident always blocks). Whatever program asks, by whatever route, gets
-// SSH_AGENT_FAILURE from a machine that does not pass, and the refusal is logged and shown.
+// with it is decided at the moment it is asked for: a sealed verdict at most 30 seconds old, or a fresh quiet check,
+// as preflight decides (an open incident always blocks), and PASS only unless the key was protected --allow-warn.
+// Whatever program asks, by whatever route, gets SSH_AGENT_FAILURE from a machine that does not pass, and the
+// refusal is logged and shown.
 //
 //   ~/.vswarm/agent/            0700, owned by you
 //     agent.sock                the agent (draft-miller-ssh-agent), 0600
@@ -28,7 +29,7 @@ import { verdictNow } from "./gate";
 import { c, line } from "./print";
 import { notify as desktopNotify } from "./schedule";
 import { keyFromWire, fingerprint, parsePublicLine, publicLine, readPrivate, Reader, signedFor, signWith, Writer, type SignedFor, type SshKey } from "./sshkey";
-import { appendAudit, blockRegex, keyStore, lockState, readAudit, recordManaged, recordManagedFile, removeBlock } from "./store";
+import { activeStore, appendAudit, blockRegex, lockState, readAudit, recordManaged, recordManagedFile, removeBlock } from "./store";
 import type { Verdict } from "./types";
 
 export const agentPaths = {
@@ -154,7 +155,7 @@ const WRAP_NAME = "agent-key";
 
 /** The key that opens protected keys, from the same store as the sealing key. Made the first time a key is protected. */
 async function wrapKey(create = false): Promise<Buffer> {
-  const s = keyStore();
+  const s = (await activeStore()).store;
   let hex = await s.get(WRAP_NAME);
   if (!hex && create) {
     const made = randomBytes(32).toString("hex");
@@ -196,7 +197,10 @@ interface VaultInside {
   wire: string;
   original: string;
   confirm: boolean;
-  strict: boolean;
+  /** Written by 2.6 and older, where false was the default; no longer read: a protected key is strict unless allowWarn. */
+  strict?: boolean;
+  /** WARN signs too (protect --allow-warn). Otherwise only PASS signs. */
+  allowWarn?: boolean;
 }
 
 const vaultFile = (fp: string) => join(agentPaths.keys(), `${createHash("sha256").update(fp).digest("hex").slice(0, 24)}.json`);
@@ -319,8 +323,18 @@ export interface Protected {
   fp: string;
   vault: string;
   backup: string;
+  /** The recovery code of the backup; empty when this run only finished an earlier one. */
   code: string;
   pubWritten: boolean;
+  /** Why the key file is still on disk: it is in the vault, but removing the file failed. Running protect again finishes. */
+  left?: string;
+  /** This run found the key already in the vault and its file still on disk, and removed the file. */
+  finished?: boolean;
+}
+
+/** Protected keys whose key file is still on disk (protect was cut short after the vault was written). */
+export function leftOnDisk(): { path: string; fp: string }[] {
+  return listVaults().filter((x) => existsSync(x.v.path)).map((x) => ({ path: x.v.path, fp: x.v.fp }));
 }
 
 /**
@@ -328,13 +342,24 @@ export interface Protected {
  * both checked by opening them again, and only then the key file overwritten and removed. Its .pub stays (or is
  * written), so ssh still knows which agent key an IdentityFile means.
  */
-export async function protect(keyfile: string, opt: { confirm?: boolean; strict?: boolean; env?: Record<string, string | undefined> } = {}): Promise<Protected> {
+export async function protect(keyfile: string, opt: { confirm?: boolean; allowWarn?: boolean; env?: Record<string, string | undefined>; shred?: (path: string) => void } = {}): Promise<Protected> {
   const path = resolve(keyfile);
+  const wipe = opt.shred ?? shred;
+  const prior = listVaults().find((x) => x.v.path === path);
+  if (prior) {
+    if (!existsSync(path)) throw new Error(`${path} is already protected · vswarm agent status`);
+    // An earlier protect wrote the vault and the backup but could not remove the file: this run finishes the job, when
+    // the file is still that key, byte for byte.
+    const inside = await openVault(prior.v);
+    if (!readFileSync(path).equals(Buffer.from(inside.original, "base64")))
+      throw new Error(`${path} is already protected, and the file there now is not that key (an earlier protect may have overwritten it, then failed to remove it); look at it, then remove it yourself`);
+    wipe(path);
+    return { fp: prior.v.fp, vault: prior.file, backup: `${path}.vswarm-backup`, code: "", pubWritten: false, finished: true };
+  }
   if (!existsSync(path)) throw new Error(`no key file at ${path}`);
   const st = lstatSync(path);
   if (!st.isFile()) throw new Error(`${path} is not a plain file${st.isSymbolicLink() ? " (a symlink: protect the file it points to)" : ""}`);
   if (path.endsWith(".pub")) throw new Error(`${path} is a public key; name the private key file`);
-  if (listVaults().some((x) => x.v.path === path)) throw new Error(`${path} is already protected · vswarm agent status`);
   const original = readFileSync(path);
   const k = await captureKey(path, opt.env);
   const fp = fingerprint(k.blob);
@@ -349,7 +374,7 @@ export async function protect(keyfile: string, opt: { confirm?: boolean; strict?
     pubWritten = true;
   }
   const wk = await wrapKey(true);
-  const inside: VaultInside = { wire: k.wire.toString("base64"), original: original.toString("base64"), confirm: !!opt.confirm, strict: !!opt.strict };
+  const inside: VaultInside = { wire: k.wire.toString("base64"), original: original.toString("base64"), confirm: !!opt.confirm, allowWarn: !!opt.allowWarn };
   const v: Vault = { v: 1, fp, type: k.type, comment: k.comment, path, pub: publicLine(k), at: Date.now(), box: seal(wk, VAULT_AAD(fp, path), Buffer.from(JSON.stringify(inside))) };
   mkdirSync(agentPaths.keys(), { recursive: true, mode: 0o700 });
   const file = vaultFile(fp);
@@ -368,15 +393,40 @@ export async function protect(keyfile: string, opt: { confirm?: boolean; strict?
     for (const f of [`${file}.tmp`, backup, ...(pubWritten ? [pubPath] : [])]) rmSync(f, { force: true });
     throw e;
   }
-  shred(path);
-  return { fp, vault: file, backup, code, pubWritten };
+  // The key is in the vault now. When its file cannot be removed the recovery code must still reach you: said, not thrown.
+  let left: string | undefined;
+  try {
+    wipe(path);
+  } catch (e: any) {
+    left = String(e?.message ?? e);
+  }
+  return { fp, vault: file, backup, code, pubWritten, left };
 }
 
 /** Puts a protected key file back where it was, byte for byte, and removes its vault and backup. */
-export async function unprotect(target: string): Promise<{ path: string; fp: string }> {
+function findVault(target: string) {
   const full = resolve(target);
   const hit = listVaults().find((x) => x.v.fp === target || x.v.path === full || x.v.path === full.replace(/\.pub$/, ""));
   if (!hit) throw new Error(`${target} is not a protected key · vswarm agent status lists them`);
+  return hit;
+}
+
+/**
+ * Whether WARN signs with a protected key (allowWarn) or refuses, as it does by default. The vault is sealed again
+ * with the new setting; a running agent reads it when the vault folder changes.
+ */
+export async function setKeyPolicy(target: string, allowWarn: boolean): Promise<{ path: string; fp: string }> {
+  const hit = findVault(target);
+  const wk = await wrapKey();
+  const { strict: _old, ...inside } = await openVault(hit.v, wk);
+  const v: Vault = { ...hit.v, box: seal(wk, VAULT_AAD(hit.v.fp, hit.v.path), Buffer.from(JSON.stringify({ ...inside, allowWarn } satisfies VaultInside))) };
+  writeFileSync(`${hit.file}.tmp`, JSON.stringify(v, null, 1) + "\n", { mode: 0o600 });
+  renameSync(`${hit.file}.tmp`, hit.file);
+  return { path: hit.v.path, fp: hit.v.fp };
+}
+
+export async function unprotect(target: string): Promise<{ path: string; fp: string }> {
+  const hit = findVault(target);
   const inside = await openVault(hit.v);
   const original = Buffer.from(inside.original, "base64");
   const path = hit.v.path;
@@ -427,6 +477,10 @@ export interface AgentOptions {
   upstream?: string;
   /** How the verdict is taken. Default: preflight's (sealed recent verdict, or a fresh quiet check; a lock blocks). */
   verdict?: () => Promise<Verdict>;
+  /** How old a sealed verdict may be and still decide a signature (default AGENT_MAX_AGE). */
+  maxAge?: number;
+  /** How long the upstream agent may take over a signature (default UPSTREAM_SIGN_TIMEOUT). */
+  upstreamSignTimeout?: number;
   ctx?: Ctx;
   offline?: boolean;
   notify?: (title: string, body: string) => Promise<void>;
@@ -464,6 +518,16 @@ function safeDir(dir: string) {
 }
 
 const CONFIRM_TIMEOUT = 30;
+/**
+ * A signature with a protected key is decided on a verdict at most this old (preflight reuses one for two minutes).
+ * Older, the agent checks afresh, quietly and offline-first as preflight does, and the next 30 seconds reuse that.
+ */
+export const AGENT_MAX_AGE = 30_000;
+/**
+ * The upstream agent may ask you before it signs (ssh-add -c, a hardware key waiting for a touch): it gets this long,
+ * not the 10 seconds other requests get. `agent on --upstream-timeout <seconds>` changes it.
+ */
+export const UPSTREAM_SIGN_TIMEOUT = 60_000;
 
 /** Asks on the desktop: a dialog on macOS, SSH_ASKPASS or zenity on Linux. No way to ask means no. */
 export async function askOnDesktop(question: string): Promise<boolean> {
@@ -519,7 +583,8 @@ export async function startAgent(opt: AgentOptions): Promise<Agent> {
     const dir = agentPaths.keys();
     let stamp = "none";
     try {
-      stamp = `${statSync(dir).mtimeMs}:${readdirSync(dir).length}`;
+      // Each vault's own time too: agent policy seals one again in place.
+      stamp = [statSync(dir).mtimeMs, ...readdirSync(dir).sort().map((f) => `${f}@${statSync(join(dir, f)).mtimeMs}`)].join(":");
     } catch {}
     if (stamp === seen) return;
     seen = stamp;
@@ -538,7 +603,8 @@ export async function startAgent(opt: AgentOptions): Promise<Agent> {
         const inside = await openVault(v, wk);
         const key = keyFromWire(Buffer.from(inside.wire, "base64"));
         if (fingerprint(key.blob) !== v.fp) throw new Error("its key does not match its fingerprint");
-        held.set(hex(key.blob), { key, fp: v.fp, vault: file, confirm: !!inside.confirm, strict: !!inside.strict });
+        // Strict unless the key was protected with --allow-warn (keys protected by 2.6 and older are strict now too).
+        held.set(hex(key.blob), { key, fp: v.fp, vault: file, confirm: !!inside.confirm, strict: inside.allowWarn !== true });
       } catch (e: any) {
         say(c.red(`vswarm agent: could not open ${file}: ${e?.message ?? e}`));
       }
@@ -555,7 +621,7 @@ export async function startAgent(opt: AgentOptions): Promise<Agent> {
   // One check at a time: ssh asking for several signatures at once waits for the same verdict.
   let inflight: Promise<Verdict> | undefined;
   const takeVerdict = () =>
-    (inflight ??= (opt.verdict ?? (() => verdictNow({ quiet: true, offline: opt.offline, ctx: opt.ctx })))().finally(() => {
+    (inflight ??= (opt.verdict ?? (() => verdictNow({ quiet: true, offline: opt.offline, ctx: opt.ctx, maxAge: opt.maxAge ?? AGENT_MAX_AGE })))().finally(() => {
       inflight = undefined;
     }));
 
@@ -568,9 +634,12 @@ export async function startAgent(opt: AgentOptions): Promise<Agent> {
     await (opt.notify ?? desktopNotify)(title, body).catch(() => {});
   };
 
+  // An old audit log with unsealed lines, set aside on the way: said once, where the agent's output goes.
+  const noted = (notice?: string) => void (notice && say(c.amber(`vswarm agent: the audit log: ${notice}`)));
+
   const refuse = async (h: Held, why: string, todo: string, what: string) => {
     say(`${c.red("vswarm agent: refused")} ${h.fp} ${c.dim(`· ${why} · ${what}`)}`);
-    await appendAudit("refuse", h.fp, `${why} · ${what}`).catch((e) => say(c.red(`vswarm agent: could not write the audit log: ${e?.message ?? e}`)));
+    await appendAudit("refuse", h.fp, `${why} · ${what}`).then(noted, (e) => say(c.red(`vswarm agent: could not write the audit log: ${e?.message ?? e}`)));
     await tell("vswarm: ssh key refused", `${h.key.comment || h.fp}: ${why}. ${todo}`);
     return FAIL;
   };
@@ -584,7 +653,7 @@ export async function startAgent(opt: AgentOptions): Promise<Agent> {
     if (!h) {
       // Not ours: your usual agent decides, as if vswarm were not here.
       if (locked || !upstream) return FAIL;
-      return (await agentCall(upstream, msg)) ?? FAIL;
+      return (await agentCall(upstream, msg, opt.upstreamSignTimeout ?? UPSTREAM_SIGN_TIMEOUT)) ?? FAIL;
     }
     const what = target(signedFor(data), conn);
     if (locked) return refuse(h, "the agent is locked (ssh-add -x)", "Unlock it: ssh-add -X", what);
@@ -603,11 +672,12 @@ export async function startAgent(opt: AgentOptions): Promise<Agent> {
     if (verdict === "warn" && h.strict) return refuse(h, "preflight warns and this key is strict", "Fix or accept the findings: vswarm preflight --fresh", what);
     if (h.confirm && !(await (opt.confirm ?? askOnDesktop)(`Allow ${h.key.comment || h.fp} to sign? ${what}`))) return refuse(h, "not confirmed", "Answer Allow in the vswarm dialog to use this key", what);
     const sig = signWith(h.key, data, flags);
-    // No signature leaves without its line in the audit log.
+    // No signature leaves without its sealed line in the audit log: a key store that does not answer means no seal,
+    // so no signature (the refusal says why; it cannot be logged either).
     try {
-      await appendAudit("sign", h.fp, `${verdict.toUpperCase()} · ${what}`);
+      noted(await appendAudit("sign", h.fp, `${verdict.toUpperCase()} · ${what}`));
     } catch (e: any) {
-      return refuse(h, `the audit log could not be written (${String(e?.message ?? e).slice(0, 120)})`, "Run: vswarm doctor", what);
+      return refuse(h, `its audit line could not be sealed and written (${String(e?.message ?? e).slice(0, 160)})`, "Unlock the login keychain or keyring, then try again; vswarm doctor shows where the key is", what);
     }
     say(`${c.green("vswarm agent: signed")} ${h.fp} ${c.dim(`· ${verdict.toUpperCase()} · ${what}`)}`);
     return new Writer().u8(MSG.SIGN_RESPONSE).str(sig).out();
@@ -662,14 +732,17 @@ export async function startAgent(opt: AgentOptions): Promise<Agent> {
         if (locked) return FAIL;
         const id = hex(Buffer.from(r.str()));
         const h = held.get(id);
-        if (!h || h.vault) return FAIL;
+        // A key vswarm does not hold is your usual agent's: ssh-add -d removes it there, as it would without vswarm.
+        if (!h) return upstream ? ((await agentCall(upstream, msg)) ?? FAIL) : FAIL;
+        if (h.vault) return FAIL;
         held.delete(id);
         return OK;
       }
       case MSG.REMOVE_ALL_IDENTITIES:
         if (locked) return FAIL;
         for (const [id, h] of held) if (!h.vault) held.delete(id);
-        return OK;
+        // ssh-add -D empties your usual agent too. Protected keys stay: only unprotect takes them out of the vault.
+        return upstream ? ((await agentCall(upstream, msg)) ?? FAIL) : OK;
       case MSG.LOCK: {
         if (locked) return FAIL;
         const salt = randomBytes(16);
@@ -854,7 +927,9 @@ export async function agentDoctor(): Promise<{ level: "ok" | "warn" | "bad" | "o
       out.push({ level: "bad", text: "protected ssh keys cannot be opened", detail: String(e?.message ?? e) });
     }
   }
+  for (const l of leftOnDisk()) out.push({ level: "warn", text: `a file is still at ${short(l.path)}, though that key is in the vault`, detail: `protect did not finish removing it · vswarm agent protect ${short(l.path)} finishes` });
   const audit = await readAudit();
+  if (audit.notice) out.push({ level: "warn", text: "the agent's audit log started again", detail: audit.notice });
   if (audit.why) out.push({ level: "bad", text: `the agent's audit log ${audit.why}`, detail: `${agentPaths.dir()} · treat this machine as suspect: vswarm respond` });
   return out;
 }
@@ -868,7 +943,7 @@ export async function agentUninstall(purge: boolean): Promise<string[]> {
   const cfg = join(homedir(), ".ssh", "config");
   const routed = existsSync(cfg) && readFileSync(cfg, "utf8").includes(AGENT_START);
   const gone = agentInstalled() || routed ? await agentOff() : [];
-  if (purge) await keyStore().remove(WRAP_NAME).catch(() => {});
+  if (purge) await (await activeStore()).store.remove(WRAP_NAME).catch(() => {});
   return gone;
 }
 
@@ -876,11 +951,22 @@ export async function agentUninstall(purge: boolean): Promise<string[]> {
 
 export interface AgentCommandOpt {
   confirm: boolean;
+  /** WARN signs with this protected key too (protect, policy). */
+  allowWarn: boolean;
+  /** policy: WARN refuses again (the default). */
   strict: boolean;
   global: boolean;
   upstream?: string;
+  /** Seconds the upstream agent may take over a signature (agent on). */
+  upstreamTimeout?: number;
   life?: number;
   ask: (q: string, o?: { secret?: boolean }) => Promise<string>;
+}
+
+interface AgentConfig {
+  upstream?: string;
+  /** Seconds; see UPSTREAM_SIGN_TIMEOUT. */
+  upstreamTimeout?: number;
 }
 
 const short = (p: string) => p.replace(homedir(), "~");
@@ -888,7 +974,8 @@ const short = (p: string) => p.replace(homedir(), "~");
 export async function agentCommand(action: string, args: string[], opt: AgentCommandOpt) {
   const sock = agentPaths.sock();
   if (action === "run") {
-    const a = await startAgent({ sock, upstream: resolveUpstream() });
+    const t = readJson<AgentConfig>(agentPaths.config())?.upstreamTimeout;
+    const a = await startAgent({ sock, upstream: resolveUpstream(), upstreamSignTimeout: Number.isInteger(t) && t! > 0 ? t! * 1000 : undefined });
     const up = resolveUpstream();
     line(`vswarm agent listening on ${a.sock} · ${a.held().length} protected key${a.held().length === 1 ? "" : "s"} · ${up ? `other keys from ${up}` : "no upstream agent"}`);
     const stop = () => {
@@ -903,10 +990,13 @@ export async function agentCommand(action: string, args: string[], opt: AgentCom
   if (action === "on") {
     const launcher = join(paths.bin(), "vswarm");
     if (!existsSync(launcher)) throw new Error("install the launcher first: vswarm install");
-    if (opt.upstream !== undefined) {
-      if (opt.upstream !== "none" && same(opt.upstream, sock)) throw new Error("--upstream names this agent itself");
+    if (opt.upstream !== undefined || opt.upstreamTimeout !== undefined) {
+      if (opt.upstream !== undefined && opt.upstream !== "none" && same(opt.upstream, sock)) throw new Error("--upstream names this agent itself");
       safeDir(agentPaths.dir());
-      writeFileSync(agentPaths.config(), JSON.stringify({ upstream: opt.upstream }, null, 1) + "\n", { mode: 0o600 });
+      const cfg: AgentConfig = { ...readJson<AgentConfig>(agentPaths.config()) };
+      if (opt.upstream !== undefined) cfg.upstream = opt.upstream;
+      if (opt.upstreamTimeout !== undefined) cfg.upstreamTimeout = opt.upstreamTimeout;
+      writeFileSync(agentPaths.config(), JSON.stringify(cfg, null, 1) + "\n", { mode: 0o600 });
     }
     safeDir(agentPaths.dir());
     await serviceOn(launcher);
@@ -944,7 +1034,16 @@ export async function agentCommand(action: string, args: string[], opt: AgentCom
     line(c.dim(`  hosts routed here by ~/.ssh/config: ${hosts ?? "none"}`));
     const vaults = listVaults();
     if (!vaults.length) line(c.dim("  no protected keys · vswarm agent protect <key file>"));
-    for (const { v } of vaults) line(`  ${c.cyan("key")} ${v.fp} ${c.dim(`${v.type} · ${v.comment} · was ${short(v.path)}`)}`);
+    let wk: Buffer | undefined;
+    try {
+      if (vaults.length) wk = await wrapKey();
+    } catch {}
+    for (const { v } of vaults) {
+      const inside = wk ? await openVault(v, wk).catch(() => undefined) : undefined;
+      const policy = inside ? `${inside.allowWarn ? "WARN signs" : "PASS only"}${inside.confirm ? " · confirm on use" : ""}` : "cannot be opened";
+      line(`  ${c.cyan("key")} ${v.fp} ${c.dim(`${v.type} · ${v.comment} · ${policy} · was ${short(v.path)}`)}`);
+      if (existsSync(v.path)) line(c.amber(`      ! a file is still at ${short(v.path)}: protect did not finish removing it · vswarm agent protect ${short(v.path)} finishes`));
+    }
     if (ids) for (const i of ids.filter((i) => !vaults.some((x) => x.v.fp === fingerprint(i.blob)))) line(`  ${c.dim("    ")} ${fingerprint(i.blob)} ${c.dim(i.comment)}`);
     return;
   }
@@ -962,20 +1061,29 @@ export async function agentCommand(action: string, args: string[], opt: AgentCom
 
   if (action === "protect") {
     const file = args[0];
-    if (!file) throw new Error("usage: vswarm agent protect <key file> [--confirm] [--strict]");
-    line(c.dim("  ssh-add reads the key; if it has a passphrase, type it at ssh's prompt"));
-    const r = await protect(file, { confirm: opt.confirm, strict: opt.strict });
+    if (!file) throw new Error("usage: vswarm agent protect <key file> [--confirm] [--allow-warn]");
     const path = resolve(file);
-    line(`${c.green("✔")} ${short(path)} is now in the vault ${c.dim(`${r.fp} · ${short(r.vault)}`)}`);
-    line(`${c.green("✔")} the key file was overwritten and removed; ${short(path)}.pub ${r.pubWritten ? "was written" : "stays"} so ssh can name it`);
+    if (!listVaults().some((x) => x.v.path === path)) line(c.dim("  ssh-add reads the key; if it has a passphrase, type it at ssh's prompt"));
+    const r = await protect(file, { confirm: opt.confirm, allowWarn: opt.allowWarn });
+    if (r.finished) return line(`${c.green("✔")} ${short(path)} was already in the vault ${c.dim(r.fp)}; the key file left behind was overwritten and removed now`);
+    line(`${c.green("✔")} ${short(path)} is now in the vault ${c.dim(`${r.fp} · ${opt.allowWarn ? "signs on PASS and WARN" : "signs on PASS only (WARN refuses; --allow-warn changes that)"}`)}`);
+    if (!r.left) line(`${c.green("✔")} the key file was overwritten and removed; ${short(path)}.pub ${r.pubWritten ? "was written" : "stays"} so ssh can name it`);
     line(`${c.green("✔")} backup ${short(r.backup)}, encrypted with this recovery code (shown once; keep it off this machine):`);
     line(`\n      ${c.bold(r.code)}\n`);
+    if (r.left) line(c.amber(`  ! the key file could not be removed (${r.left}); it is still at ${short(path)}. Run vswarm agent protect ${short(path)} again to finish`));
     line(c.dim(`  restore with it: vswarm agent restore ${short(r.backup)}   ·   put the key back normally: vswarm agent unprotect ${short(path)}`));
     const up = resolveUpstream();
     const there = up ? await listIdentities(up, 3000) : undefined;
     if (there?.some((i) => fingerprint(i.blob) === r.fp)) line(c.amber(`  ! this key is also loaded in your usual agent, where nothing checks the machine: ssh-add -d ${short(path)}.pub`));
     if (!(await listIdentities(sock, 2000))) line(c.dim("  next: vswarm agent on"));
     line(c.dim("  copies of the key elsewhere (other machines, backups, a password manager) are not covered: remove them, or rotate the key"));
+    return;
+  }
+
+  if (action === "policy") {
+    if (!args[0] || opt.allowWarn === opt.strict) throw new Error("usage: vswarm agent policy <key file | SHA256:fingerprint> --allow-warn | --strict");
+    const r = await setKeyPolicy(args[0], opt.allowWarn);
+    line(`${c.green("✔")} ${short(r.path)} ${c.dim(r.fp)} signs ${opt.allowWarn ? "on PASS and WARN" : "on PASS only; WARN refuses"}`);
     return;
   }
 
@@ -997,12 +1105,14 @@ export async function agentCommand(action: string, args: string[], opt: AgentCom
   }
 
   if (action === "log") {
-    const { entries, why } = await readAudit();
+    const { entries, why, notice } = await readAudit();
+    if (notice) line(c.amber(`  ${notice}`));
     if (why) line(c.red(`  the audit log ${why}`));
     if (!entries.length) return line("no signatures yet");
-    for (const e of entries.slice(-30)) line(`  ${c.dim(new Date(e.at).toLocaleString())}  ${e.event === "sign" ? c.green("signed ") : c.red("refused")}  ${e.incident ?? ""}  ${c.dim(e.reason ?? "")}`);
+    const word = (e: string) => (e === "sign" ? c.green("signed ") : e === "refuse" ? c.red("refused") : c.amber("restart"));
+    for (const e of entries.slice(-30)) line(`  ${c.dim(new Date(e.at).toLocaleString())}  ${word(e.event)}  ${e.incident ?? ""}  ${c.dim(e.reason ?? "")}`);
     return;
   }
 
-  throw new Error("usage: vswarm agent on [host patterns…] [--global] [--upstream path|none] | off | status | protect <key> [--confirm] [--strict] | unprotect <key> | restore <backup> | add <key> [--confirm] [--life s] | log | run");
+  throw new Error("usage: vswarm agent on [host patterns…] [--global] [--upstream path|none] [--upstream-timeout s] | off | status | protect <key> [--confirm] [--allow-warn] | policy <key> --allow-warn|--strict | unprotect <key> | restore <backup> | add <key> [--confirm] [--life s] | log | run");
 }
