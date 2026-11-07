@@ -236,7 +236,8 @@ describe("archives are read without trusting them", () => {
     writeTree(a, root);
     // The last entry of a name wins, as with tar.
     expect(readFileSync(join(root, "a.js"), "utf8")).toBe("2");
-    expect(statSync(join(root, "bin/run")).mode & 0o100).toBe(0o100);
+    // Windows keeps no execute bit.
+    if (process.platform !== "win32") expect(statSync(join(root, "bin/run")).mode & 0o100).toBe(0o100);
     expect(existsSync(join(root, "l"))).toBe(false);
   });
 
