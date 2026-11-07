@@ -42,6 +42,7 @@ vswarm baseline                      # บนเครื่องที่ไ�
 vswarm diff                          # ทีหลัง: อะไรเปลี่ยนไปจาก baseline
 vswarm secrets                       # credential อายุยาวในเครื่อง (ไม่แสดงค่า)
 vswarm gate ssh "prod-*"             # ssh เข้า prod-* ได้เฉพาะตอนเครื่องผ่าน
+vswarm agent protect ~/.ssh/prod_key && vswarm agent on   # ย้ายกุญแจเข้า ssh agent ที่เซ็นให้เฉพาะตอนเครื่องผ่าน อ้อม config ก็ใช้กุญแจไม่ได้
 vswarm respond                       # เจอของผิดปกติ: ล็อก เก็บหลักฐาน เปลี่ยน credential กักกัน รายงาน
 vswarm selftest                      # ฝังภัยจำลองใน home ปลอม แล้ววัดว่าจับได้กี่ข้อ
 vswarm try ./assignment -- npm install   # รันโค้ดที่ไม่ไว้ใจใน sandbox แล้วรายงานว่ามันพยายามทำอะไร

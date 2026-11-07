@@ -70,6 +70,14 @@ Because the certificate expires in minutes, an attacker who skips vswarm on the 
 steals an old certificate gets one that no longer works. `vswarm cert` is the local version of this (the CA key on the
 laptop, guarded by its passphrase); moving the CA off the laptop is what makes it enforceable.
 
+`vswarm agent` sits beside this on the laptop and answers a different question. The agent decides each signature
+(no signature from a blocked machine, whatever client asks, and no key file left to copy), but it is still code on
+the laptop: malware running as you can ask it to sign while the machine passes. Certificates decide what the server
+accepts: a key or certificate taken off the laptop stops working within minutes. Use the agent so the key cannot be
+used around the gate, and a CA (ideally off the laptop, wanting a fresh signed report) so that a copy is worthless
+wherever it ends up. Note that the agent does not hold certificates; with `vswarm cert`, the session key is already
+short-lived, and the CA key is the one to keep on a hardware key.
+
 ## Pattern 2: a bastion that checks before it forwards
 
 If production is reached through a jump host, the jump host can ask for the report as part of the login, for example

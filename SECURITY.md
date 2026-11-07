@@ -70,6 +70,13 @@ What it does:
   seal still blocks, and an append-only incident log with chained seals keeps an incident open even when the lock
   file is deleted. This catches naive tampering and generic "set verdict to pass" tricks. It does **not** stop
   malware that reads the key the way vswarm does: any program running as you can.
+- **Moves the ssh check onto the key** with `vswarm agent`. A protected key exists only in the agent's vault
+  (encrypted, its wrapping key in the same store as the sealing key), and the agent signs only while the machine
+  passes, whatever client or route asks: `ssh -F /dev/null`, an IP address, a GUI client, paramiko, or a deleted
+  config block get no signature from a blocked machine, and a copy of `~/.ssh` no longer holds the key. It does
+  **not** stop malware running as you from asking the agent to sign while the machine passes, reading the agent's
+  memory, or reading the wrapping key the way vswarm does. Hardware keys (`-sk`) and short-lived certificates are
+  stronger, and combine with it.
 - **Is not the enforcement point** for production. The decision that cannot be bypassed from the laptop belongs on
   the server: short-lived certificates, a bastion or SSH CA that asks for a fresh signed report, device trust in your
   identity provider. See [docs/server-side.md](docs/server-side.md).
@@ -78,6 +85,8 @@ What it does:
 
 - Ways to make `vswarm preflight` pass on a machine that should be blocked (bypasses of a rule or of the lock), short
   of reading the sealing key the way vswarm itself does.
+- Ways to get a signature from `vswarm agent` with a protected key while the machine is blocked or locked, or to
+  read a protected key from its vault or backup, short of reading the wrapping key or the agent's memory.
 - Ways to make `vswarm update` or the installer accept a release that is not signed by a pinned key, or an older one.
 - Ways to make vswarm run code, change files, or send data it should not (it should only send package names and
   versions to api.osv.dev).

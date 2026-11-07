@@ -262,7 +262,86 @@ When the machine does not pass, ssh does not even connect:
 
 ![ssh blocked](img/ssh-blocked.png)
 
-Patterns match the name you type (`ssh prod-wallet-01`). If you also ssh by IP address, list the address too.
+Patterns match the name you type (`ssh prod-wallet-01`). If you also ssh by IP address, list the address too. The
+gate is advice to ssh, not a lock: to close the ways around it, keep the key in `vswarm agent` (next).
+
+### vswarm agent
+
+The gate above is a line in `~/.ssh/config`. Only OpenSSH reads it, and only when you type a matching name:
+`ssh -F /dev/null`, an IP address, VS Code Remote with its own config, a GUI client, paramiko or libssh2 go around
+it, and so does deleting the block. `vswarm agent` moves the check from the config to the **key**. It is an SSH agent,
+speaking the same protocol as `ssh-agent`, that holds your production keys and signs with them only while this
+machine passes.
+
+```bash
+vswarm agent protect ~/.ssh/prod_key   # into the vault; the key file is overwritten and removed, its .pub stays
+vswarm agent on                        # starts at login; the gated hosts get IdentityAgent in ~/.ssh/config
+ssh prod-wallet-01                     # signed while preflight passes, refused (and logged) while it blocks
+vswarm agent status                    # vswarm agent log: every signature and refusal
+```
+
+**When it signs.** On every signature request for a key it holds, the agent takes the same verdict preflight does:
+the sealed verdict from the last two minutes, or a fresh quiet check (a forged `last.json` is never reused), and an
+open incident always blocks. BLOCK is refused. WARN signs, unless the key was protected with `--strict`. A key
+protected with `--confirm` (or added with `--confirm`) asks in a dialog every time, and no answer within 30 seconds
+is a no.
+
+**When it refuses**, ssh gets `SSH_AGENT_FAILURE` and stops cleanly (`agent refused operation`), and a desktop
+notification says why and what to do (`vswarm preflight --fresh`, or `vswarm unlock` after an incident). Every
+signature and every refusal goes into `~/.vswarm/sec/audit.log`, sealed and chained like the incident log, with the
+time, the key fingerprint and what it was for: the account and algorithm of an ssh login, the server's host key when
+the client says, or the namespace of `ssh-keygen -Y sign` (git commit signing).
+
+**Getting keys in.**
+- `vswarm agent protect <key> [--confirm] [--strict]`: ssh-add reads the key (a passphrase is typed at ssh's own
+  prompt, never into vswarm). vswarm encrypts it (AES-256-GCM, the wrapping key in the same store as the sealing key:
+  Keychain, Secret Service, or an owner-only file), writes `<key>.vswarm-backup` encrypted with a recovery code it
+  prints **once**, opens both again to check them, and only then overwrites and removes the key file. The `.pub`
+  stays, so `IdentityFile ~/.ssh/prod_key` still picks the right key from the agent. Write the recovery code down
+  somewhere off this machine.
+- `vswarm agent unprotect <key>` puts the file back byte for byte (with its passphrase, if it had one) and removes the
+  vault entry and the backup.
+- `vswarm agent restore <key>.vswarm-backup` asks for the recovery code and writes the original file back, for when
+  the vault or the Keychain item is lost.
+- `vswarm agent add <key> [--confirm] [--life seconds]` holds a key in memory only, until the agent restarts. It is
+  checked the same way, but the file stays on disk.
+
+**How ssh reaches it.** Three ways, and what `agent on` does by default:
+
+| Way | What it is | Why |
+| --- | --- | --- |
+| `IdentityAgent` per host (default) | `agent on` writes a `Match originalhost …` block with `IdentityAgent` at the top of `~/.ssh/config` for the hosts of your ssh gate, or the patterns you name (`agent on "prod-*"`) | least surprising: your `SSH_AUTH_SOCK`, git and every other ssh are untouched |
+| one socket for everything | `agent on --global` prints the `export SSH_AUTH_SOCK=…` line for your shell's rc file | GUI clients, paramiko and libssh2 read only `SSH_AUTH_SOCK` |
+| upstream | keys the agent does not hold are passed to your usual agent untouched: the `SSH_AUTH_SOCK` the service starts with, or `agent on --upstream <path>` (`none` for no upstream) | always on; it is what keeps git and other keys working through the one socket |
+
+The config block is a convenience, not the control. A client that goes around it reaches your usual agent, which no
+longer has the production key, so the login fails; a client that reaches vswarm agent gets a signature only while
+the machine passes. If the production key is also loaded in your usual agent, `protect` says so: remove it there
+(`ssh-add -d ~/.ssh/prod_key.pub`).
+
+The agent runs as a LaunchAgent (`~/Library/LaunchAgents/dev.vswarm.agent.plist`) on macOS and a systemd user service
+(`vswarm-agent.service`) on Linux, on `~/.vswarm/agent/agent.sock` in a folder only you can enter (checked when it
+starts). `vswarm agent off` removes the service and the config block; protected keys stay in the vault and cannot sign
+until you turn it on again or unprotect them. `vswarm doctor` reports it, `vswarm uninstall` turns it off, and
+`uninstall --purge` refuses while keys are protected. Not on Windows yet: OpenSSH uses a named pipe there
+(`\\.\pipe\openssh-ssh-agent`), and vswarm does not rely on Bun's named-pipe servers yet; use it inside WSL.
+
+**What it closes, and what it does not.**
+- Closed: going around the config (any client, any route, the block deleted), and key files copied off the disk
+  (backup and sync tools, a stealer that zips `~/.ssh`, an accidental commit): the file is gone, and the vault opens
+  only with the wrapping key.
+- Not closed: a program running as you can ask the agent to sign while the machine passes, exactly as with
+  `ssh-agent`, and it could read the agent's memory, or read the wrapping key from the Keychain the way vswarm does
+  and open the vault. On Linux without a Secret Service the wrapping key is a file under `~/.config/vswarm`. The agent
+  cannot ask the OS which user connected (Bun does not expose the socket's descriptor), so the 0700 folder is what
+  keeps other users out; root can always get in. Overwriting a file on an SSD or APFS does not guarantee the old
+  blocks are gone, and copies of the key elsewhere (other machines, backups, a password manager) are not covered:
+  rotate the key if you are not sure where it has been.
+- Stronger, and they combine: a **hardware key** (`ssh-keygen -t ed25519-sk`) never lets the private key onto the
+  computer and needs a touch for each login, so malware can neither copy it nor use it quietly (vswarm agent does not
+  hold `-sk` keys; keep them where they are). **Short-lived certificates** ([§7](#7-short-lived-ssh-certificates-ca-and-cert))
+  make a copied key worthless on the server's side within minutes. The agent gates every signature; certificates and
+  a CA that wants a signed report ([server-side.md](server-side.md)) gate what the server accepts.
 
 ### AWS and Kubernetes
 
@@ -548,6 +627,8 @@ Maintainers: the release steps are in [SECURITY.md](../SECURITY.md#for-the-maint
 | `vswarm gate ssh <pattern…> [--cert]` · `gate status` · `gate remove` | the gate in `~/.ssh/config` |
 | `vswarm ca init [--sk] [--principal a,b] [--ttl 15m]` · `ca server <account>` · `ca status` | CA for SSH certificates |
 | `vswarm cert [--host h]` | a short-lived certificate, only when preflight passes |
+| `vswarm agent protect <key> [--confirm] [--strict]` · `unprotect <key>` · `restore <backup>` | move an ssh key into the agent's vault, and back |
+| `vswarm agent on [hosts…] [--global] [--upstream path\|none]` · `off` · `status` · `log` · `add <key>` · `run` | the ssh agent that signs only while the machine passes |
 | `vswarm guard on [--ignore-scripts] [--sandbox] [--strict]` · `off` · `status` | the install guard in your shell |
 | `vswarm pkg <tool> [--] <args…>` | check an install command; exit 3 when it should stop |
 | `vswarm try <target> [--net none\|registries\|all] [--localhost] [--yes] [-- cmd…]` · `--list` · `--clean [id]` | run code in a sandbox |
@@ -580,10 +661,13 @@ Everything lives in `~/.vswarm`, readable by you only:
 | `sec/osv-cache.json`, `sec/managed.json`, `sec/canaries.json` | OSV answers, vswarm's own blocks, planted canaries |
 | `try/<id>/` | copies, fake homes and reports of `try` |
 | `ca/` | the CA and certificates |
+| `agent/agent.sock`, `agent/keys/` | the ssh agent's socket and its vault of protected keys |
+| `sec/audit.log` | every signature and refusal of `vswarm agent`, sealed and chained |
 | `trust/allowed_signers` | pinned release keys |
 
 Environment: `VSWARM_HOME` (moves `~/.vswarm`), `VSWARM_GUARD=off`, `VSWARM_SEC_DIR`, `VSWARM_TRY_DIR`,
-`VSWARM_CA_DIR`, `VSWARM_TRUST_FILE`, `NO_COLOR`, `FORCE_COLOR`; for the installer `VSWARM_REPO`, `VSWARM_REF`.
+`VSWARM_CA_DIR`, `VSWARM_AGENT_DIR`, `VSWARM_AGENT_UPSTREAM`, `VSWARM_TRUST_FILE`, `NO_COLOR`, `FORCE_COLOR`; for the
+installer `VSWARM_REPO`, `VSWARM_REF`.
 
 **What leaves the machine:**
 - package names and versions to `api.osv.dev` for the known-malicious check (cached a day; `--offline` skips it;
@@ -609,6 +693,8 @@ vswarm runs as you, on the machine it checks. Be clear about what that means:
   incident open when the lock file is deleted.
 - **What that does not stop:** a program running as you can read the key the same way vswarm does. The seals catch
   hand-edited files and generic "set the verdict to pass" tricks, not malware written against vswarm.
+- **Keys kept by `vswarm agent`** cannot be used by going around the ssh config, and are no longer a file to copy;
+  a program running as you can still ask the agent to sign while the machine passes ([vswarm agent](#vswarm-agent)).
 - **Where it is strong:** catching what such malware leaves behind (login jobs, shell lines, packages, MCP servers,
   binaries, connections) before you reach production, and pausing the moments that let it in.
 - **Where the hard decision belongs:** on a server the laptop cannot change: an SSH CA or bastion that asks for a

@@ -58,6 +58,7 @@ vswarm selftest             # plant fake threats in a sandbox home, measure dete
 
 ```bash
 vswarm gate ssh "prod-*" "*.wallet.internal"     # adds a Match block to ~/.ssh/config (backup kept)
+vswarm agent protect ~/.ssh/prod_key && vswarm agent on   # the key moves into an ssh agent that signs only while the machine passes
 ```
 
 ```ini
@@ -76,6 +77,9 @@ users:
       command: vswarm
       args: [preflight, --quiet, --then, kubelogin, get-token, --server-id, "<id>"]
 ```
+
+The config gate is advice to OpenSSH; `vswarm agent` puts the check on the key itself, so `ssh -F /dev/null`, an IP
+address or another client gets no signature from a machine that does not pass ([guide](docs/guide.md#vswarm-agent)).
 
 `vswarm preflight` exits **0** on PASS and WARN, **3** on BLOCK (and **2** on WARN with `--strict`). A verdict is
 reused for two minutes, so gating every `kubectl` call costs about 20 ms. A fresh check takes about 0.2 s.

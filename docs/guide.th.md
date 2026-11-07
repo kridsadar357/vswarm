@@ -239,7 +239,45 @@ vswarm gate ssh "prod-*" "*.wallet.internal" 10.20.0.11
 
 ![ssh ถูกหยุด](img/ssh-blocked.png)
 
-pattern เทียบกับชื่อที่คุณพิมพ์ (`ssh prod-wallet-01`) ถ้าคุณ ssh ด้วย IP ด้วย ให้ใส่ IP ไว้ในรายการด้วย
+pattern เทียบกับชื่อที่คุณพิมพ์ (`ssh prod-wallet-01`) ถ้าคุณ ssh ด้วย IP ด้วย ให้ใส่ IP ไว้ในรายการด้วย ด่านนี้เป็นแค่คำแนะนำให้ ssh ไม่ใช่กุญแจล็อก ถ้าจะปิดทางอ้อมให้หมด ให้เก็บกุญแจไว้ใน `vswarm agent` (หัวข้อถัดไป)
+
+### vswarm agent
+
+ด่านข้างบนเป็นแค่บรรทัดหนึ่งใน `~/.ssh/config` มีแต่ OpenSSH ที่อ่าน และอ่านเฉพาะตอนเราพิมพ์ชื่อที่ตรง pattern เท่านั้น ถ้าใช้ `ssh -F /dev/null` ต่อด้วย IP ใช้ VS Code Remote ที่มี config ของมันเอง ใช้โปรแกรม ssh แบบ GUI หรือไลบรารีอย่าง paramiko และ libssh2 ก็อ้อมด่านนี้ได้หมด ลบบล็อกทิ้งก็จบเหมือนกัน `vswarm agent` จึงย้ายการตรวจจาก config ไปไว้ที่ **กุญแจ** มันคือ SSH agent ที่พูดโปรโตคอลเดียวกับ `ssh-agent` เก็บกุญแจ production ไว้ และจะเซ็นให้ก็ต่อเมื่อเครื่องนี้ผ่านการตรวจเท่านั้น
+
+```bash
+vswarm agent protect ~/.ssh/prod_key   # ย้ายกุญแจเข้าตู้เซฟ ไฟล์เดิมถูกเขียนทับแล้วลบ เหลือไว้แค่ .pub
+vswarm agent on                        # เริ่มเองทุกครั้งที่ login และใส่ IdentityAgent ให้ host ที่มีด่านใน ~/.ssh/config
+ssh prod-wallet-01                     # เซ็นให้ตอน preflight ผ่าน ปฏิเสธ (และจดบันทึก) ตอน BLOCK
+vswarm agent status                    # vswarm agent log: ดูทุกครั้งที่เซ็นและที่ปฏิเสธ
+```
+
+**เมื่อไหร่ถึงเซ็น** ทุกครั้งที่มีคำขอให้เซ็นด้วยกุญแจที่ agent ถืออยู่ มันจะใช้ผลตัดสินแบบเดียวกับ preflight คือผลที่ประทับตราไว้ไม่เกินสองนาที หรือตรวจใหม่แบบเงียบ (`last.json` ที่ปลอมขึ้นมาจะไม่ถูกใช้) และถ้ามีเหตุการณ์ที่ยังเปิดอยู่ก็ BLOCK เสมอ ผล BLOCK จะถูกปฏิเสธ ผล WARN ยังเซ็นให้ เว้นแต่ตอน protect กุญแจจะใส่ `--strict` ไว้ ส่วนกุญแจที่ใส่ `--confirm` จะเด้งหน้าต่างถามทุกครั้ง ถ้าไม่ตอบภายใน 30 วินาทีถือว่าไม่อนุญาต
+
+**เมื่อปฏิเสธ** ssh จะได้ `SSH_AGENT_FAILURE` แล้วหยุดอย่างเรียบร้อย (`agent refused operation`) พร้อมแจ้งเตือนบนหน้าจอว่าทำไมและต้องทำอะไรต่อ (`vswarm preflight --fresh` หรือ `vswarm unlock` หลังจัดการเหตุการณ์เสร็จ) ทุกครั้งที่เซ็นและทุกครั้งที่ปฏิเสธจะถูกจดไว้ใน `~/.vswarm/sec/audit.log` ซึ่งประทับตราต่อกันเป็นสายเหมือนบันทึกเหตุการณ์ มีเวลา ลายนิ้วมือของกุญแจ และเซ็นไปเพื่ออะไร เช่น login ssh เป็น account ไหนด้วย algorithm อะไร host key ของ server (ถ้า client บอกมา) หรือ namespace ของ `ssh-keygen -Y sign` (การเซ็น commit ของ git)
+
+**เอากุญแจเข้า agent**
+- `vswarm agent protect <กุญแจ> [--confirm] [--strict]`: ให้ ssh-add เป็นคนอ่านกุญแจ (ถ้ามี passphrase ก็พิมพ์ที่ช่องถามของ ssh เอง ไม่ได้พิมพ์ให้ vswarm) แล้ว vswarm เข้ารหัสด้วย AES-256-GCM โดยกุญแจห่อเก็บไว้ที่เดียวกับกุญแจประทับตรา (Keychain, Secret Service หรือไฟล์ที่เจ้าของอ่านได้คนเดียว) เขียนสำรองไว้ที่ `<กุญแจ>.vswarm-backup` ซึ่งเข้ารหัสด้วยรหัสกู้คืนที่แสดงให้เห็น **ครั้งเดียว** เปิดทั้งสองอย่างดูอีกรอบว่าใช้ได้จริง แล้วค่อยเขียนทับและลบไฟล์กุญแจ ไฟล์ `.pub` ยังอยู่ `IdentityFile ~/.ssh/prod_key` จึงยังเลือกกุญแจถูกตัวจาก agent ได้ รหัสกู้คืนให้จดเก็บไว้นอกเครื่องนี้
+- `vswarm agent unprotect <กุญแจ>` เอาไฟล์กลับมาที่เดิมแบบตรงทุกไบต์ (passphrase เดิมก็ยังอยู่) แล้วลบของในตู้เซฟและไฟล์สำรอง
+- `vswarm agent restore <กุญแจ>.vswarm-backup` ถามรหัสกู้คืนแล้วเขียนไฟล์เดิมกลับ ใช้ตอนตู้เซฟหรือรายการใน Keychain หายไป
+- `vswarm agent add <กุญแจ> [--confirm] [--life วินาที]` ถือกุญแจไว้ในหน่วยความจำอย่างเดียวจนกว่า agent จะรีสตาร์ท ตรวจแบบเดียวกัน แต่ไฟล์ยังอยู่บนดิสก์
+
+**ssh จะมาถึง agent ได้อย่างไร** มีสามทาง และค่าเริ่มต้นของ `agent on` คือ:
+
+| ทาง | คืออะไร | เพราะอะไร |
+| --- | --- | --- |
+| `IdentityAgent` ราย host (ค่าเริ่มต้น) | `agent on` เขียนบล็อก `Match originalhost …` พร้อม `IdentityAgent` ไว้บนสุดของ `~/.ssh/config` ให้ host ที่มีด่าน ssh อยู่แล้ว หรือ pattern ที่เราระบุ (`agent on "prod-*"`) | ไม่ทำให้ใครแปลกใจ: `SSH_AUTH_SOCK` ของเรา git และ ssh อื่นๆ เหมือนเดิมทุกอย่าง |
+| socket เดียวสำหรับทุกอย่าง | `agent on --global` พิมพ์บรรทัด `export SSH_AUTH_SOCK=…` ให้ไปใส่ในไฟล์ rc ของ shell | โปรแกรม GUI, paramiko และ libssh2 อ่านแค่ `SSH_AUTH_SOCK` |
+| ส่งต่อ (upstream) | กุญแจที่ agent ไม่ได้ถือ จะถูกส่งต่อไปให้ agent ตัวเดิมของเราโดยไม่แตะอะไร คือ `SSH_AUTH_SOCK` ที่ service ได้มาตอนเริ่ม หรือ `agent on --upstream <path>` (`none` ถ้าไม่ต้องการ) | เปิดอยู่เสมอ ทำให้ git และกุญแจอื่นยังใช้ได้ผ่าน socket เดียวกัน |
+
+บล็อกใน config เป็นแค่ความสะดวก ไม่ใช่ตัวกัน client ที่อ้อมบล็อกนี้ไปจะไปเจอ agent ตัวเดิมของเรา ซึ่งไม่มีกุญแจ production แล้ว จึง login ไม่ได้ ส่วน client ที่มาถึง vswarm agent จะได้ลายเซ็นเฉพาะตอนเครื่องผ่าน ถ้ากุญแจ production ยังโหลดค้างอยู่ใน agent ตัวเดิม `protect` จะบอก ให้เอาออกจากตรงนั้นด้วย (`ssh-add -d ~/.ssh/prod_key.pub`)
+
+บน macOS agent รันเป็น LaunchAgent (`~/Library/LaunchAgents/dev.vswarm.agent.plist`) บน Linux เป็น systemd user service (`vswarm-agent.service`) ฟังอยู่ที่ `~/.vswarm/agent/agent.sock` ในโฟลเดอร์ที่เราเข้าได้คนเดียว (เช็คทุกครั้งที่เริ่ม) `vswarm agent off` เอา service และบล็อกใน config ออก กุญแจที่ protect ไว้ยังอยู่ในตู้เซฟ แต่เซ็นไม่ได้จนกว่าจะเปิดใหม่หรือ unprotect `vswarm doctor` รายงานสถานะของมัน `vswarm uninstall` ปิดให้ และ `uninstall --purge` จะไม่ยอมทำถ้ายังมีกุญแจในตู้เซฟ ยังไม่มีบน Windows: ที่นั่น OpenSSH ใช้ named pipe (`\\.\pipe\openssh-ssh-agent`) และ vswarm ยังไม่ฝากงานนี้ไว้กับ named-pipe server ของ Bun ให้ใช้ใน WSL แทน
+
+**ปิดอะไรได้ และอะไรยังปิดไม่ได้**
+- ปิดได้: การอ้อม config (client ไหน ทางไหน หรือลบบล็อกทิ้ง ก็ใช้กุญแจไม่ได้) และการก๊อปไฟล์กุญแจออกจากดิสก์ (โปรแกรม backup หรือ sync, stealer ที่ zip `~/.ssh` ไปทั้งโฟลเดอร์, commit พลาด) เพราะไฟล์หายไปแล้ว และตู้เซฟเปิดได้ด้วยกุญแจห่อเท่านั้น
+- ยังปิดไม่ได้: โปรแกรมที่รันในนามเราขอให้ agent เซ็นได้ตอนเครื่องผ่าน เหมือนกับ `ssh-agent` ทุกประการ และอาจอ่านหน่วยความจำของ agent หรือขอกุญแจห่อจาก Keychain แบบเดียวกับที่ vswarm ขอ แล้วเปิดตู้เซฟเองก็ได้ บน Linux ที่ไม่มี Secret Service กุญแจห่อเป็นไฟล์ใน `~/.config/vswarm` นอกจากนี้ agent ถาม OS ไม่ได้ว่าใครเป็นคนต่อเข้ามา (Bun ไม่เปิด file descriptor ของ socket ให้) ที่กันผู้ใช้อื่นไว้คือโฟลเดอร์ 0700 ส่วน root เข้าได้เสมอ การเขียนทับไฟล์บน SSD หรือ APFS ไม่รับประกันว่าข้อมูลเก่าหายจริง และสำเนากุญแจที่อยู่ที่อื่น (เครื่องอื่น ไฟล์ backup ตัวจัดการรหัสผ่าน) ไม่ได้ถูกคุ้มครอง ถ้าไม่แน่ใจว่ากุญแจเคยไปอยู่ที่ไหนมาบ้าง ให้เปลี่ยนกุญแจใหม่
+- ทางที่แข็งแรงกว่า และใช้ร่วมกันได้: **กุญแจฮาร์ดแวร์** (`ssh-keygen -t ed25519-sk`) ไม่เคยให้ private key เข้ามาอยู่ในคอมพิวเตอร์ และต้องแตะทุกครั้งที่ login malware จึงก๊อปไปไม่ได้และแอบใช้เงียบๆ ไม่ได้ (vswarm agent ไม่ถือกุญแจ `-sk` ให้ใช้ตามเดิม) **ใบรับรองอายุสั้น** ([§7](#7-ใบรับรอง-ssh-อายุสั้น-ca-และ-cert)) ทำให้กุญแจที่ถูกก๊อปไปไร้ค่าที่ฝั่ง server ภายในไม่กี่นาที agent คุมทุกลายเซ็น ส่วนใบรับรองและ CA ที่ขอรายงานที่เซ็นแล้ว ([server-side.md](server-side.md)) คุมว่า server จะยอมรับอะไร
 
 ### ใช้กับ AWS และ Kubernetes
 
@@ -475,6 +513,8 @@ vswarm trust           # fingerprint ของกุญแจที่เคร�
 | `vswarm gate ssh <pattern…> [--cert]` · `gate status` · `gate remove` | ด่านใน `~/.ssh/config` |
 | `vswarm ca init [--sk] [--principal a,b] [--ttl 15m]` · `ca server <account>` · `ca status` | CA สำหรับใบรับรอง ssh |
 | `vswarm cert [--host h]` | ขอใบรับรองอายุสั้น (เฉพาะตอนผ่าน) |
+| `vswarm agent protect <กุญแจ> [--confirm] [--strict]` · `unprotect <กุญแจ>` · `restore <ไฟล์สำรอง>` | ย้ายกุญแจ ssh เข้าตู้เซฟของ agent และเอากลับ |
+| `vswarm agent on [host…] [--global] [--upstream path\|none]` · `off` · `status` · `log` · `add <กุญแจ>` · `run` | ssh agent ที่เซ็นให้เฉพาะตอนเครื่องผ่าน |
 | `vswarm guard on [--ignore-scripts] [--sandbox] [--strict]` · `off` · `status` | ด่านตรวจ package ใน shell |
 | `vswarm pkg <tool> [--] <args…>` | ตรวจคำสั่งติดตั้งเอง exit 3 เมื่อควรหยุด |
 | `vswarm try <target> [--net none\|registries\|all] [--localhost] [--yes] [-- cmd…]` · `--list` · `--clean [id]` | รันโค้ดใน sandbox |
@@ -507,9 +547,11 @@ vswarm trust           # fingerprint ของกุญแจที่เคร�
 | `sec/osv-cache.json`, `sec/managed.json`, `sec/canaries.json` | cache ของ OSV, บล็อกที่ vswarm เขียน, canary ที่วางไว้ |
 | `try/<id>/` | สำเนาโค้ด, home ปลอม, รายงานของ `try` |
 | `ca/` | CA และใบรับรอง |
+| `agent/agent.sock`, `agent/keys/` | socket ของ ssh agent และตู้เซฟเก็บกุญแจที่ protect ไว้ |
+| `sec/audit.log` | ทุกครั้งที่ `vswarm agent` เซ็นหรือปฏิเสธ ประทับตราต่อกันเป็นสาย |
 | `trust/allowed_signers` | กุญแจ release ที่ยอมรับ |
 
-ตัวแปร environment: `VSWARM_HOME` (ย้าย `~/.vswarm`), `VSWARM_GUARD=off`, `VSWARM_SEC_DIR`, `VSWARM_TRY_DIR`, `VSWARM_CA_DIR`, `VSWARM_TRUST_FILE`, `NO_COLOR`, `FORCE_COLOR` · ตอนติดตั้ง: `VSWARM_REPO`, `VSWARM_REF`
+ตัวแปร environment: `VSWARM_HOME` (ย้าย `~/.vswarm`), `VSWARM_GUARD=off`, `VSWARM_SEC_DIR`, `VSWARM_TRY_DIR`, `VSWARM_CA_DIR`, `VSWARM_AGENT_DIR`, `VSWARM_AGENT_UPSTREAM`, `VSWARM_TRUST_FILE`, `NO_COLOR`, `FORCE_COLOR` · ตอนติดตั้ง: `VSWARM_REPO`, `VSWARM_REF`
 
 **ข้อมูลที่ออกจากเครื่อง:**
 - ชื่อและเวอร์ชันของ package ไปที่ `api.osv.dev` เพื่อเช็คกับรายการ package อันตราย (cache 1 วัน, `--offline` เพื่อปิด ส่วน `preflight --quiet` จะถามเฉพาะเวอร์ชันที่ยังไม่เคยถาม)
@@ -525,6 +567,7 @@ vswarm รันด้วยสิทธิ์ของเรา บนเคร
 - **ถ้า malware รันในนามของเราอยู่แล้ว มันปิด vswarm ได้** จะลบด่าน ssh ออกจาก `~/.ssh/config` หยุด watch แก้ไฟล์ใน `~/.vswarm` หรือสั่ง `vswarm unlock --force` เองก็ได้ ไม่มีโปรแกรมไหนที่รันด้วยสิทธิ์เดียวกับเราห้ามเรื่องนี้ได้
 - **สิ่งที่ vswarm ทำเพื่อลดความเสี่ยงนี้:** มันประทับตราไฟล์ของตัวเอง `last.json`, `lock`, `baseline.json` และ `accepted.json` มี HMAC กำกับ โดยกุญแจเก็บไว้นอก `~/.vswarm`: บน macOS อยู่ใน login Keychain บน Linux ที่มีหน้าจอเดสก์ท็อปอยู่ใน Secret Service (`secret-tool`) บน Windows ใช้ DPAPI ถ้าไม่มีที่ไหนตอบเลยจะเก็บเป็นไฟล์ที่เจ้าของอ่านได้คนเดียวใน `~/.config/vswarm` และ `vswarm doctor` จะเตือน ผลตรวจที่ตราไม่ตรงจะไม่ถูกใช้ซ้ำ lock ที่ตราไม่ตรงยังกันอยู่ baseline ที่ถูกแก้จะถูกพักไว้และ BLOCK รายการ accept ที่ถูกแก้จะไม่มีผล และบันทึกเหตุการณ์จะยังถือว่าเหตุการณ์เปิดอยู่แม้ไฟล์ lock จะหายไป
 - **สิ่งที่ตรานี้กันไม่ได้:** โปรแกรมที่รันในนามเราขอกุญแจจาก Keychain ได้แบบเดียวกับที่ vswarm ขอ ตรานี้จับได้แค่การแก้ไฟล์ด้วยมือ หรือลูกเล่นง่ายๆ อย่างเปลี่ยนผลเป็น "pass" ไม่ใช่ malware ที่เขียนมาเพื่อหลบ vswarm โดยเฉพาะ
+- **กุญแจที่เก็บไว้ใน `vswarm agent`** ใช้ด้วยการอ้อม config ssh ไม่ได้ และไม่เหลือเป็นไฟล์ให้ก๊อปแล้ว แต่โปรแกรมที่รันในนามเรายังขอให้ agent เซ็นได้ตอนเครื่องผ่าน ([vswarm agent](#vswarm-agent))
 - **จุดที่ vswarm เก่ง:** จับร่องรอยที่ malware แบบนั้นทิ้งไว้ (login job, บรรทัดใน shell, package, MCP server, โปรแกรม, การเชื่อมต่อ) ก่อนเราจะเข้า production และหยุดให้คิดในจังหวะที่มันจะเข้ามาได้
 - **การตัดสินใจที่ปิดตายจริงควรอยู่ที่ไหน:** ที่ server ที่โน้ตบุ๊กแก้ไม่ได้ เช่น SSH CA หรือ bastion ที่ขอรายงานที่เซ็นและยังสดอยู่ หรือ device trust ของระบบ login องค์กร ดู[server-side.md](server-side.md)
 
