@@ -627,7 +627,7 @@ describe("windows: a program kept in a hidden folder of its own in the home", ()
     { kind: "launch", id: "reg:HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run\\Updater", name: "Updater", source: "user", hash: "d",
       meta: { what: "HKCU Run value", program: "C:\\Users\\nok\\AppData\\Local\\Temp\\u.exe" } },
   ] as any[];
-  const s: Scan = { version: 1, host: "pc", user: "nok", home: HOME, at: Date.now(), items, texts: {}, gaps: [], covers: COVERS };
+  const s: Scan = { version: 1, host: "pc", user: "nok", home: HOME, at: Date.now(), items, texts: {}, gaps: {}, covers: COVERS };
 
   test("warns instead of blocking, and the running program folds into the entry that starts it", async () => {
     const fs = await run(s);
