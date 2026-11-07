@@ -39,7 +39,7 @@ interface State {
   /** Findings already notified, so each one is announced once. */
   told: string[];
   last?: string;
-  /** Modification times of the watched paths at the last check: which of them a real-time trigger was about. */
+  /** What the watched paths looked like at the last check (time, size, inode): which of them a real-time trigger was about. */
   seen?: Record<string, number>;
   /** The last real-time check: when, which parts of the scan, how long. */
   quick?: { at: number; parts: string[]; ms: number };
@@ -151,7 +151,8 @@ export function partsFor(changed: string[], home: string, os: NodeJS.Platform = 
 
 /**
  * What each watched path looks like: when it last changed (the later of its modification and status-change times; the
- * second cannot be set back by hand, so a file put back to its old mtime still counts as changed). A folder changes
+ * second cannot be set back by hand, so a file put back to its old mtime still counts as changed), with its size and
+ * inode: Linux keeps these times in coarse ticks, and two writes within one tick give the same times. A folder changes
  * when an entry is added, removed or renamed. ~/.ssh is told by the names in it, known_hosts and its temporary and
  * .old copies aside: ssh rewrites those on its own at every new host, and that is not worth a check.
  */
@@ -162,7 +163,8 @@ function stampOf(p: string, sshDir: string): number | undefined {
       const names = readdirSync(p).filter((n) => !/^known_hosts/.test(n)).sort().join("\0");
       return parseInt(createHash("sha256").update(names).digest("hex").slice(0, 12), 16);
     }
-    return Math.round(Math.max(st.mtimeMs, st.ctimeMs));
+    const t = Math.round(Math.max(st.mtimeMs, st.ctimeMs));
+    return parseInt(createHash("sha256").update(`${t}:${st.size}:${st.ino}`).digest("hex").slice(0, 12), 16);
   } catch {
     return;
   }

@@ -211,7 +211,8 @@ describe("vswarm try", () => {
     expect(staticCheck(fixture("clean-app"))).toEqual([]);
   });
 
-  const sandbox = process.platform === "darwin" || (process.platform === "linux" && !!Bun.which("bwrap"));
+  // The fixture runs with node; a machine without it cannot run the fixture at all.
+  const sandbox = !!Bun.which("node") && (process.platform === "darwin" || (process.platform === "linux" && !!Bun.which("bwrap")));
   test.skipIf(!sandbox)("the sandbox stops the fake interview repo and records what it tried", async () => {
     const dir = mkdtempSync(join(tmpdir(), "vs-try-"));
     process.env.VSWARM_TRY_DIR = dir;

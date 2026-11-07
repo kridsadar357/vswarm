@@ -777,7 +777,8 @@ describe("install scripts in the sandbox", () => {
     expect(sandboxHere("linux")).toBe(true);
   });
 
-  const sandbox = process.platform === "darwin" || (process.platform === "linux" && !!Bun.which("bwrap"));
+  // The fixture runs with node; a machine without it cannot run the fixture at all.
+  const sandbox = !!Bun.which("node") && (process.platform === "darwin" || (process.platform === "linux" && !!Bun.which("bwrap")));
   test.skipIf(!sandbox)("v2's postinstall runs in the sandbox: it is seen reaching for the decoy keys and the network, and nothing leaves", async () => {
     const d = tmp("box");
     const prevTry = process.env.VSWARM_TRY_DIR;
