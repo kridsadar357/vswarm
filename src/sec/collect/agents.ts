@@ -5,13 +5,16 @@
 //   permissions   whether the agent may skip asking (bypassPermissions, Bash(*) allow rules)
 // A malicious MCP server or hook is persistence with the agent's access: your repos, your shell, your tokens.
 
-import { join } from "node:path";
+import { join, posix, win32 } from "node:path";
 import { ls, readJson, readText, sha256, type Ctx } from "../ctx";
 import type { Item } from "../types";
+import { WIN_PATH } from "./system";
 
-interface Server {
+export interface Server {
   command?: string;
   args?: string[];
+  /** The folder the server is started in (Codex, Gemini CLI). */
+  cwd?: string;
   url?: string;
   type?: string;
   env?: Record<string, string>;
@@ -33,20 +36,88 @@ export function literalSecrets(s: Server): string[] {
 /** Agent configs are JSON; ~/.claude.json also holds session history and outgrows the usual 2 MB cap. */
 const cfg = (file: string) => readJson(file, 64_000_000);
 
-function serverItem(app: string, file: string, name: string, s: Server): Item {
+// ── what a relative command means
+//
+// An agent hands `command` and `args` to the system as they are (no shell), so a command with a path separator that is
+// not absolute is read from the folder the server is started in. Which folder that is depends on the agent:
+//   Codex         the entry's `cwd`, else the folder Codex itself runs in (codex-rs stdio_server_launcher: `cwd` or the
+//                 caller's working directory; a plugin's .mcp.json gets its plugin folder written in when installed)
+//   Gemini CLI    the entry's `cwd`, else the folder gemini runs in
+//   Claude Code   the folder the session runs in: a project's own servers start in the project, the rest anywhere
+//   Claude Desktop, Cursor, Windsurf, VS Code: not documented, so not guessed
+// Where the folder is not known, the command is reported as relative instead of judged or started from a wrong place.
+
+/** A path that names its own place: /x, C:\x, \\server\x. */
+export const absolute = (p: string) => p.startsWith("/") || WIN_PATH.test(p) || p.startsWith("\\\\");
+
+/** A command with a folder in it, as opposed to a bare name looked up on PATH (npx). */
+const pathLike = (p: string) => /[\\/]/.test(p);
+
+/** What an agent starts for one server entry. */
+export interface Launch {
+  /** The program as an absolute path, when the command is a path. A bare name (npx) is looked up on PATH. */
+  exe?: string;
+  /** The folder the server starts in (and relative arguments are read from), when it is known. */
+  base?: string;
+  /** Why a relative command could not be placed. */
+  relative?: string;
+}
+
+const AGENT_NAMES: Record<string, string> = { "claude-code": "Claude Code", "claude-desktop": "Claude Desktop", cursor: "Cursor", windsurf: "Windsurf", vscode: "VS Code", gemini: "Gemini CLI", codex: "Codex" };
+
+/** A relative path read from a folder, with that folder's separators. */
+export const under = (base: string, rel: string) => (WIN_PATH.test(base) || base.startsWith("\\\\") ? win32.join(base, rel) : posix.join(base, rel));
+
+/** Where `app` (a scan item's source) starts the server `s`; `project` is the Claude Code project the entry is under. */
+export function launchOf(app: string, s: Server, project?: string): Launch {
+  const command = typeof s.command === "string" ? s.command : "";
+  const agent = app.split(":")[0];
+  const cwd = typeof s.cwd === "string" && s.cwd ? s.cwd : undefined;
+  const own = agent === "codex" || agent === "gemini";
+  const base = own ? (cwd && absolute(cwd) ? cwd : undefined) : agent === "claude-code" ? project : undefined;
+  if (!command || !pathLike(command)) return { base };
+  if (absolute(command)) return { exe: command, base };
+  if (base) return { exe: under(base, command), base };
+  const name = AGENT_NAMES[agent] ?? agent;
+  const relative = own
+    ? `${name} starts it in ${cwd ? `cwd "${cwd}", which is read from ` : ""}the folder ${name} itself runs in, so which program runs depends on where ${name} was started`
+    : agent === "claude-code"
+      ? "Claude Code starts it in the folder each session runs in, so any project can put its own program there"
+      : `${name} does not document which folder a relative command is read from`;
+  return { relative };
+}
+
+function serverItem(app: string, file: string, name: string, s: Server, project?: string): Item {
   // One malformed entry (args that is not a list) must not take the whole collector down.
   const args = Array.isArray(s.args) ? s.args.map(String) : [];
-  const command = [s.command, ...args].filter(Boolean).join(" ");
-  const def = JSON.stringify({ command: s.command, args, url: s.url ?? (s as any).httpUrl ?? (s as any).serverUrl, env: Object.keys(s.env && typeof s.env === "object" ? s.env : {}).sort() });
+  const cmd = typeof s.command === "string" ? s.command : undefined;
+  const command = [cmd, ...args].filter(Boolean).join(" ");
+  const l = launchOf(app, s, project);
+  // The folder decides what a relative command is; for any other command it stays out, so earlier pins keep matching.
+  const rel = !!cmd && pathLike(cmd) && !absolute(cmd);
+  const def = JSON.stringify({ command: s.command, args, url: s.url ?? (s as any).httpUrl ?? (s as any).serverUrl, env: Object.keys(s.env && typeof s.env === "object" ? s.env : {}).sort(), ...(rel ? { base: l.base ?? null } : {}) });
+  // The command and its arguments as the config gives them: a path with spaces in it stays one word.
+  const argv = cmd ? JSON.stringify([cmd, ...args]) : undefined;
   return {
     kind: "mcp", id: `${app}:${name}`, name, source: app, path: file, hash: sha256(def),
-    meta: { command: command.slice(0, 300) || undefined, url: s.url ?? (s as any).httpUrl ?? (s as any).serverUrl, secrets: literalSecrets(s).join(",") || undefined },
+    meta: {
+      command: command.slice(0, 300) || undefined, argv: argv && argv.length <= 4000 ? argv : undefined, exe: l.exe, base: l.base, relative: l.relative,
+      url: s.url ?? (s as any).httpUrl ?? (s as any).serverUrl, secrets: literalSecrets(s).join(",") || undefined,
+    },
   };
 }
 
-function servers(app: string, file: string, map: unknown, prefix = ""): Item[] {
+function servers(app: string, file: string, map: unknown, prefix = "", project?: string): Item[] {
   if (!map || typeof map !== "object") return [];
-  return Object.entries(map as Record<string, Server>).filter(([, s]) => s && typeof s === "object").map(([n, s]) => serverItem(app, file, prefix + n, s));
+  return Object.entries(map as Record<string, Server>).filter(([, s]) => s && typeof s === "object").map(([n, s]) => serverItem(app, file, prefix + n, s, project));
+}
+
+/** The command and arguments a scan recorded for an MCP server, as the config gave them. */
+export function argvOf(i: Item): string[] | undefined {
+  try {
+    const a = JSON.parse(String(i.meta?.argv ?? ""));
+    return Array.isArray(a) && a.length && a.every((x) => typeof x === "string") ? a : undefined;
+  } catch {}
 }
 
 /** Path separators: Windows takes both. */
@@ -65,7 +136,7 @@ function claude(home: string): Item[] {
     if (!j) continue;
     const app = f === join(home, ".claude.json") ? "claude-code" : `claude-code:${f.split(SEP).at(-2)}`;
     out.push(...servers(app, f, j.mcpServers));
-    for (const [proj, p] of Object.entries<any>(j.projects ?? {})) out.push(...servers(app, f, p?.mcpServers, `${proj.replace(home, "~")} › `));
+    for (const [proj, p] of Object.entries<any>(j.projects ?? {})) out.push(...servers(app, f, p?.mcpServers, `${proj.replace(home, "~")} › `, proj));
   }
   for (const dir of claudeDirs(home)) {
     for (const name of ["settings.json", "settings.local.json"]) {
@@ -134,8 +205,9 @@ export function codexServers(toml: string): Record<string, Server> {
       if (key.length !== 1 || !val.startsWith("{")) continue;
       const s: Server = (out[key[0]] ??= {});
       const field = (k: string) => new RegExp(`(?:^\\{|,)\\s*${k}\\s*=\\s*("(?:[^"\\\\]|\\\\.)*"|'[^']*')`).exec(val)?.[1];
-      const command = field("command"), url = field("url");
+      const command = field("command"), url = field("url"), cwd = field("cwd");
       if (command) s.command = tomlStr(command);
+      if (cwd) s.cwd = tomlStr(cwd);
       if (url) s.url = tomlStr(url);
       const args = /(?:^\{|,)\s*args\s*=\s*\[([^\]]*)\]/.exec(val)?.[1];
       if (args !== undefined) s.args = tomlStrs(args);
@@ -143,6 +215,7 @@ export function codexServers(toml: string): Record<string, Server> {
     }
     if (key.length !== 1) continue;
     if (key[0] === "command") cur!.command = tomlStr(val);
+    else if (key[0] === "cwd") cur!.cwd = tomlStr(val);
     else if (key[0] === "url") cur!.url = tomlStr(val);
     else if (key[0] === "args" && val.startsWith("[")) cur!.args = tomlStrs(val);
   }

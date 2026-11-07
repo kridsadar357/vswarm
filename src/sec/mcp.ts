@@ -11,7 +11,8 @@ import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { VERSION } from "../home";
-import { readJson, redact, reEscape, sha256 } from "./ctx";
+import { argvOf, codexServers, launchOf, type Server } from "./collect/agents";
+import { readJson, readText, redact, reEscape, sha256 } from "./ctx";
 import { c, finding as printFinding, line } from "./print";
 import { canSandbox, sandboxSpawn } from "./try/spawn";
 import { readSealed, SEC, writeSealed } from "./store";
@@ -239,9 +240,10 @@ async function inspectHttp(url: string, headers: Record<string, string>): Promis
 }
 
 /** stdio: newline-delimited JSON-RPC over the process's stdin/stdout. */
-async function inspectStdio(cmd: string[], env: Record<string, string>, sandbox: boolean, timeoutMs: number): Promise<{ tools: Tool[]; hosts: string[] }> {
+async function inspectStdio(cmd: string[], env: Record<string, string>, sandbox: boolean, timeoutMs: number, cwd?: string): Promise<{ tools: Tool[]; hosts: string[] }> {
   const sb = sandbox ? await sandboxSpawn(cmd, { net: "registries", env }) : undefined;
-  const proc = sb?.proc ?? Bun.spawn(cmd, { env: { ...process.env, ...env } as Record<string, string>, stdin: "pipe", stdout: "pipe", stderr: "pipe" });
+  // Started directly, it starts in the folder its agent would start it in, when that is known (and still there).
+  const proc = sb?.proc ?? Bun.spawn(cmd, { env: { ...process.env, ...env } as Record<string, string>, cwd: cwd && existsSync(cwd) ? cwd : undefined, stdin: "pipe", stdout: "pipe", stderr: "pipe" });
   const waiting = new Map<number, (m: any) => void>();
   let ended = false;
   let stderr = "";
@@ -290,19 +292,36 @@ async function inspectStdio(cmd: string[], env: Record<string, string>, sandbox:
   }
 }
 
-/** Reads the server definition back from the agent's config (the scan keeps only a summary). */
-function definition(i: Item): { command?: string; args?: string[]; url?: string; env?: Record<string, string>; headers?: Record<string, string> } | undefined {
+type Definition = Server & { headers?: Record<string, string>; project?: string };
+
+/**
+ * Reads the server definition back from the agent's config (the scan keeps only a summary): command and args exactly
+ * as the config gives them, never a joined command line split again (a path may hold spaces).
+ */
+function definition(i: Item): Definition | undefined {
+  if (i.path?.endsWith(".toml")) {
+    const toml = readText(i.path);
+    if (toml === undefined && existsSync(i.path)) throw new Error(`${i.path} could not be read`);
+    if (toml !== undefined) {
+      const all = codexServers(toml);
+      const s = Object.hasOwn(all, i.name) ? all[i.name] : undefined;
+      if (!s) throw new Error(`no longer in ${i.path}`);
+      return s;
+    }
+  }
   const j = i.path?.endsWith(".json") ? readJson(i.path) : undefined;
   // A config that no longer parses is worth saying so, not quietly falling back to the scan's summary.
   if (!j && i.path?.endsWith(".json") && existsSync(i.path)) throw new Error(`${i.path} is not valid JSON`);
   if (!j) {
-    const cmd = String(i.meta?.command ?? "").split(" ").filter(Boolean);
-    return cmd.length ? { command: cmd[0], args: cmd.slice(1) } : i.meta?.url ? { url: String(i.meta.url) } : undefined;
+    const argv = argvOf(i);
+    return argv ? { command: argv[0], args: argv.slice(1), cwd: i.meta?.base ? String(i.meta.base) : undefined } : i.meta?.url ? { url: String(i.meta.url) } : undefined;
   }
   const [proj, name] = i.name.includes(" › ") ? i.name.split(" › ") : [undefined, i.name];
   const home = homedir();
-  const maps = [j.mcpServers, j.servers, j.mcp?.servers, j["mcp.servers"], ...(proj ? [j.projects?.[proj.replace(/^~/, home)]?.mcpServers] : [])];
-  for (const m of maps) if (m?.[name]) return { ...m[name], url: m[name].url ?? m[name].httpUrl ?? m[name].serverUrl };
+  const project = proj?.replace(/^~/, home);
+  const maps = [j.mcpServers, j.servers, j.mcp?.servers, j["mcp.servers"], ...(project ? [j.projects?.[project]?.mcpServers] : [])];
+  // A project's own server last: its name is the key there, not one of the maps above.
+  for (const m of project ? maps.slice(-1) : maps) if (m?.[name]) return { ...m[name], url: m[name].url ?? m[name].httpUrl ?? m[name].serverUrl, project };
 }
 
 /** ${VAR} references in a server's env and headers, filled from your environment as the agent would. */
@@ -336,10 +355,15 @@ export async function inspect(i: Item, opt: InspectOpt): Promise<Inspection> {
       if (!/^https?:\/\//.test(def.url)) return { item: i, error: `unsupported transport ${def.url}` };
       return { item: i, tools: await inspectHttp(def.url, expand(def.headers)) };
     }
-    if (!def.command) return { item: i, error: "no command" };
+    if (typeof def.command !== "string" || !def.command) return { item: i, error: "no command" };
+    // A relative command is read from the folder the agent starts the server in; started from any other folder it is a
+    // different program, or none. Where that folder is not known, it is not started at all.
+    const l = launchOf(i.source ?? "", def, def.project);
+    if (l.relative) return { item: i, error: `relative command, not inspected: ${def.command} (${l.relative})` };
     const sandboxed = opt.sandbox && canSandbox();
     if (opt.sandbox && !sandboxed) return { item: i, error: "no sandbox on this system (macOS sandbox-exec or Linux bubblewrap); --no-sandbox runs it directly" };
-    const r = await inspectStdio([def.command, ...(def.args ?? [])], expand(def.env), sandboxed, opt.timeoutMs ?? 90_000);
+    const args = Array.isArray(def.args) ? def.args.map(String) : [];
+    const r = await inspectStdio([l.exe ?? def.command, ...args], expand(def.env), sandboxed, opt.timeoutMs ?? 90_000, l.base);
     return { item: i, tools: r.tools, hosts: r.hosts, sandboxed };
   } catch (e: any) {
     return { item: i, error: String(e?.message ?? e) };

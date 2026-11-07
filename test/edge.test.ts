@@ -9,9 +9,9 @@ import { checkInstall, depTree, guardBlock, npmSpec, pipSpec, pkgCommand, plan, 
 import { sandboxRun } from "../src/sec/try/spawn";
 import { profile } from "../src/sec/try/sandbox";
 import { kubeUsers, secretNames, secrets as findSecrets } from "../src/sec/secrets";
-import { agents, literalSecrets } from "../src/sec/collect/agents";
+import { absolute, agents, argvOf, launchOf, literalSecrets, under } from "../src/sec/collect/agents";
 import { startupFiles } from "../src/sec/collect/system";
-import { evaluate } from "../src/sec/rules";
+import { evaluate, launcher } from "../src/sec/rules";
 import { inspect, judgeTools, loadPins, mcpDrift, pinTools, promptAsTool, resourceAsTool, savePins, type Pins, type Tool } from "../src/sec/mcp";
 import { bwrapArgs, traceDenials } from "../src/sec/try/linux";
 import { allowedBy, startProxy } from "../src/sec/try/proxy";
@@ -326,7 +326,7 @@ describe("MCP servers that misbehave", () => {
   const stdio = (name: string, body: string): Item => {
     const p = join(dir, name + ".js");
     writeFileSync(p, body);
-    return { kind: "mcp", id: `t:${name}`, name, source: "t", meta: { command: `${process.execPath} ${p}` } };
+    return { kind: "mcp", id: `t:${name}`, name, source: "t", meta: { command: `${process.execPath} ${p}`, argv: JSON.stringify([process.execPath, p]) } };
   };
   const answer = (initExtra: string, list: string) => `process.stdin.on("data", d => { for (const l of String(d).split("\\n")) { let m; try { m = JSON.parse(l) } catch { continue } if (m.id === undefined) continue;
     const res = m.method === "initialize" ? ${initExtra} : (${list});
@@ -350,7 +350,7 @@ describe("MCP servers that misbehave", () => {
     const early = await inspect(stdio("early", `process.stdout.write("bye\\n"); process.exit(1);`), { sandbox: false });
     expect(early.error).toContain("the server exited");
     expect(Date.now() - t0).toBeLessThan(5000);
-    expect((await inspect({ kind: "mcp", id: "t:none", name: "none", source: "t", meta: { command: "/nonexistent/binary x" } }, { sandbox: false })).error).toContain("nonexistent");
+    expect((await inspect({ kind: "mcp", id: "t:none", name: "none", source: "t", meta: { argv: JSON.stringify(["/nonexistent/binary", "x"]) } }, { sandbox: false })).error).toContain("nonexistent");
     expect((await inspect(stdio("refuse", answer(`{ error: { code: -32600, message: "nope" } }`, `{}`)), { sandbox: false })).error).toBe("initialize: nope");
     expect((await inspect(stdio("listerr", answer(init, `{ error: { code: 1 } }`)), { sandbox: false })).error).toBe("tools/list: refused");
     const bad = join(dir, "bad.json");
@@ -952,6 +952,103 @@ describe("parsing, CLI and collectors", () => {
     expect(by("plain").command).toBe('node s.js --flag="q"');
   });
 
+  describe("relative MCP commands", () => {
+    // The shape Codex wrote for its computer-use server on a real Mac: a relative path with spaces, cwd ".".
+    const APP = "./Codex Computer Use.app/Contents/SharedSupport/SkyComputerUseClient.app/Contents/MacOS/SkyComputerUseClient";
+    const scanOf = (home: string, items: Item[]): Scan => ({ version: 1, host: "t", user: "t", home, at: 0, items, texts: {}, gaps: {} });
+
+    test("Codex: a relative command under cwd \".\" is kept whole, not placed, not started, and said so", async () => {
+      const home = tmp("home");
+      mkdirSync(join(home, ".codex"), { recursive: true });
+      writeFileSync(join(home, ".codex/config.toml"), `[mcp_servers.computer-use]\ncommand = "${APP}"\nargs = [ "mcp" ]\ncwd = "."\nenabled = false\n`);
+      const [i] = await agents(ctxFor(home));
+      expect(argvOf(i)).toEqual([APP, "mcp"]);
+      expect(i.meta?.exe).toBeUndefined();
+      expect(String(i.meta?.relative)).toContain("the folder Codex itself runs in");
+      const r = await inspect(i, { sandbox: false });
+      expect(r.tools).toBeUndefined();
+      expect(r.error).toStartWith(`relative command, not inspected: ${APP}`);
+      const f = await evaluate({ scan: scanOf(home, [i]), malicious: [], secrets: [] });
+      expect(f.map((x) => `${x.rule}:${x.severity}`)).toEqual(["agent-relative:medium"]);
+    });
+
+    test("Codex: an absolute cwd places the command and its ./ arguments, and the location rules see the real place", async () => {
+      const home = tmp("home");
+      mkdirSync(join(home, ".codex"), { recursive: true });
+      const dl = join(home, "Downloads");
+      writeFileSync(join(home, ".codex/config.toml"), [
+        `[mcp_servers.tool]`, `command = "./My Tools/srv"`, `cwd = ${JSON.stringify(dl)}`,
+        `[mcp_servers.script]`, `command = "node"`, `args = ["./stealer.js"]`, `cwd = ${JSON.stringify(dl)}`,
+        `[mcp_servers.fine]`, `command = "./bin/srv"`, `cwd = ${JSON.stringify(join(home, "work"))}`,
+      ].join("\n"));
+      const items = await agents(ctxFor(home));
+      const by = (n: string) => items.find((x) => x.name === n)!;
+      expect(by("tool").meta?.exe).toBe(under(dl, "My Tools/srv"));
+      expect(argvOf(by("tool"))).toEqual(["./My Tools/srv"]);
+      const f = await evaluate({ scan: scanOf(home, items), malicious: [], secrets: [] });
+      expect(f.map((x) => `${x.rule}:${x.item?.name}`).sort()).toEqual(["agent-risky:script", "agent-risky:tool"]);
+      expect(f.find((x) => x.item?.name === "tool")!.title).toContain("runs from ~/Downloads");
+    });
+
+    test.skipIf(WIN)("Codex: a server given as a relative path with spaces starts from its cwd (no-sandbox inspection)", async () => {
+      const home = tmp("home");
+      const dir = join(home, "srv dir");
+      mkdirSync(join(dir, "My Bin"), { recursive: true });
+      mkdirSync(join(home, ".codex"), { recursive: true });
+      symlinkSync(process.execPath, join(dir, "My Bin/run time"));
+      writeFileSync(join(dir, "server.js"), `let b="";process.stdin.on("data",d=>{b+=d;let n;while((n=b.indexOf("\\n"))>=0){const m=JSON.parse(b.slice(0,n));b=b.slice(n+1);if(m.id===undefined)continue;const result=m.method==="initialize"?{protocolVersion:"2025-06-18",capabilities:{tools:{}}}:{tools:[{name:"hello",description:"says hi"}]};process.stdout.write(JSON.stringify({jsonrpc:"2.0",id:m.id,result})+"\\n");}});`);
+      writeFileSync(join(home, ".codex/config.toml"), `[mcp_servers.spaced]\ncommand = "./My Bin/run time"\nargs = ["./server.js"]\ncwd = ${JSON.stringify(dir)}\n`);
+      const [i] = await agents(ctxFor(home));
+      const r = await inspect(i, { sandbox: false, timeoutMs: 10_000 });
+      expect(r.error).toBeUndefined();
+      expect(r.tools!.map((t) => t.name)).toEqual(["hello"]);
+    });
+
+    test("Claude Code: a project's server is read from the project, a user server from wherever the session runs", async () => {
+      const home = tmp("home");
+      const proj = join(home, "Downloads");
+      writeFileSync(join(home, ".claude.json"), JSON.stringify({ mcpServers: { mine: { command: "./run.sh" } }, projects: { [proj]: { mcpServers: { mine: { command: "./run.sh" } } } } }));
+      const items = await agents(ctxFor(home));
+      const user = items.find((x) => x.name === "mine")!, project = items.find((x) => x.name.endsWith("› mine"))!;
+      expect(user.meta?.relative).toContain("any project can put its own program there");
+      expect(project.meta?.exe).toBe(under(proj, "run.sh"));
+      expect(project.meta?.relative).toBeUndefined();
+      const f = await evaluate({ scan: scanOf(home, items), malicious: [], secrets: [] });
+      expect(f.map((x) => `${x.rule}:${x.item?.name}`).sort()).toEqual(["agent-relative:mine", `agent-risky:${project.name}`]);
+      // Inspecting the user entry starts nothing.
+      expect((await inspect(user, { sandbox: false })).error).toStartWith("relative command, not inspected: ./run.sh");
+    });
+
+    test("Claude Desktop, Cursor and the rest: the folder is not documented, so it is not guessed; bare names stay on PATH", () => {
+      for (const app of ["claude-desktop", "cursor", "windsurf", "vscode"]) {
+        const l = launchOf(app, { command: "./server", cwd: "/somewhere" });
+        expect(l.exe).toBeUndefined();
+        expect(l.relative).toContain("does not document");
+      }
+      expect(launchOf("cursor", { command: "npx" })).toEqual({ base: undefined });
+      expect(launchOf("claude-desktop", { command: "/opt/x/srv" }).exe).toBe("/opt/x/srv");
+      expect(launchOf("gemini", { command: "./srv", cwd: "/opt/g" }).exe).toBe("/opt/g/srv");
+      expect(launchOf("gemini", { command: "./srv", cwd: "rel" }).relative).toContain('cwd "rel"');
+      expect(launchOf("codex", { command: 5 as any }).exe).toBeUndefined();
+    });
+
+    test("Windows paths: drive letters, either separator and UNC shares are absolute; a relative command joins with backslashes", () => {
+      expect(absolute("C:\\Tools\\x.exe") && absolute("c:/tools/x.exe") && absolute("\\\\server\\share\\x.exe") && absolute("/usr/bin/x")).toBe(true);
+      expect(absolute(".\\bin\\x.exe") || absolute("bin/x") || absolute("x.exe")).toBe(false);
+      expect(launchOf("codex", { command: ".\\bin\\srv.exe", cwd: "C:\\Tools" }).exe).toBe("C:\\Tools\\bin\\srv.exe");
+      expect(launchOf("codex", { command: "..\\srv.exe", cwd: "\\\\host\\share\\dir" }).exe).toBe("\\\\host\\share\\srv.exe");
+      expect(launchOf("claude-code", { command: "./srv.cmd" }, "C:/Users/me/proj").exe).toBe("C:\\Users\\me\\proj\\srv.cmd");
+      expect(launchOf("codex", { command: "C:\\x\\srv.exe" }).exe).toBe("C:\\x\\srv.exe");
+      // A program in a Windows user's Downloads, reached through a relative argument, is still seen.
+      const l = launcher(["node", ".\\evil.js"], "C:\\Users\\me", "C:\\Users\\me\\Downloads");
+      expect(l.exe).toBe("C:\\Users\\me\\Downloads\\evil.js");
+    });
+
+    test("a scan from before argv was recorded is not split again for inspection", async () => {
+      expect((await inspect({ kind: "mcp", id: "t:old", name: "old", source: "t", meta: { command: "/Applications/My App.app/x mcp" } }, { sandbox: false })).error).toContain("no command or URL");
+    });
+  });
+
   test("kubeconfig: users indented further than two spaces, exec env entries that are not users, and certificate files", () => {
     const y = [
       "apiVersion: v1", "users:",
@@ -1155,7 +1252,7 @@ process.stdin.on("data", d => { for (const l of String(d).split("\\n")) { let m;
       const mute = join(home, "mute.js");
       writeFileSync(mute, "process.stdin.resume();");
       const t0 = Date.now();
-      const r = await inspect({ kind: "mcp", id: "t:mute", name: "mute", source: "t", meta: { command: `${process.execPath} ${mute}` } }, { sandbox: false, timeoutMs: 1000 });
+      const r = await inspect({ kind: "mcp", id: "t:mute", name: "mute", source: "t", meta: { argv: JSON.stringify([process.execPath, mute]) } }, { sandbox: false, timeoutMs: 1000 });
       expect(r.error).toBe("no answer within 1 s");
       expect(Date.now() - t0).toBeLessThan(5000);
     });
@@ -1402,7 +1499,7 @@ describe("MCP: prompts and resources, and what a scan says without starting serv
       const lists = ${lists};
       const res = m.method === "initialize" ? { result: { protocolVersion: "x", capabilities: ${caps} } } : lists[m.method] ?? { error: { code: -32601, message: "no" } };
       process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id: m.id, ...res }) + "\\n"); } });`);
-    return { kind: "mcp", id: `t:${name}`, name, source: "t", hash: "def-1", meta: { command: `${process.execPath} ${p}` } };
+    return { kind: "mcp", id: `t:${name}`, name, source: "t", hash: "def-1", meta: { command: `${process.execPath} ${p}`, argv: JSON.stringify([process.execPath, p]) } };
   };
 
   test("prompts and resources are read and judged like tools, and only when the server has them", async () => {

@@ -4,6 +4,7 @@
 
 import { redact } from "./ctx";
 import { distance, lookAlike, nameSignals, signature, type Malicious, type Signature } from "./intel";
+import { argvOf, under } from "./collect/agents";
 import { buildPlace, suspiciousLocation, WIN_PATH } from "./collect/system";
 import { TOOL_CONFIGS } from "./collect/tools";
 import { stockWmi, winLaunchRisk } from "./collect/windows";
@@ -180,10 +181,14 @@ function toolExecRisk(i: Item, home: string): string | undefined {
 /** Commands that are handed passwords and tokens: a copy found earlier on PATH sees them first. */
 const SHADOWED = new Set(["sudo", "su", "doas", "pkexec", "passwd", "login", "ssh", "scp", "sftp", "ssh-add", "ssh-agent", "ssh-keygen", "git", "gpg", "gpg2", "security"]);
 
-/** The program an MCP server or hook runs, and the package it pulls when it is started through npx/uvx/bunx. */
-function launcher(cmd: string, home: string): { exe?: string; pkg?: { eco: "npm" | "pip"; name: string } } {
-  const parts = cmd.split(/\s+/).filter(Boolean);
-  const exe = parts.find((p) => p.startsWith("/") || p.startsWith("~/"))?.replace(/^~/, home);
+/**
+ * The program an MCP server or hook runs, and the package it pulls when it is started through npx/uvx/bunx. `parts`
+ * are an MCP server's command and arguments as its config gives them (a hook's shell line split on spaces); `base` is
+ * the folder its agent starts it in, when known, which a ./ or ../ path is read from.
+ */
+export function launcher(parts: string[], home: string, base?: string): { exe?: string; pkg?: { eco: "npm" | "pip"; name: string } } {
+  const placed = parts.map((p) => (base && /^\.\.?[\\/]/.test(p) ? under(base, p) : p));
+  const exe = placed.find((p) => p.startsWith("/") || p.startsWith("~/") || WIN_PATH.test(p))?.replace(/^~(?=\/)/, home);
   const runner = parts.findIndex((p) => /(^|\/)(npx|bunx|pnpx|uvx|pipx)$/.test(p) || p === "dlx");
   if (runner < 0) return { exe };
   const eco = /uvx|pipx/.test(parts[runner]) ? "pip" : "npm";
@@ -272,14 +277,21 @@ export async function evaluate(input: RuleInput): Promise<Finding[]> {
     if (i.kind === "mcp" || i.kind === "agent-hook") {
       const cmd = String(i.meta?.command ?? "");
       const what = i.kind === "mcp" ? `MCP server ${i.name} (${i.source})` : `Agent hook ${i.name}`;
-      const l = launcher(cmd, home);
-      const where = l.exe ? suspiciousLocation(l.exe, home) : undefined;
+      // An MCP server's own command, placed where its agent starts it, comes first; then any program in its arguments.
+      const exe = i.meta?.exe ? String(i.meta.exe) : undefined;
+      const l = launcher(argvOf(i) ?? cmd.split(/\s+/).filter(Boolean), home, i.meta?.base ? String(i.meta.base) : undefined);
+      const where = (exe ? suspiciousLocation(exe, home) : undefined) ?? (l.exe ? suspiciousLocation(l.exe, home) : undefined);
       const like = l.pkg ? lookAlike(l.pkg.eco, l.pkg.name) : undefined;
       if (where || like || (cmd && RISKY_LINE.test(cmd.replace(/\.cache\//g, "")))) {
         add({ id: `agent-risky:${i.kind}:${i.id}:${i.hash?.slice(0, 12)}`, rule: "agent-risky", severity: "high",
           title: `${what} ${where ? `starts a program that ${where}` : like ? `runs ${l.pkg!.name}, which looks like ${like}` : "runs a command that downloads, decodes or backgrounds something"}`,
           detail: [redact(cmd.slice(0, 200)), i.path ?? ""], fix: "An agent runs this with your access. Remove it unless you set it up yourself; then vswarm respond", item: i });
       }
+      // A relative command whose folder is not known cannot be judged by place, and it need not be the program you
+      // set up: whatever sits at that path in the folder the agent was started in runs instead.
+      if (i.kind === "mcp" && i.meta?.relative && !where)
+        add({ id: `agent-relative:${i.id}:${i.hash?.slice(0, 12)}`, rule: "agent-relative", severity: "medium", title: `${what} starts a program by a relative path (${redact(String(argvOf(i)?.[0] ?? cmd).slice(0, 120))})`,
+          detail: [String(i.meta.relative), i.path ?? ""], fix: "Give the command as an absolute path, so the same program runs wherever the agent is started", item: i });
       const url = String(i.meta?.url ?? "");
       // Read the host with a regex: a URL that does not parse ("http://") must not stop the whole check.
       if (/^http:\/\//.test(url) && !/^http:\/\/(localhost|127\.|\[::1\])/.test(url)) {
