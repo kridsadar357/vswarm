@@ -147,6 +147,12 @@ export function distance(a: string, b: string, max = 2): number {
 const flat = (s: string) => s.replace(/[-_.]/g, "");
 
 /**
+ * Projects that published under plain names for years before moving to their scope (babel-core before @babel/core,
+ * rollup-pluginutils, esbuild-linux-arm64): the old names are their own, not a scope folded into a look-alike.
+ */
+const FORMER_UNSCOPED = new Set(["babel", "rollup", "esbuild"]);
+
+/**
  * The popular package this name imitates, if any: the most popular one within one edit (two for names of 8 characters
  * or more), the same name with other separators (cross_env, cross.env), a scope folded into the name
  * (solana-web3.js for @solana/web3.js), or a popular name with a typical suffix (lodashjs, requests2). A popular name
@@ -165,7 +171,7 @@ export function lookAlike(kind: string, name: string): string | undefined {
     if (flat(p) === fn) return p;
     // @scope/name written without the scope's slash: solana-web3.js, solanaweb3.js.
     const scoped = /^@([^/]+)\/(.+)$/.exec(p);
-    if (scoped && !n.startsWith("@") && fn === flat(scoped[1] + scoped[2])) return p;
+    if (scoped && !n.startsWith("@") && !FORMER_UNSCOPED.has(scoped[1]) && fn === flat(scoped[1] + scoped[2])) return p;
     // Short names have many real neighbours (color, colord; util, utila): only the most-used ones are matched there.
     const long = Math.min(p.length, n.length) >= 8;
     if (long || l.rank.get(p)! < (kind === "pip" ? 500 : 1000)) {
@@ -185,7 +191,7 @@ export function lookAlike(kind: string, name: string): string | undefined {
  * a word (react-domm) is still a typo.
  */
 function family(p: string, n: string, rank: number): boolean {
-  if (/\d/.test(p) && /\d/.test(n) && p.replace(/\d+/g, "") === n.replace(/\d+/g, "")) return true;
+  if (/\d/.test(p) && /\d/.test(n) && p.replace(/\d+/g, "") === n.replace(/\d+/g, "") && !doubledDigit(p, n)) return true;
   const d = distance(p, n, 2);
   if (p.startsWith("@") !== n.startsWith("@") && d === 2) return true;
   if (d === 2 && (n.startsWith(p) || n.endsWith(p) || p.startsWith(n) || p.endsWith(n))) return true;
@@ -194,6 +200,28 @@ function family(p: string, n: string, rank: number): boolean {
   if (ps.length < 2 || ps.length !== ns.length) return false;
   const diff = ps.map((s, i) => [s, ns[i]]).filter(([a, b]) => a !== b);
   return diff.length === 1 && distance(diff[0][0], diff[0][1], 2) >= 2;
+}
+
+/** Another version number is a family (eventemitter2, eventemitter3); the same one typed twice is a typo (beautifulsoup44). */
+function doubledDigit(p: string, n: string): boolean {
+  const dp = (p.match(/\d+/g) ?? []).join(","), dn = (n.match(/\d+/g) ?? []).join(",");
+  return dp !== dn && dp.length !== dn.length && (dn.startsWith(dp) || dp.startsWith(dn)) && /(\d)\1/.test(dp.length > dn.length ? dp : dn);
+}
+
+/**
+ * Names that say what they are: proof-of-concept and dependency-confusion probes, "malware" test packages, reverse
+ * shells. Published to prove a point or to collect bug bounties, they still run their payload on whoever installs them.
+ */
+const ANNOUNCES = /(^|[-_.@/])(poc|pwn|exploit|malware|malicious|backdoor|stealer|grabber|keylogger|rce|revshell|reverse-?shell|dependency-?confusion|depconf|do-?not-?install|dont-?install|bug-?bounty|hacked)([-_.]|\d|$)/;
+
+/** Other signs of a malicious package in its name alone, beyond resembling a popular one. Each is said in one line. */
+export function nameSignals(kind: string, name: string): string[] {
+  const n = normName(kind, name);
+  if (n.length > 214 || allowed(kind, n)) return [];
+  const out: string[] = [];
+  const m = ANNOUNCES.exec(n);
+  if (m) out.push(`its name says "${m[2]}": a proof-of-concept or test of malicious behaviour, which runs it on whoever installs it`);
+  return out;
 }
 
 export interface Signature {
@@ -244,4 +272,3 @@ export async function signature(path: string): Promise<Signature> {
     return { kind: "unknown" };
   }
 }
-
