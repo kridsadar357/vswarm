@@ -131,13 +131,27 @@ vswarm ไม่นับบล็อกที่มันเขียนเอ�
 
 ### vswarm watch
 
-ตรวจเองทุกชั่วโมงเบื้องหลัง และเด้งแจ้งเตือน (notification ของ macOS หรือ `notify-send` บน Linux) ครั้งแรกที่เจอสิ่งใหม่แต่ละอย่าง คุณจะรู้ตั้งแต่วันที่มีของแปลกปลอมเข้ามา ไม่ต้องรอถึงวันที่ ssh เข้า prod
-- macOS ใช้ LaunchAgent ส่วน Linux ใช้ systemd user timer
-- vswarm รู้จัก job ของตัวเอง และจะรายงานถ้ามีใครไปแก้มัน
+ตรวจเองทุกชั่วโมงเบื้องหลัง และเด้งแจ้งเตือน (notification ของ macOS หรือ `notify-send` บน Linux) ครั้งแรกที่เจอสิ่งใหม่แต่ละอย่าง บน macOS และ Linux ยังตอบสนอง **ภายในไม่กี่วินาที** เมื่อมีอะไรเขียนลงที่ที่มัลแวร์ชอบฝังตัว คุณจะรู้ตอนที่ login job ถูกฝัง ไม่ใช่อีกชั่วโมงต่อมา vswarm ไม่มี daemon ของตัวเองค้างอยู่ launchd หรือ systemd เป็นคนเฝ้าไฟล์ แล้วค่อยปลุกการตรวจสั้น ๆ ขึ้นมา vswarm รู้จัก job ของตัวเอง และจะรายงานถ้ามีใครไปแก้มัน
 
 ```bash
 vswarm watch on [--every 60]     # vswarm watch status · vswarm watch off
 ```
+
+| | ทุกชั่วโมง | ทันทีที่มีการเปลี่ยน |
+| --- | --- | --- |
+| macOS | LaunchAgent `dev.vswarm.watch` (`StartInterval`) | LaunchAgent `dev.vswarm.watch.paths` (`WatchPaths` เริ่มได้อย่างมากทุก 10 วินาที) |
+| Linux | systemd user timer `vswarm-watch.timer` | path unit `vswarm-watch.path` (`PathModified=`) ที่สั่ง `vswarm-watch-quick.service` |
+| Windows | scheduled task `\vswarm\watch` | ไม่มี: Task Scheduler สั่งงานตอนไฟล์เปลี่ยนไม่ได้ ถ้าผู้ดูแลระบบไม่เปิด auditing ไว้ |
+
+สิ่งที่เฝ้า: `~/Library/LaunchAgents`, systemd user unit และ XDG autostart, ไฟล์ start-up ของ shell, fish `conf.d` และ `environment.d`, `~/.ssh` (config, authorized_keys, rc), `~/.gitconfig`, `~/.npmrc`, config ของ pip, uv, yarn และ cargo, kubeconfig, `~/.aws/config`, config และ context ของ Docker, config ของ MCP และ agent (Claude Code, Claude Desktop, Cursor, Windsurf, Gemini, VS Code, Codex), ไฟล์ task และโฟลเดอร์ extension ของ editor, user site-packages ของ Python, `~/.local/bin` กับ `~/bin` และโฟลเดอร์ global ของ npm และ bun
+
+เมื่อมีไฟล์เปลี่ยน job จะรอ 1.5 วินาทีให้การเขียนชุดนั้นจบก่อน (installer ตัวหนึ่งเขียนหลายไฟล์ ก็นับเป็นการตรวจครั้งเดียว) ดูจากเวลาแก้ไขว่า path ไหนเปลี่ยน แล้วตรวจ **เฉพาะส่วนของ scan ที่อ่าน path นั้น** แบบ offline (เช็ก known-malicious จาก cache อย่างเดียว เน็ตช้าก็ไม่ทำให้ช้าตาม) ถ้าระหว่างตรวจมีอะไรเปลี่ยนอีกก็ตรวจซ้ำ ส่วน trigger ที่มาซ้อนตอนกำลังตรวจอยู่ ถือว่ารอบที่กำลังตรวจครอบคลุมแล้ว แจ้งเตือนเฉพาะ finding ระดับ medium ขึ้นไปที่ยังไม่เคยแจ้ง แบบเดียวกับรอบรายชั่วโมง และผลการตรวจบางส่วนแบบนี้จะไม่ถูกเก็บเป็น verdict ที่ `preflight` เอาไปใช้ซ้ำ
+
+สิ่งที่ vswarm เขียนเองไม่ปลุกการแจ้งเตือน: โฟลเดอร์ state ของมันไม่ถูกเฝ้า บล็อกของมันใน rc file และไฟล์ job ของมันถูกจำไว้ว่าเป็นของ vswarm การตรวจที่ถูกปลุกขึ้นจึงไม่เจออะไรใหม่ และไม่วนซ้ำไม่จบ
+
+วัดด้วย home ปลอมบน Mac ชิป M โดยใช้ `fs.watch` แทน launchd: LaunchAgent ที่ถูกฝังไปถึง notification ใน 1.52 วินาที ด้วยเวลารอ 1.5 วินาทีของ job (วัดห้าครั้ง ได้ 1,515–1,522 ms ตัวการตรวจเองใช้ 13–14 ms และการเริ่มคำสั่ง `vswarm` ราว 20 ms) ส่วน `test/watch.test.ts` ทำแบบเดียวกันด้วยเวลารอ 0.3 วินาที ได้ 0.32 วินาทีเมื่อรันเดี่ยว และ 0.6–0.7 วินาทีเมื่อรันพร้อม test อื่นทั้งชุด เวลาที่ launchd หรือ systemd ใช้ปลุก job จะบวกเพิ่มจากนี้ และยังไม่ได้วัด เพราะ test ไม่โหลดอะไรเข้า launchd หรือ systemd จริง
+
+ข้อจำกัด: launchd เฝ้าได้เฉพาะ path ที่มีอยู่แล้ว บน macOS job จึงใส่เฉพาะ path ที่มีอยู่ตอนเขียน และรอบรายชั่วโมงจะเขียน job ใหม่เมื่อรายการนี้เปลี่ยน (ลง agent ใหม่ หรือมีไฟล์ config เกิดขึ้นมา) Apple เองบอกว่า `WatchPaths` พลาดได้ รอบรายชั่วโมงจึงยังอยู่ ส่วน systemd จะรอ path ที่ยังไม่มีจนกว่าจะเกิดขึ้น crontab ของคุณเก็บอยู่ในที่ที่มีแต่ root อ่านได้ บรรทัด cron ใหม่จึงเห็นในรอบรายชั่วโมง `vswarm watch status` และ `vswarm doctor` บอกว่าส่วน real-time เปิดอยู่หรือเปล่า ถ้าเปิด watch ไว้ตั้งแต่เวอร์ชันก่อน ให้สั่ง `vswarm watch on` อีกครั้ง
 
 ![vswarm watch run](img/watch-run.png)
 
@@ -565,11 +579,76 @@ vswarm ไม่นับ canary ของคุณเองเป็นคว�
 
 ## 13. วัดผลการตรวจจับ: selftest
 
-สร้าง home ปลอมในโฟลเดอร์ชั่วคราว บันทึก baseline ฝังภัยจำลองที่ไม่มีอันตราย แล้วนับว่าจับได้กี่ข้อ เครื่องจริงไม่ถูกแตะ
+มีสองอย่างที่วัด: `vswarm selftest` วัดว่า scan เจออะไรบนเครื่อง และ `scripts/bench-names.ts` วัดว่าการเช็กชื่อ package ของ guard จับ package อันตรายของจริงได้แค่ไหน
+
+### เทคนิคที่ฝังจำลอง: vswarm selftest
+
+สร้าง home ปลอมในโฟลเดอร์ชั่วคราว บันทึก baseline แล้วฝังภัยจำลองที่ไม่มีอันตราย **ทีละเคส** ลงในสำเนาใหม่ของเครื่องที่สะอาดทุกครั้ง แล้วนับว่าจับได้ที่ระดับความรุนแรงที่เคสนั้นกำหนดหรือเปล่า (ส่วนใหญ่ต้องถึง high ซึ่งจะ block) นอกจากนี้ยังฝังของปกติที่หน้าตาคล้ายกันด้วย บางอย่างเป็นส่วนหนึ่งของเครื่องที่สะอาด (registry ทางการของ npm ที่อ้าง `${NPM_TOKEN}`, jump host ใน `~/.ssh/config`, exec plugin ของ AWS ใน kubeconfig, ไฟล์ `.pth` ของ setuptools) ต้องไม่ทำให้เกิด finding ระดับ medium ขึ้นไปเลย อีกส่วนเป็นการแก้ไขธรรมดาหลังทำ baseline (เพิ่ม alias, registry ของบริษัทผ่าน https, plugin จาก krew เป็น exec plugin) แจ้งให้ตรวจดูได้ แต่ต้องไม่ block เครื่องจริงไม่ถูกแตะ และไม่มีอะไรที่ฝังไว้ถูกรันเลย
+
+```bash
+vswarm selftest           # แยกตามเทคนิค แสดงเคสที่พลาดและแจ้งเตือนผิด
+vswarm selftest --all     # ทุกเคส
+vswarm selftest --json
+```
 
 ![vswarm selftest](img/selftest.png)
 
-ตัวเลขนี้วัดเฉพาะเคสใน [`src/sec/selftest.ts`](../src/sec/selftest.ts) ไม่ใช่ทุกการโจมตีที่เป็นไปได้ ถ้าเจอเทคนิคที่ vswarm จับไม่ได้ การเพิ่มเคสตรงนั้นเป็นการช่วยที่มีประโยชน์ที่สุด
+รายการเคส ([`src/sec/selftest-cases.ts`](../src/sec/selftest-cases.ts)) อิง MITRE ATT&CK สำหรับการฝังตัวและการขโมย credential บน macOS, Linux และ Windows วัดเมื่อ 2026-11-07 ก่อนและหลังเพิ่มกฎที่ได้จากรายการนี้:
+
+| เทคนิค | เคส | จับได้ก่อน | จับได้ตอนนี้ | ของปกติ | แจ้งผิด |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| T1195.002 package อันตราย (typosquat, install script, `MAL-`, ชื่อแบบ PoC) | 8 | 7 | 8 | 1 | 0 |
+| T1195.002 config ของ package manager (`.npmrc`, pip, uv, yarn, cargo) | 8 | 0 | 8 | 4 | 0 |
+| T1543.001 Launch Agent | 3 | 3 | 3 | 1 | 0 |
+| T1543.002 / T1053.006 / T1547.013 systemd service, timer, XDG autostart | 3 | 3 | 3 | 1 | 0 |
+| T1547.015 login item ในแอป (เฉพาะ macOS) | 1 | 1 | 1 | | |
+| T1053.003 cron | 2 | 0 ¹ | 2 | | |
+| T1546.004 ไฟล์ start-up ของ shell | 6 | 3 | 6 | 4 | 0 |
+| T1574.006 dylib และ LD_PRELOAD | 4 | 1 | 4 | 1 | 0 |
+| T1574.007 ดัก PATH | 3 | 1 | 3 | 3 | 0 |
+| T1056 ดักรหัสผ่านด้วย sudo ปลอม, T1070.003 ปิด history | 3 | 1 | 3 | 1 | 0 |
+| T1098.004 authorized_keys, ~/.ssh/rc | 3 | 3 | 3 | | |
+| config ของ ssh client (`ProxyCommand`, `LocalCommand`, `Match exec`) | 3 | 1 | 3 | 2 | 0 |
+| config และ hook ของ git (`fsmonitor`, `sshCommand`, `hooksPath`) | 3 | 0 | 3 | 2 | 0 |
+| helper ของ CLI (exec ใน kubeconfig, `credential_process` ของ AWS) | 3 | 0 | 3 | 3 | 0 |
+| Docker context, `DOCKER_HOST`, credential helper | 3 | 0 | 3 | 2 | 0 |
+| T1176.002 task ของ editor และ extension ที่ลงเอง | 3 | 0 | 3 | 2 | 0 |
+| T1176.001 extension ของ browser, External Extensions | 2 | 1 | 2 | 2 | 0 |
+| AI agent: MCP server, hook, สิทธิ์ | 10 | 10 | 10 | 2 | 0 |
+| T1546.018 hook ตอน Python เริ่ม (`.pth`, usercustomize) | 2 | 0 | 2 | 3 | 0 |
+| T1036 โปรแกรมไม่มีลายเซ็นบน PATH | 1 | 1 | 1 | | |
+| T1552.001 / .004 credential ในไฟล์, key ไม่มี passphrase | 9 | 9 | 9 | | |
+| Windows: Run key, Startup, mshta/regsvr32, task, service, WMI, PowerShell profile | 10 | 10 | 10 | | |
+| **รวม** | **93** | **55 (59%)** | **93 (100%)** | **34** | **0** |
+
+¹ ตอนนั้น selftest ยังอ่าน crontab ปลอมไม่ได้ แต่ scan จริงอ่าน crontab ของคุณได้อยู่แล้ว
+
+เคสพวกนี้เราเขียนเองคู่กับกฎ: บอกได้ว่าครอบคลุมอะไรและกันไม่ให้พังในภายหลัง แต่ไม่ได้บอกว่า vswarm สู้กับผู้โจมตีที่อ่านกฎแล้วได้แค่ไหน CI รัน selftest บน macOS, Linux และ Windows ทุกครั้งที่ push เคสหนึ่งเขียนแค่ไม่กี่บรรทัด: ฝังอะไร finding ไหนต้องขึ้น และต้องรุนแรงแค่ไหน ส่วนเคสของปกติบอกว่าฝังอะไรและแจ้งได้มากสุดระดับไหน ถ้าเจอเทคนิคที่ vswarm จับไม่ได้ การเพิ่มเคสตรงนั้นเป็นการช่วยที่มีประโยชน์ที่สุด
+
+### ชื่อ package: scripts/bench-names.ts
+
+วัดว่า install guard หยุดชื่อ package อันตรายของจริงได้กี่ตัว **จากชื่ออย่างเดียว** แบบ offline: เช็กชื่อที่คล้ายชื่อยอดนิยม และชื่อที่บอกตัวเองว่าเป็นอะไร (`…-poc`, `dependency-confusion-…`, `…-grabber`) โดยตั้งใจไม่นับการเช็กกับ OSV เพราะชื่อพวกนี้อยู่ใน OSV อยู่แล้วทุกตัว
+
+```bash
+bun scripts/bench-names.ts            # ดาวน์โหลดราว 260 MB ครั้งเดียว เก็บไว้ที่ $TMPDIR/vswarm-bench (เลือกที่เองได้ด้วย --cache)
+bun scripts/bench-names.ts --fixture  # เขียนตัวอย่างชุดเล็กที่ test suite ใช้วัดใหม่ด้วย
+```
+
+ข้อมูล: record `MAL-` ใน export ของ OSV สำหรับ npm และ PyPI (bucket `osv-vulnerabilities` ไฟล์ `<ecosystem>/all.zip` เป็น advisory แบบ JSON อย่างเดียว ไม่มีโค้ดของ package) และชื่อของจริงจากอันดับยอดดาวน์โหลดชุดเดียวกับที่ใช้ทำ `popular.json` (npm-high-impact 1.13.0, top-pypi-packages) เฉพาะอันดับที่เลย `popular.json` ไปแล้ว เทคนิคอ่านจากข้อความใน advisory ถ้ามีบอก ซึ่งส่วนใหญ่บอกแค่ "Malicious code in X" วัดเมื่อ 2026-11-07 (อันดับ PyPI ของวันที่ 2026-11-01):
+
+| | npm | PyPI |
+| --- | --- | --- |
+| ชื่อ package อันตราย (ที่อยู่ในอันดับด้วย คือ release ที่ถูกวางยา ไม่นับ) | 223,206 (116) | 11,997 (10) |
+| จับได้จากชื่ออย่างเดียว ก่อน → ตอนนี้ | 0.3% → 0.7% จาก 223,090 | 7.5% → 8.0% จาก 11,987 |
+| ไม่นับ spam ปั่นแต้ม tea.xyz (140,725 ชื่อใน npm) | 0.8% → 1.9% จาก 82,365 | |
+| ที่รายงานว่าเป็น typosquat | 1.0% → 1.1% จาก 724 | 18.2% → 18.8% จาก 324 |
+| ที่รายงานว่าเป็น dependency confusion | 0% → 0.7% จาก 1,370 | 3.8% → 5.2% จาก 980 |
+| ที่รายงานว่าแอบอ้างเป็นคนอื่น | 0.7% → 1.0% จาก 828 | 2.5% → 3.7% จาก 81 |
+| แจ้งผิดกับ package ของจริง ก่อน → ตอนนี้ | 1.2% → 0.9% ของอันดับ 2,001–17,335 | 1.3% → 1.3% ของอันดับ 1,001–15,000 (1.1% ของ 5,001–15,000) |
+
+สิ่งที่เปลี่ยน: เลขเวอร์ชันที่พิมพ์ซ้ำ (`beautifulsoup44`, `urllib33`) นับเป็นพิมพ์ผิด ไม่ใช่อีกเวอร์ชัน ชื่อเก่าแบบไม่มี scope ของ Babel, Rollup และ esbuild (`babel-core`, `rollup-pluginutils`) เป็นของโปรเจกต์เอง ตรงนี้ลดการแจ้งผิดใน npm ไป 34 ตัว และชื่อที่บอกตัวเองว่าเป็น proof-of-concept, ตัวทดสอบ dependency confusion หรือตัวขโมยข้อมูล จะถูกจับ (ราว 960 ชื่อใน npm และ 60 ใน PyPI ไม่มีแจ้งผิดในชื่อของจริงเลย) ที่ลองแล้วเอาออก เพราะแจ้งผิดมากกว่าที่จับได้: ชื่อยอดนิยมที่พิมพ์ผิดแล้วมีคำต่อท้าย (`nodeaxois`, `momenntjs`), ชื่อที่ตัดท้ายหาย และรายชื่อยอดนิยมของ PyPI ที่ขยายเป็น 3,000 หรือ 5,000 ชื่อ (จับได้ 8.5–8.8% แทน 8.0% แต่แจ้งผิด 2.0–2.6% ของอันดับ 5,001–15,000 แทน 1.1%)
+
+ความหมาย: package อันตรายส่วนใหญ่มีชื่อที่ไม่เหมือนอะไรเลย การเช็กชื่อเป็นแค่ชั้นแรกที่ไม่ต้องใช้เน็ต ส่วนที่เหลือ guard หยุดด้วย record ของ OSV และข้อมูลจาก registry (package เพิ่งเกิดไม่กี่วัน ยอดดาวน์โหลดน้อย มี install script) ซึ่งต้องใช้เน็ตและไม่อยู่ในตัวเลขนี้ test suite วัดตัวอย่างที่ commit ไว้ คือชื่ออันตราย 1,050 ชื่อและชื่อของจริง 2,000 ชื่อ (`test/fixtures/bench/names.json`) และจะ fail ถ้าการแก้ไขทำให้จับได้น้อยลงหรือแจ้งผิดมากขึ้น
 
 ## 14. อัปเดตอย่างปลอดภัย: update และ trust
 
@@ -596,7 +675,7 @@ vswarm trust           # fingerprint ของกุญแจที่เคร�
 | `vswarm secrets` | credential อายุยาว (ไม่แสดงค่า) |
 | `vswarm agents` | MCP server, hook, permission ของ AI agent |
 | `vswarm agents --inspect [--show] [--no-sandbox] [--timeout s]` | เริ่ม MCP server ใน sandbox อ่านและ pin tool |
-| `vswarm watch on [--every นาที]` · `off` · `status` · `run` | ตรวจเบื้องหลังพร้อมแจ้งเตือน |
+| `vswarm watch on [--every นาที]` · `off` · `status` · `run` | ตรวจเบื้องหลังทุกชั่วโมงและทันทีที่มีการเปลี่ยน พร้อมแจ้งเตือน (`quick` คือสิ่งที่ job แบบ real-time รัน) |
 | `vswarm preflight [--quiet] [--strict] [--fresh] [--max-age s] [--then cmd…]` | ด่าน PASS/WARN/BLOCK |
 | `vswarm gate ssh <pattern…> [--cert]` · `gate status` · `gate remove` | ด่านใน `~/.ssh/config` |
 | `vswarm gate cmd [<ชื่อ> [pattern…]]` · `gate cmd --off <ชื่อ>` | ตัวเตือนก่อนคำสั่งที่ไม่มี hook ของ credential |
@@ -616,7 +695,7 @@ vswarm trust           # fingerprint ของกุญแจที่เคร�
 | `vswarm accept <id…>` · `--all` · `--list` · `--remove <id>` | ยอมรับสิ่งที่ตรวจแล้ว |
 | `vswarm team join <git url> [--fingerprint fp]` · `sync` · `status` · `leave` · `sign <file> --key k` | นโยบายของทีมที่เซ็นแล้ว ([team.md](team.md)) |
 | `vswarm canary plant aws\|dns\|env` · `list` · `remove <id\|all>` | credential ล่อ |
-| `vswarm selftest` | วัดอัตราการจับ |
+| `vswarm selftest [--all] [--json]` | วัดอัตราการจับและการแจ้งผิด แยกตามเทคนิค |
 | `vswarm update [--unsigned]` · `vswarm trust [pin]` | อัปเดตไป release ล่าสุดที่เซ็นถูกต้อง |
 | `vswarm doctor` · `install` · `uninstall [--purge]` · `completions zsh\|bash` · `version` | ติดตั้งและดูแล |
 
@@ -710,7 +789,8 @@ exit 4 ถ้าจะใช้ให้ใช้ใน WSL ส่วนที�
 
 - `watch` เป็น scheduled task ชื่อ `\vswarm\watch` ที่รัน launcher ทุกชั่วโมง (หรือตาม `--every` นาที) ผ่าน
   `conhost --headless` จึงไม่มีหน้าต่างเด้งขึ้นมา และแจ้งเตือนด้วย toast ตอนสแกนจะถือว่า task นี้เป็นของ vswarm
-  เฉพาะเมื่อคำสั่งของมันตรงกับที่ vswarm ลงทะเบียนไว้ทุกตัวอักษร
+  เฉพาะเมื่อคำสั่งของมันตรงกับที่ vswarm ลงทะเบียนไว้ทุกตัวอักษร Windows ไม่มีส่วน real-time เพราะ Task Scheduler
+  ไม่มี trigger ตอนไฟล์เปลี่ยนที่ใช้ได้โดยไม่ต้องให้ผู้ดูแลระบบเปิด auditing
 - `gate ssh "prod-*"` ใช้กับ OpenSSH ที่มากับ Windows ได้ คำสั่งตรวจรันผ่าน `cmd.exe` จึงต้อง escape ช่องว่างใน path
   ของ launcher ด้วย `^` (ถ้า path มี `%` หรือ `"` จะไม่ยอมใส่) และไม่ส่งชื่อ host ต่อไปให้ `cmd.exe` ส่วน `--cert`
   ยังไม่มีบน Windows

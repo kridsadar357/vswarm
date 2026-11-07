@@ -52,6 +52,7 @@ vswarm baseline             # on a machine you trust: "this is clean"
 vswarm diff                 # later: what changed since then
 vswarm secrets              # long-lived credentials (never prints values)
 vswarm selftest             # plant fake threats in a sandbox home, measure detection
+vswarm watch on             # check hourly, and within seconds when a login job, rc or agent config changes
 ```
 
 ### Gate production access
@@ -238,23 +239,38 @@ refused. No server, no upload: see [docs/team.md](docs/team.md) and [docs/server
 | Known-malicious | exact versions against [OSV](https://osv.dev) `MAL-` records | packages already reported |
 | Login jobs | LaunchAgents / LaunchDaemons, login items inside apps, crontab | persistence |
 | System extensions | network / endpoint-security system extensions, kernel extensions (macOS) | traffic and file interception |
-| Startup files | `.zshrc`, `.bashrc`, `.profile`, fish `conf.d`, `/etc/profile.d`, `.gitconfig`, `~/.ssh/config`, `authorized_keys`, `/etc/hosts` | persistence, backdoors, redirection |
+| Startup files | `.zshrc`, `.bashrc`, `.profile`, fish `conf.d`, `/etc/profile.d`, `environment.d`, `.gitconfig`, `~/.ssh/config`, `authorized_keys`, `/etc/hosts`: added lines that download, preload a library, hook the prompt, wrap sudo, put an odd folder first on PATH, run ssh `LocalCommand` / `Match exec` or git `fsmonitor` | persistence, backdoors, redirection |
+| Package manager config | `~/.npmrc`, `pip.conf`, `uv.toml`, `.yarnrc.yml`, cargo config: registries over plain http, bare IPs or look-alike hosts, `script-shell`, runners | every install or build redirected |
+| Programs other tools run | kubeconfig exec plugins, AWS `credential_process`, Docker credential helpers and contexts, editor tasks that run when a folder opens, Python `.pth` / `sitecustomize` hooks, global git hooks | code that runs with every CLI call |
 | Executables | new programs on PATH and their code signature | dropped binaries |
 | Right now | programs running from temp/cache/hidden folders; unsigned or ad-hoc signed programs holding outside connections | active implants |
 | Credentials | SSH keys without a passphrase, AWS `AKIA` keys, static kube tokens, plain docker/gh/npm/pypi tokens, Azure, gcloud, Vault and Terraform token files, `.env` files | what a thief would take |
-| Editors, browsers | VS Code / Cursor extensions; Chrome / Brave / Edge / Arc extensions and their permissions | extension malware |
+| Editors, browsers | VS Code / Cursor extensions, and ones that did not come from the marketplace; Chrome / Brave / Edge / Arc extensions, their permissions, and side-loaded ones | extension malware |
 
 ## Measured, not claimed
 
-`vswarm selftest` builds a fake home, records a clean baseline, plants harmless stand-ins for real attack steps,
-and prints what was caught:
+`vswarm selftest` builds a fake home, records a clean baseline, plants harmless stand-ins for real attack steps
+one at a time (grouped by MITRE ATT&CK technique: LaunchAgents, shell rc, cron and systemd timers, login items,
+dylib and LD_PRELOAD hijacks, authorized_keys, ssh and git config, package manager config, kubectl / aws / docker
+helpers, editor and browser extensions, MCP configs, Python start-up hooks, Windows Run keys, tasks, services and WMI),
+plants benign look-alikes of the same places, and prints what was caught and what raised a false alarm:
 
 ```
-detected 20/20 (100%) · false alarms on the clean parts: 0
+detected 93/93 (100%) · benign look-alikes quiet 34/34 · false alarms 0
 ```
 
-That number covers the cases in [`src/sec/selftest.ts`](src/sec/selftest.ts), not every attack. Adding a case for
-a technique you have seen is the most useful contribution you can make.
+Before the rules they led to, the same catalogue measured 55 of 93 (59%), with no false alarms: package manager
+config, CLI helpers, Python start-up hooks, editor tasks and several shell-file tricks were not caught at all. Those
+numbers cover the cases in [`src/sec/selftest-cases.ts`](src/sec/selftest-cases.ts), which are ours, not every
+attack. Adding a case for a technique you have seen is the most useful contribution you can make.
+
+The install guard's name checks, measured on real data with `bun scripts/bench-names.ts` (OSV's `MAL-` records for
+npm and PyPI, and download rankings past the 2,000 / 1,000 names the look-alike list holds; 2026-11-07): offline, by
+name alone, it stops **8.0% of PyPI's 11,987 malicious names** (18.8% of those reported as typosquats) and **1.9% of
+npm's 82,365** (leaving out 140,725 tea.xyz spam packages), with **1.3% and 0.9% false positives** on real packages
+ranked 1,001–15,000 and 2,001–17,335. Most malicious packages have names nothing resembles; the guard catches them
+with the OSV lookup and the registry's facts (age, downloads, install scripts), which this measurement leaves out on
+purpose. See [the guide](docs/guide.md#13-measure-detection-selftest).
 
 ## Updates are signed
 

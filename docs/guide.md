@@ -142,12 +142,48 @@ are exactly what vswarm wrote. Change one character and the block is checked lik
 ### vswarm watch
 
 Checks on its own every hour and notifies you (macOS notification, `notify-send` on Linux) the first time each
-new finding appears, so you hear about a planted login job the day it lands. Uses a LaunchAgent on macOS and a
-systemd user timer on Linux; vswarm recognises its own job, and reports it if anyone edits it.
+new finding appears. On macOS and Linux it also reacts **within seconds** when something writes to a place
+persistence lives, so you hear about a planted login job when it lands, not an hour later. vswarm runs no daemon of
+its own: launchd or systemd watches the paths and starts a short check.
 
 ```bash
 vswarm watch on [--every 60]     # vswarm watch status · vswarm watch off
 ```
+
+| | hourly | real time |
+| --- | --- | --- |
+| macOS | LaunchAgent `dev.vswarm.watch` (`StartInterval`) | LaunchAgent `dev.vswarm.watch.paths` (`WatchPaths`, at most one start every 10 s) |
+| Linux | systemd user timer `vswarm-watch.timer` | path unit `vswarm-watch.path` (`PathModified=`) starting `vswarm-watch-quick.service` |
+| Windows | scheduled task `\vswarm\watch` | none: Task Scheduler cannot start a task when a file changes without auditing an administrator sets up |
+
+What it watches: `~/Library/LaunchAgents`, systemd user units and XDG autostart, the shell start-up files, fish
+`conf.d` and `environment.d`, `~/.ssh` (config, authorized_keys, rc), `~/.gitconfig`, `~/.npmrc`, pip, uv, yarn and
+cargo config, the kubeconfig, `~/.aws/config` and Docker's config and contexts, MCP and agent configs (Claude Code,
+Claude Desktop, Cursor, Windsurf, Gemini, VS Code, Codex), editor task files and extension folders, the user
+site-packages, `~/.local/bin` and `~/bin`, and the global npm and bun folders.
+
+When one of them changes, the job waits 1.5 s for the burst of writes to settle (an installer writes many files; that
+is one check), works out from modification times which paths changed, and checks **only the parts of the scan that
+read them**, offline (the known-malicious lookup uses its cache, so a slow network cannot delay it). If more changed
+while it ran, it checks again; a second trigger while one check runs is covered by that check. It notifies only about
+findings at medium or above that it has not announced before, the same ones the hourly check would. A partial check
+is never saved as the verdict `preflight` reuses.
+
+vswarm's own writes do not set it off: its state folder is never watched, its blocks in your rc files and its job
+files are recognised as its own, so a check they trigger finds nothing new.
+
+Measured with a fake home on an M-series Mac, `fs.watch` standing in for launchd: a planted LaunchAgent reaches the
+notification in 1.52 s with the job's 1.5 s wait (five runs, 1,515–1,522 ms; the check itself takes 13–14 ms, and
+starting the `vswarm` command about 20 ms). `test/watch.test.ts` does the same with a 0.3 s wait: 0.32 s alone,
+0.6–0.7 s while the rest of the suite runs. launchd's and systemd's own start of the job comes on top and was not
+measured, since nothing is loaded into them in tests.
+
+Limits: launchd watches a path only while it exists, so on macOS the job lists the watched paths that exist when it
+is written, and the hourly check writes it again when that list changes (an agent installed since, a config file
+created). Apple calls `WatchPaths` race-prone, which is why the hourly check stays. systemd waits for a missing path
+to appear. Your crontab is kept where only root can read it, so a new cron line is seen by the hourly check. `vswarm
+watch status` and `vswarm doctor` show whether the real-time part is on; an older `watch on` gets it by running
+`vswarm watch on` again.
 
 ![vswarm watch run](img/watch-run.png)
 
@@ -699,13 +735,105 @@ Your own canaries are not reported by `secrets`. `vswarm canary remove <id|all>`
 
 ## 13. Measure detection: selftest
 
-Builds a fake home in a temp folder, records a baseline, plants harmless stand-ins for real attack steps, and counts
-what was caught. Your machine is not touched.
+Two measurements: `vswarm selftest` for what a scan finds on a machine, and `scripts/bench-names.ts` for what the
+install guard's name checks catch among real malicious packages.
+
+### Planted techniques: vswarm selftest
+
+Builds a fake home in a temp folder, records a baseline, and plants harmless stand-ins for real attack steps **one at
+a time**, each into a fresh copy of the clean machine, and counts what was caught at the severity the case asks for
+(most ask for high, which blocks). It also plants benign look-alikes: some are part of the clean machine (the official
+npm registry with a `${NPM_TOKEN}` reference, a jump host in `~/.ssh/config`, the AWS exec plugin in the kubeconfig,
+setuptools' `.pth` files) and must raise nothing at medium or above; others are ordinary edits after the baseline (an
+alias, a company registry over https, a krew plugin as exec plugin) that may be reported for review but must not
+block. Your machine is not touched; nothing planted is ever run.
+
+```bash
+vswarm selftest           # per technique; misses and false alarms listed
+vswarm selftest --all     # every case
+vswarm selftest --json
+```
 
 ![vswarm selftest](img/selftest.png)
 
-The number covers the cases in [`src/sec/selftest.ts`](../src/sec/selftest.ts), not every attack. Adding a case for
-a technique vswarm misses is the most useful contribution you can make.
+The catalogue ([`src/sec/selftest-cases.ts`](../src/sec/selftest-cases.ts)) follows MITRE ATT&CK for macOS, Linux
+and Windows persistence and credential access. Measured on 2026-11-07, before and after the rules this catalogue led
+to:
+
+| Technique | cases | caught before | caught now | benign | false alarms |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| T1195.002 malicious packages (typosquats, install scripts, `MAL-`, PoC names) | 8 | 7 | 8 | 1 | 0 |
+| T1195.002 package manager config (`.npmrc`, pip, uv, yarn, cargo) | 8 | 0 | 8 | 4 | 0 |
+| T1543.001 Launch Agents | 3 | 3 | 3 | 1 | 0 |
+| T1543.002 / T1053.006 / T1547.013 systemd services, timers, XDG autostart | 3 | 3 | 3 | 1 | 0 |
+| T1547.015 login items inside apps (macOS only) | 1 | 1 | 1 | | |
+| T1053.003 cron | 2 | 0 ¹ | 2 | | |
+| T1546.004 shell start-up files | 6 | 3 | 6 | 4 | 0 |
+| T1574.006 dylib and LD_PRELOAD hijacking | 4 | 1 | 4 | 1 | 0 |
+| T1574.007 PATH interception | 3 | 1 | 3 | 3 | 0 |
+| T1056 input capture (sudo wrappers), T1070.003 history off | 3 | 1 | 3 | 1 | 0 |
+| T1098.004 authorized_keys, ~/.ssh/rc | 3 | 3 | 3 | | |
+| ssh client config (`ProxyCommand`, `LocalCommand`, `Match exec`) | 3 | 1 | 3 | 2 | 0 |
+| git config and hooks (`fsmonitor`, `sshCommand`, `hooksPath`) | 3 | 0 | 3 | 2 | 0 |
+| CLI helpers (kubeconfig exec, AWS `credential_process`) | 3 | 0 | 3 | 3 | 0 |
+| Docker contexts, `DOCKER_HOST`, credential helpers | 3 | 0 | 3 | 2 | 0 |
+| T1176.002 editor tasks and side-loaded extensions | 3 | 0 | 3 | 2 | 0 |
+| T1176.001 browser extensions, External Extensions | 2 | 1 | 2 | 2 | 0 |
+| AI agents: MCP servers, hooks, permissions | 10 | 10 | 10 | 2 | 0 |
+| T1546.018 Python start-up hooks (`.pth`, usercustomize) | 2 | 0 | 2 | 3 | 0 |
+| T1036 unsigned program dropped on PATH | 1 | 1 | 1 | | |
+| T1552.001 / .004 credentials in files, keys without a passphrase | 9 | 9 | 9 | | |
+| Windows: Run keys, Startup, mshta/regsvr32, tasks, services, WMI, PowerShell profile | 10 | 10 | 10 | | |
+| **all** | **93** | **55 (59%)** | **93 (100%)** | **34** | **0** |
+
+¹ The selftest could not read a fake crontab then; a real scan did read yours.
+
+These are our own cases, written alongside the rules: they show what is covered and stop it from breaking, not how
+vswarm does against an attacker who has read the rules. The CI runs the selftest on macOS, Linux and Windows on
+every push. A case is a few lines: what to plant, which finding must appear and how severe; a benign case says what
+it plants and the most it may raise. Adding one for a technique you have seen is the most useful contribution you can
+make.
+
+### Package names: scripts/bench-names.ts
+
+How many real malicious package names the install guard stops **by name alone**, offline: the look-alike check against
+the popular names and the names that announce themselves (`…-poc`, `dependency-confusion-…`, `…-grabber`). The OSV
+lookup is left out on purpose: it would catch every one of these by definition.
+
+```bash
+bun scripts/bench-names.ts            # downloads about 260 MB once, into $TMPDIR/vswarm-bench (--cache dir to choose)
+bun scripts/bench-names.ts --fixture  # also rewrite the small sample the test suite measures
+```
+
+Data: the `MAL-` records in OSV's npm and PyPI exports (`osv-vulnerabilities` bucket, `<ecosystem>/all.zip`; JSON
+advisories only, no package code), and as real names the same download rankings `popular.json` comes from
+(npm-high-impact 1.13.0, top-pypi-packages), ranks past what `popular.json` holds. The technique comes from the
+advisory's text where it names one; most say only "Malicious code in X". Measured 2026-11-07 (PyPI ranking of
+2026-11-01):
+
+| | npm | PyPI |
+| --- | --- | --- |
+| malicious names (also on the ranking: poisoned releases, left out) | 223,206 (116) | 11,997 (10) |
+| caught by name alone, before → now | 0.3% → 0.7% of 223,090 | 7.5% → 8.0% of 11,987 |
+| without tea.xyz token-farming spam (140,725 npm names) | 0.8% → 1.9% of 82,365 | |
+| reported as typosquats | 1.0% → 1.1% of 724 | 18.2% → 18.8% of 324 |
+| reported as dependency confusion | 0% → 0.7% of 1,370 | 3.8% → 5.2% of 980 |
+| reported as impersonation | 0.7% → 1.0% of 828 | 2.5% → 3.7% of 81 |
+| false positives on ranked real names, before → now | 1.2% → 0.9% of ranks 2,001–17,335 | 1.3% → 1.3% of ranks 1,001–15,000 (1.1% of 5,001–15,000) |
+
+What changed: a doubled version digit (`beautifulsoup44`, `urllib33`) is a typo, not another version; Babel's,
+Rollup's and esbuild's old unscoped names (`babel-core`, `rollup-pluginutils`) are their own, which removed 34 npm
+false positives; names that say they are a proof-of-concept, a dependency-confusion probe or a stealer are flagged
+(about 960 npm and 60 PyPI names, no false positive among the ranked ones). Tried and dropped, because they cost more
+false positives than they caught: typos inside an added word (`nodeaxois`, `momenntjs`), truncated names, and a
+look-alike list of 3,000 or 5,000 PyPI names (8.5–8.8% caught instead of 8.0%, but 2.0–2.6% false positives on ranks
+5,001–15,000 instead of 1.1%).
+
+What it means: most malicious packages have names that resemble nothing; the name check is the first, offline layer.
+The guard stops the rest with OSV's known-malicious records and the registry's facts (a package days old with few
+downloads, an install script), which need the network and are not in this number. The test suite measures a
+committed sample of 1,050 malicious and 2,000 real names (`test/fixtures/bench/names.json`) and fails if a change
+catches fewer or flags more.
 
 ## 14. Safe updates: update and trust
 
@@ -738,7 +866,7 @@ Maintainers: the release steps are in [SECURITY.md](../SECURITY.md#for-the-maint
 | `vswarm secrets` | long-lived credentials (values never shown) |
 | `vswarm agents` | MCP servers, hooks, permissions of AI agents |
 | `vswarm agents --inspect [--show] [--no-sandbox] [--timeout s]` | start MCP servers sandboxed, read and pin their tools |
-| `vswarm watch on [--every min]` · `off` · `status` · `run` | background check with notifications |
+| `vswarm watch on [--every min]` · `off` · `status` · `run` | background check, hourly and on changes, with notifications (`quick` is what the real-time job runs) |
 | `vswarm preflight [--quiet] [--strict] [--fresh] [--max-age s] [--then cmd…]` | the PASS/WARN/BLOCK gate |
 | `vswarm gate ssh <pattern…> [--cert]` · `gate status` · `gate remove` | the gate in `~/.ssh/config` |
 | `vswarm gate cmd [<name> [pattern…]]` · `gate cmd --off <name>` | a reminder before commands with no credential hook |
@@ -758,7 +886,7 @@ Maintainers: the release steps are in [SECURITY.md](../SECURITY.md#for-the-maint
 | `vswarm accept <id…>` · `--all` · `--list` · `--remove <id>` | accept reviewed findings |
 | `vswarm team join <git url> [--fingerprint fp]` · `sync` · `status` · `leave` · `sign <file> --key k` | a signed team policy ([team.md](team.md)) |
 | `vswarm canary plant aws\|dns\|env` · `list` · `remove <id\|all>` | decoy credentials |
-| `vswarm selftest` | measured detection rate |
+| `vswarm selftest [--all] [--json]` | measured detection and false alarms, per technique |
 | `vswarm update [--unsigned]` · `vswarm trust [pin]` | updates to the newest correctly signed release |
 | `vswarm doctor` · `install` · `uninstall [--purge]` · `completions zsh\|bash` · `version` | set-up |
 
@@ -870,7 +998,8 @@ Working: everything except `try`, `agents --inspect` (they need the sandbox), `c
 stop with exit 4; use those inside WSL. What differs from macOS and Linux:
 
 - `watch` is a scheduled task `\vswarm\watch` that runs the launcher every hour (or `--every` minutes) through
-  `conhost --headless`, so no window flashes up, and shows a toast. The scan recognises that task as vswarm's own only
+  `conhost --headless`, so no window flashes up, and shows a toast. There is no real-time part on Windows: Task
+  Scheduler has no trigger for a changed file that works without an administrator turning on auditing. The scan recognises that task as vswarm's own only
   while its action is exactly what vswarm registered.
 - `gate ssh "prod-*"` works with the OpenSSH that ships with Windows. Its check runs in `cmd.exe`, so the launcher
   path is escaped with `^` (a `%` or `"` in it is refused) and the host name is not passed on. `--cert` is not on

@@ -61,9 +61,13 @@ the background watch, remove the ssh gate from `~/.ssh/config`, edit or delete t
 key vswarm uses to seal them, or simply run `vswarm unlock --force`. vswarm cannot stop that, and does not claim to.
 What it does:
 
-- **Finds** what such malware typically leaves behind (login jobs, shell lines, packages, MCP servers, binaries,
-  connections) on the next scan, before you use the machine for production, and refuses to hand out access when it
-  sees it.
+- **Finds** what such malware typically leaves behind (login jobs, shell lines, package manager and tool configs,
+  packages, MCP servers, binaries, connections) on the next scan, before you use the machine for production, and
+  refuses to hand out access when it sees it. With `vswarm watch on`, a write to one of those places on macOS or Linux
+  is checked within seconds, not at the next hourly run; malware running as you can still remove the watch first.
+  How much the scans and the install guard catch is measured, per technique, by `vswarm selftest` and
+  `scripts/bench-names.ts`, on our own planted cases and on OSV's malicious-package names; the numbers and what they
+  leave out are in [the guide](docs/guide.md#13-measure-detection-selftest).
 - **Seals its own state.** The last verdict, the lock, the baseline and the accepted findings carry an HMAC whose key
   is kept outside `~/.vswarm` (macOS Keychain, the Linux Secret Service when there is one, Windows DPAPI). A file
   edited or forged by hand is not trusted: a cached verdict without a valid seal is never reused, a lock with a bad
@@ -109,7 +113,7 @@ What it does:
 ## Not a vulnerability
 
 - An attack technique vswarm does not detect yet. Please open an issue or, better, a pull request that adds it to
-  `src/sec/selftest.ts` with a rule that catches it.
+  `src/sec/selftest-cases.ts`, with a benign look-alike next to it and a rule that catches the one and not the other.
 - Malware that already has root, or hides below the operating system. vswarm says so in its README.
 - A program running as you that reads the sealing key, stops the watch, edits `~/.ssh/config` or runs
   `vswarm unlock --force`: same-user code can do what you can (see above).
