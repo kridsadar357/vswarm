@@ -9,11 +9,12 @@
 // No daemon of vswarm's own: launchd and systemd do the watching and start a short check. The job files are recorded
 // as vswarm's own, so the scan does not report them as a new login job.
 
-import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { existsSync, mkdirSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { HOME, paths } from "../home";
-import { exec, ls, mtime, powershell, readJson, readText, realCtx, run, type Ctx } from "./ctx";
+import { exec, ls, powershell, readJson, readText, realCtx, run, type Ctx } from "./ctx";
 import { RC_FILES } from "./collect/system";
 import { TOOL_CONFIGS } from "./collect/tools";
 import { check, type Check } from "./engine";
@@ -113,7 +114,7 @@ export function watchTable(home: string, os: NodeJS.Platform = process.platform)
     { part: "launchd", paths: h("Library/LaunchAgents") },
     { part: "login items inside apps", paths: h("Applications") },
     { part: "systemd and autostart", paths: h(".config/systemd/user", ".config/autostart") },
-    // ~/.ssh as a folder too: an authorized_keys or rc that did not exist yet appears there.
+    // ~/.ssh as a folder too: an authorized_keys or rc that did not exist yet appears there (known_hosts aside, see seen).
     { part: "startup files", paths: [...RC_FILES.map((f) => join(home, f)), ...h(".ssh", ".config/fish/conf.d")] },
     { part: "package manager and session config", paths: [...TOOL_CONFIGS.map((f) => join(home, f)), ...h(".config/pip", ".config/environment.d")] },
     { part: "programs other tools run", paths: [...h(".kube/config", ".aws/config", ".docker/config.json", ".docker/contexts/meta", "Library/Application Support/Code/User/tasks.json", ".config/Code/User/tasks.json", "Library/Application Support/Cursor/User/tasks.json", ".config/Cursor/User/tasks.json"), ...sites] },
@@ -148,12 +149,31 @@ export function partsFor(changed: string[], home: string, os: NodeJS.Platform = 
   return table.filter((t) => t.paths.map(slash).some((p) => ch.some((c) => c === p || c.startsWith(p + "/")))).map((t) => t.part);
 }
 
-/** The modification time of each watched path; a folder's changes when an entry is added, removed or renamed. */
+/**
+ * What each watched path looks like: when it last changed (the later of its modification and status-change times; the
+ * second cannot be set back by hand, so a file put back to its old mtime still counts as changed). A folder changes
+ * when an entry is added, removed or renamed. ~/.ssh is told by the names in it, known_hosts and its temporary and
+ * .old copies aside: ssh rewrites those on its own at every new host, and that is not worth a check.
+ */
+function stampOf(p: string, sshDir: string): number | undefined {
+  try {
+    const st = statSync(p);
+    if (p === sshDir && st.isDirectory()) {
+      const names = readdirSync(p).filter((n) => !/^known_hosts/.test(n)).sort().join("\0");
+      return parseInt(createHash("sha256").update(names).digest("hex").slice(0, 12), 16);
+    }
+    return Math.round(Math.max(st.mtimeMs, st.ctimeMs));
+  } catch {
+    return;
+  }
+}
+
 function seen(home: string): Record<string, number> {
   const out: Record<string, number> = {};
+  const sshDir = join(home, ".ssh");
   for (const p of [...new Set(watchTable(home).flatMap((t) => t.paths))]) {
-    const t = mtime(p);
-    if (t !== undefined) out[p] = Math.round(t);
+    const t = stampOf(p, sshDir);
+    if (t !== undefined) out[p] = t;
   }
   return out;
 }
@@ -366,18 +386,29 @@ export async function watchRun(): Promise<{ fresh: Finding[]; verdict: string }>
  * launchd watches only paths that existed when the job was loaded. When that list has changed (an agent installed
  * since, a config file created), the hourly run writes the real-time job again and reloads it.
  */
-async function refreshRealtime() {
-  if (!mac() || !realtimeInstalled()) return;
-  const file = plistPath(homedir(), PATHS_LABEL);
+export async function refreshRealtime(opt: { home?: string; os?: NodeJS.Platform; run?: (cmd: string[], timeoutMs: number) => Promise<unknown> } = {}): Promise<boolean> {
+  const home = opt.home ?? homedir(), os = opt.os ?? process.platform;
+  const file = plistPath(home, PATHS_LABEL);
+  if (os !== "darwin" || !existsSync(file)) return false;
   const launcher = /<string>([^<]+)<\/string><string>watch<\/string>/.exec(readText(file) ?? "")?.[1]?.replace(/&lt;/g, "<").replace(/&amp;/g, "&");
-  if (!launcher) return;
-  const want = jobFiles(launcher)[file];
-  if (!want || want === readText(file)) return;
+  if (!launcher) return false;
+  const want = jobFiles(launcher, 60, home, os)[file];
+  if (!want || want === readText(file)) return false;
+  const before = seen(home);
   writeFileSync(file, want);
   recordManagedFile(want);
   const uid = process.getuid?.() ?? 501;
-  await run(["launchctl", "bootout", `gui/${uid}/${PATHS_LABEL}`], 10_000);
-  await run(["launchctl", "bootstrap", `gui/${uid}`, file], 10_000);
+  await (opt.run ?? run)(["launchctl", "bootout", `gui/${uid}/${PATHS_LABEL}`], 10_000);
+  await (opt.run ?? run)(["launchctl", "bootstrap", `gui/${uid}`, file], 10_000);
+  // This write, and launchd loading the job again, must not set off the job itself: what it changed among the watched
+  // paths is taken as seen. Anything else that changed since the last check still counts.
+  const after = seen(home);
+  const st = watchState().state;
+  const mine = Object.fromEntries(Object.keys({ ...before, ...after }).filter((p) => before[p] !== after[p]).map((p) => [p, after[p]]));
+  const merged = { ...(st?.seen ?? {}), ...mine };
+  for (const p of Object.keys(mine)) if (after[p] === undefined) delete merged[p];
+  writePrivate(stateFile(), { at: st?.at ?? 0, verdict: st?.verdict ?? "", told: st?.told ?? [], ...st, seen: merged } satisfies State);
+  return true;
 }
 
 /**
@@ -399,8 +430,11 @@ export async function watchQuick(opt: { ctx?: Ctx; debounceMs?: number; notify?:
       await Bun.sleep(wait);
       const now = seen(ctx.home);
       const changed = [...new Set([...Object.keys(now), ...Object.keys(before ?? {})])].filter((p) => now[p] !== before?.[p]);
-      // Nothing to put it down to (a first run, a deletion launchd saw): every file-based part, still offline.
-      const these = before && changed.length ? partsFor(changed, ctx.home) : watchTable(ctx.home).map((t) => t.part);
+      // Nothing changed among the watched paths: a known_hosts write in ~/.ssh, launchd loading the job again. A
+      // deletion changes them too (the path is gone), and a write cannot hide: status-change times cannot be set back.
+      if (before && !changed.length) break;
+      // Nothing to compare with (a first run): every file-based part, still offline.
+      const these = before ? partsFor(changed, ctx.home) : watchTable(ctx.home).map((t) => t.part);
       const t0 = Date.now();
       const r = await check(ctx, { offline: true, only: these });
       const prev = watchState().state;

