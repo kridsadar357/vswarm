@@ -325,7 +325,8 @@ export async function evaluate(input: RuleInput): Promise<Finding[]> {
       // Windows entries (Run values, tasks, services, Startup) say what they are, and their command lines are Windows'.
       const what = i.meta?.what ? capital(String(i.meta.what)) : undefined;
       if (what) {
-        const r = winLaunchRisk(prog, home);
+        // Against the Windows home the entry belongs to (the scan's own, or a snapshot fixture's).
+        const r = winLaunchRisk(prog, String(i.meta?.home ?? home));
         if (r.risky || r.where) {
           add({ id: `launch-location:${i.id}`, rule: "launch-location", severity: r.risky ? "high" : placeSeverity(r.where!), title: `${what} ${i.name} ${r.risky ?? `starts a program that ${r.where}`}`,
             detail: [i.path ?? "", redact(prog.slice(0, 300))], fix: "Unless you set this up yourself, vswarm respond", item: i });

@@ -866,10 +866,14 @@ to:
 | T1546.018 Python start-up hooks (`.pth`, usercustomize) | 2 | 0 | 2 | 3 | 0 |
 | T1036 unsigned program dropped on PATH | 1 | 1 | 1 | | |
 | T1552.001 / .004 credentials in files, keys without a passphrase | 9 | 9 | 9 | | |
-| Windows: Run keys, Startup, mshta/regsvr32, tasks, services, WMI, PowerShell profile | 10 | 10 | 10 | | |
-| **all** | **93** | **55 (59%)** | **93 (100%)** | **34** | **0** |
+| Windows: Run keys, Startup, mshta/regsvr32/rundll32, tasks, services, WMI, PowerShell profile, Defender exclusions | 20 | 19 ² | 20 | 5 | 0 |
+| **all** | **103** | **64 (62%)** | **103 (100%)** | **39** | **0** |
 
 ¹ The selftest could not read a fake crontab then; a real scan did read yours.
+² Ten Windows cases and five Windows look-alikes added after 2.7.1, measured against 2.7.1's rules. On macOS and
+Linux it missed a Run value with `%TEMP%` left unexpanded, as the registry keeps it: the snapshot's paths were judged
+against the fake home of the system running the selftest, not the Windows user's. Each Windows case runs on every
+system, through a fake snapshot.
 
 These are our own cases, written alongside the rules: they show what is covered and stop it from breaking, not how
 vswarm does against an attacker who has read the rules. The CI runs the selftest on macOS, Linux and Windows on

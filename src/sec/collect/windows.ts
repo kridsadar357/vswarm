@@ -29,6 +29,11 @@ export interface WinSnapshot {
   /** The real Documents folder ([Environment]::GetFolderPath('MyDocuments')); often redirected into OneDrive. */
   docs?: string;
   pshome?: string;
+  /**
+   * The Windows user's home the paths in the snapshot are relative to, when it is not the scan's home: a snapshot of a
+   * Windows machine judged elsewhere (vswarm selftest on macOS and Linux). The snapshot script leaves it out.
+   */
+  home?: string;
   /** Sections that failed, with why. Each one becomes a gap. */
   errors?: Record<string, string>;
 }
@@ -189,8 +194,10 @@ export function windowsItems(snap: WinSnapshot, home: string, read: (path: strin
   const texts: Record<string, string> = {};
   const gaps: Record<string, string> = {};
   for (const [k, v] of Object.entries(snap.errors ?? {})) gaps[`Windows ${k}`] = str(v).slice(0, 300);
+  // The rules read %TEMP% and ~\.hidden against the Windows home, which is the scan's own except for a fixture.
+  const winHome = WIN_PATH.test(str(snap.home)) && str(snap.home) !== home ? str(snap.home) : undefined;
   const launch = (id: string, name: string, what: string, source: string, program: string, path?: string, extra = "") => {
-    const i: Item = { kind: "launch", id, name, path, source, hash: sha256(program + extra), meta: { program: program.slice(0, 400), what } };
+    const i: Item = { kind: "launch", id, name, path, source, hash: sha256(program + extra), meta: { program: program.slice(0, 400), what, ...(winHome ? { home: winHome } : {}) } };
     items.push(i);
     return i;
   };
@@ -264,6 +271,7 @@ const LOOPBACK = /^(127\.|::1$|::ffff:127\.|0\.0\.0\.0$|::$)/;
 
 /** What runs from an odd place right now, and which programs talk to other machines. */
 export function winLive(snap: WinSnapshot, home: string): Item[] {
+  if (WIN_PATH.test(str(snap.home))) home = str(snap.home);
   const out = new Map<string, Item>();
   const exeOf = new Map<number, string>();
   for (const p of arr(snap.processes)) {

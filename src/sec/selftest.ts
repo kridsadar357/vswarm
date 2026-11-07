@@ -68,10 +68,16 @@ export async function selftest(opt: { cases?: Case[]; benign?: Benign[] } = {}):
       fake.crontab = clean.crontab;
     };
     const falseAlarms: Finding[] = [];
-    // The clean machine itself, with its look-alike configs: anything at medium or above is a false alarm.
+    // The clean machine itself, with its look-alike configs: anything at medium or above is a false alarm, unless it
+    // is about a look-alike allowed to raise that much (a program in a hidden folder of its own warns).
     const calm = await check(ctx, { offline: true });
     const loud = calm.findings.filter((f) => RANK[f.severity] >= RANK.medium);
-    falseAlarms.push(...loud);
+    const about = (b: Benign, f: Finding) => {
+      const mine = [...(wrote.get(b.name) ?? [])];
+      return [f.item?.path, f.item?.id, ...f.detail].some((x) => x && mine.some((p) => p === x || p.endsWith(`/${x}`) || x.includes(p)));
+    };
+    const owner = (f: Finding) => benign.find((b) => b.when === "clean" && about(b, f));
+    falseAlarms.push(...loud.filter((f) => RANK[f.severity] > RANK[owner(f)?.max ?? "info"]));
 
     const out: SelftestResult["cases"] = [];
     for (const c of cases) {
@@ -90,10 +96,9 @@ export async function selftest(opt: { cases?: Case[]; benign?: Benign[] } = {}):
     const quiet: SelftestResult["benign"] = [];
     for (const b of benign) {
       if (b.when === "clean") {
-        // Part of the clean machine: judged by what the clean check raised about the files it wrote.
-        const mine = [...(wrote.get(b.name) ?? [])];
-        const about = loud.filter((f) => [f.item?.path, f.item?.id, ...f.detail].some((x) => x && mine.some((p) => p === x || p.endsWith(`/${x}`) || x.includes(p))));
-        quiet.push({ name: b.name, technique: b.technique, when: b.when, ok: !about.length, severity: worst(about), max: b.max });
+        // Part of the clean machine: judged by what the clean check raised about the files and entries it planted.
+        const its = loud.filter((f) => about(b, f));
+        quiet.push({ name: b.name, technique: b.technique, when: b.when, ok: !its.some((f) => RANK[f.severity] > RANK[b.max]), severity: worst(its), max: b.max });
         continue;
       }
       reset();

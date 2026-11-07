@@ -647,3 +647,33 @@ describe("windows: a program kept in a hidden folder of its own in the home", ()
     expect(fs.find((f) => f.rule === "proc-location")?.severity).toBe("high");
   });
 });
+
+describe("windows: a snapshot judged against its own Windows home (the selftest on macOS and Linux)", () => {
+  const posixHome = "/tmp/vswarm-selftest-x/home";
+  const snap = (): WinSnapshot => ({
+    home: HOME,
+    runKeys: [
+      { hive: "HKCU", key: "Software\\Microsoft\\Windows\\CurrentVersion\\Run", name: "Upd", command: "%TEMP%\\u.exe" },
+      { hive: "HKCU", key: "Software\\Microsoft\\Windows\\CurrentVersion\\Run", name: "Mine", command: `"${HOME}\\.tools\\t.exe"` },
+    ],
+    processes: [{ pid: 7, exe: `${HOME}\\.tools\\t.exe`, mine: true }],
+  });
+
+  test("the snapshot's home goes on its launch items only when it is not the scan's, and the rules read %TEMP% and ~\\.x against it", async () => {
+    const r = windowsItems(snap(), posixHome, () => undefined);
+    expect(r.items.map((i) => i.meta?.home)).toEqual([HOME, HOME]);
+    expect(windowsItems(snap(), HOME, () => undefined).items.every((i) => i.meta?.home === undefined)).toBe(true);
+    expect(windowsItems({ ...snap(), home: "/not/windows" }, posixHome, () => undefined).items.every((i) => i.meta?.home === undefined)).toBe(true);
+    const t = titles(await run({ version: 1, host: "t", user: "t", home: posixHome, at: 0, items: r.items, texts: {}, gaps: {}, covers: COVERS }));
+    expect(t).toContain("high HKCU Run value Upd starts a program that runs from a temp folder");
+    expect(t).toContain("medium HKCU Run value Mine starts a program that runs from a hidden folder (~\\.tools)");
+    // Without the snapshot's home the same entries cannot be placed: %TEMP% expands into the posix home.
+    const bare = windowsItems({ ...snap(), home: undefined }, posixHome, () => undefined);
+    expect(titles(await run({ version: 1, host: "t", user: "t", home: posixHome, at: 0, items: bare.items, texts: {}, gaps: {}, covers: COVERS }))).toEqual([]);
+  });
+
+  test("winLive judges running programs against the snapshot's home too", () => {
+    expect(winLive(snap(), posixHome).map((i) => i.meta?.where)).toEqual(["runs from a hidden folder (~\\.tools)"]);
+    expect(winLive({ ...snap(), home: undefined }, posixHome)).toEqual([]);
+  });
+});

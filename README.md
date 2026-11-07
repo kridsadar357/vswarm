@@ -264,7 +264,7 @@ helpers, editor and browser extensions, MCP configs, Python start-up hooks, Wind
 plants benign look-alikes of the same places, and prints what was caught and what raised a false alarm:
 
 ```
-detected 93/93 (100%) · benign look-alikes quiet 34/34 · false alarms 0
+detected 103/103 (100%) · benign look-alikes quiet 39/39 · false alarms 0
 ```
 
 Before the rules they led to, the same catalogue measured 55 of 93 (59%), with no false alarms: package manager
