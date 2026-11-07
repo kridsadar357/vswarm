@@ -257,7 +257,7 @@ describe("command gate: the shell functions", () => {
     writeFileSync(bash, "export EDITOR=vi\r\n");
     const where: GateFiles = { files: [zsh, bash], body: (g) => cmdGateBlock("/v/vswarm", g) };
     const said = await quiet(() => gateCmd(["psql", "*.prod"], where));
-    expect(said).toContain("a reminder you can bypass, not a control: command psql");
+    expect(said).toContain(`a reminder you can bypass, not a control: ${process.platform === "win32" ? "psql.exe" : "command psql"}`);
     await quiet(() => gateCmd(["telnet"], where));
     expect(loadCmdGates().tools.psql.patterns).toEqual(["*.prod"]);
     for (const f of [zsh, bash]) {
