@@ -47,8 +47,10 @@ git clone https://github.com/kridsadar357/vswarm.git && cd vswarm && ./vswarm in
 ## Use
 
 ```bash
-vswarm scan                 # what is on this machine that deserves attention
-vswarm baseline             # on a machine you trust: "this is clean"
+vswarm scan                 # what is on this machine that deserves attention (numbered findings, on stdout)
+vswarm why                  # each finding with the exact command to fix it or accept it, and the WARN policy
+vswarm fix 2 · vswarm ok 3  # fix finding 2 (shows what, asks first) · accept finding 3
+vswarm baseline             # on a machine you trust: "this is clean" (refused over HIGH/CRIT findings unless --accept-high)
 vswarm diff                 # later: what changed since then
 vswarm secrets              # long-lived credentials (never prints values)
 vswarm selftest             # plant fake threats in a sandbox home, measure detection
@@ -59,7 +61,7 @@ vswarm watch on             # check hourly, and within seconds when a login job,
 
 ```bash
 vswarm gate ssh "prod-*" "*.wallet.internal"     # adds a Match block to ~/.ssh/config (backup kept)
-vswarm agent protect ~/.ssh/prod_key && vswarm agent on   # the key moves into an ssh agent that signs only while the machine passes
+vswarm agent protect ~/.ssh/prod_key             # tries the key on its hosts, then moves it into an ssh agent that signs only while the machine passes
 vswarm gate aws prod-sso prod-admin               # the profile's credential_process runs preflight first (backup kept)
 vswarm gate kube prod                             # the context's exec plugin runs preflight first (backup kept)
 ```
@@ -67,8 +69,9 @@ vswarm gate kube prod                             # the context's exec plugin ru
 `gate aws` handles SSO profiles, profiles with a `credential_process`, and roles (`role_arn` + `source_profile`, gated
 at their source); `gate kube` handles users with an exec plugin (`aws eks get-token`, `gke-gcloud-auth-plugin`,
 kubelogin), in whichever `KUBECONFIG` file defines them. Static AWS keys, static kube tokens and client certificates
-are refused, because those are sent without running anything. `--off` puts the files back as they were, and `status`
-notices a later hand edit ([guide](docs/guide.md#aws-and-kubernetes)). Or by hand:
+are refused, because those are sent without running anything. `--off` puts the files back as they were (backups live
+in `~/.vswarm/backups` and go with the gate), and `status` notices a later hand edit, static keys added since, and a
+look-alike wrapper ([guide](docs/guide.md#aws-and-kubernetes)). Or by hand:
 
 ```ini
 # ~/.aws/config
@@ -88,14 +91,23 @@ users:
 ```
 
 `vswarm gate gcloud <configuration>` puts the same check in front of a workload-identity credential's token command;
-`vswarm gate cmd psql "*.prod.internal"` (and `gate az`) is a shell reminder for tools with no credential hook, one
+`vswarm gate cmd psql "*.prod.internal"` (and `gate az "<subscription>"`, or `gate az --all`) is a shell reminder for tools with no credential hook, one
 you can bypass with `command psql` ([guide](docs/guide.md#commands-with-no-credential-hook-gate-cmd)).
 
 The config gate is advice to OpenSSH; `vswarm agent` puts the check on the key itself, so `ssh -F /dev/null`, an IP
 address or another client gets no signature from a machine that does not pass ([guide](docs/guide.md#vswarm-agent)).
+`agent protect` proves the key first: it checks the machine, finds the hosts in `~/.ssh/config` that use the key, logs
+in to them with it while the file is still on disk, and removes the file only once a host accepted it. For the hosts
+it routes, the agent's block runs the same decision before each login, so a refusal is said on the terminal with the
+way out, and ends in `Permission denied`, never a password prompt (`agent on --allow-passwords` for hosts that need
+one).
 
-`vswarm preflight` exits **0** on PASS and WARN, **3** on BLOCK (and **2** on WARN with `--strict`). A verdict is
-reused for two minutes, so gating every `kubectl` call costs about 20 ms. A fresh check takes about 0.2 s.
+**One policy for WARN**, for every gate and the agent: BLOCK is always refused, WARN is let through by default and
+refused everywhere with `vswarm policy warn refuse`. `vswarm preflight` exits **0** on PASS and on a WARN the policy
+lets through, **2** on a WARN it refuses (or with `--strict`), **3** on BLOCK; `--json` gives the decision as data. A
+verdict is reused for two minutes, so gating every `kubectl` call costs about 20 ms. A fresh check takes about 0.2 s.
+`vswarm gate status` and `vswarm doctor` also say which gated hosts no longer answer (DNS and the ssh port, 2 s), and
+`vswarm gate ssh --prune` drops the ones you confirm.
 
 ### Short-lived SSH certificates
 
@@ -173,7 +185,9 @@ A bare `npm install` / `npm ci` checks every locked version against OSV. Blockin
 `command npm …`, or turn it off with `vswarm guard off`. Check by hand without the wrapper:
 `vswarm pkg npm install <name>`. If a registry cannot be reached, the install goes ahead with a notice (`guard on --strict`
 stops instead). Opt-in: `guard on --ignore-scripts` runs npm/pnpm/yarn/bun installs with their install scripts off, and
-`--sandbox` runs them in the `try` sandbox inside your project folder; see the [guide](docs/guide.md#8-check-packages-before-they-install-guard-and-pkg).
+`--sandbox` runs them in the `try` sandbox inside your project folder, through Socket Firewall too when `sfw` is
+installed; where there is no sandbox, `--sandbox` is refused and such installs stop rather than run outside one. See
+the [guide](docs/guide.md#8-check-packages-before-they-install-guard-and-pkg).
 The guard also reads what is inside a package before it installs: install-time code that decodes and runs hidden code,
 reads credentials, reaches the network or persists, and what is new since the version before (`vswarm pkg check npm <name>`
 reads one without installing).
@@ -252,7 +266,7 @@ refused. No server, no upload: see [docs/team.md](docs/team.md) and [docs/server
 | Programs other tools run | kubeconfig exec plugins, AWS `credential_process`, Docker credential helpers and contexts, editor tasks that run when a folder opens, Python `.pth` / `sitecustomize` hooks, global git hooks | code that runs with every CLI call |
 | Executables | new programs on PATH and their code signature | dropped binaries |
 | Right now | programs running from temp/cache/hidden folders; unsigned or ad-hoc signed programs holding outside connections | active implants |
-| Credentials | SSH keys without a passphrase, AWS `AKIA` keys, static kube tokens, plain docker/gh/npm/pypi tokens, Azure, gcloud, Vault and Terraform token files, `.env` files | what a thief would take |
+| Credentials | SSH keys without a passphrase (MED when production hosts use them, LOW otherwise), AWS `AKIA` keys, static kube tokens, plain docker/gh/npm/pypi tokens, Azure, gcloud, Vault and Terraform token files, `.env` files | what a thief would take |
 | Editors, browsers | VS Code / Cursor extensions, and ones that did not come from the marketplace; Chrome / Brave / Edge / Arc extensions, their permissions, and side-loaded ones | extension malware |
 
 ## Measured, not claimed
@@ -340,7 +354,10 @@ The same commands, with Linux's own places to hide:
 Things that differ: on Linux the code's background processes end with the sandbox (reported as "detaches from the
 terminal"); a hidden home is an empty writable folder, so writes there are recorded and thrown away. Ubuntu 24.04
 limits user namespaces: `sudo sysctl kernel.apparmor_restrict_unprivileged_userns=0`, or give bwrap an AppArmor
-profile. Inside Docker, run the container with `--security-opt seccomp=unconfined --security-opt apparmor=unconfined`.
+profile. Inside Docker, run the container with `--security-opt seccomp=unconfined --security-opt apparmor=unconfined
+--security-opt systempaths=unconfined`: the sandbox needs a `/proc` of its own and does not run without one. The `try`
+proxy never connects to loopback (unless `--localhost`), link-local or cloud metadata addresses, checked on what a name
+resolves to.
 
 ## Limits
 

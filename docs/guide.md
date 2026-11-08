@@ -124,15 +124,43 @@ login entry starts a program that is running right now, that is one finding, whi
 | Severity | Meaning | Verdict |
 | --- | --- | --- |
 | CRIT, HIGH | wrong on its face: a malicious package, a login job running from `~/.cache` | **BLOCK**: no production access |
-| MED | worth a look: a new login job, an SSH key without a passphrase | **WARN**: allowed, fix or accept it |
+| MED | worth a look: a new login job, an SSH key without a passphrase that production hosts use | **WARN**: allowed by default ([the policy](#one-policy-for-warn-vswarm-policy)), fix or accept it |
 | LOW, INFO | context; hidden unless `--all` | **PASS** |
 
-Options: `--all` every severity · `--json` machine-readable · `--offline` no OSV lookup (cache only).
+Options: `--all` every severity · `--json` machine-readable · `--offline` no OSV lookup (cache only). `vswarm check` is
+the same command.
+
+**Findings are numbered**, in scan, diff, preflight and why, the same way each time (the order of the check as it was
+saved). `vswarm ok 3` accepts finding 3 of the last check (`vswarm accept <id>` still works), and `vswarm fix 3` runs
+its automatic fix where there is one, after showing exactly what it will do and asking; where there is none it prints
+the steps. `vswarm why` is `preflight --fresh` with that spelled out under each finding:
+
+```
+▼ vswarm why · a fresh check · 1078 items · 294 ms
+   1  MED   ~/.npmrc takes packages from an unsafe source
+        fix     vswarm fix 1  (remove 1 line from ~/.npmrc (a copy of the file goes to ~/.vswarm/backups); shows it and asks first)
+        accept  vswarm ok 1  (if you know it and it is expected)
+
+WARN · let through
+  policy: WARN is allowed (the default), BLOCK is always refused, by every gate and by vswarm agent · change it: vswarm policy warn refuse
+```
+
+| Finding | What `vswarm fix` does |
+| --- | --- |
+| an SSH key without a passphrase that production hosts use | offers `vswarm agent protect <key>` (which tries the key first, [below](#vswarm-agent)); if you say no, `ssh-keygen -p -f <key>` |
+| any other SSH key without a passphrase | `ssh-keygen -p -f <key>`, which asks for the new passphrase itself |
+| an unsafe package source (`http://`, a bare IP, a look-alike registry) | takes those lines out of the file; a copy goes to `~/.vswarm/backups` |
+| risky lines added to a start-up file | takes those lines out, the same way |
+| anything else | the steps to take by hand, and `vswarm ok <n>` |
+
+Reports go to stdout (`vswarm scan > scan.txt` keeps them; so do `diff`, `secrets`, `agents`, `why`, `policy` and
+the `--list` and `status` commands); questions, progress and everything a gate prints go to stderr.
 
 ### vswarm baseline
 
-Records this machine as clean. Do it only on a machine you trust; with serious findings vswarm warns and defaults to
-"no".
+Records this machine as clean. Do it only on a machine you trust. With HIGH or CRIT findings it refuses, `--yes` or
+not, and lists them: a baseline taken then would treat them as normal from now on. Deal with them first (`vswarm why`;
+`vswarm respond` if you do not know them), or, once you know every one is yours, `vswarm baseline --accept-high`.
 
 ![vswarm baseline](img/baseline.png)
 
@@ -206,7 +234,13 @@ watch status` and `vswarm doctor` show whether the real-time part is on; an olde
 
 ![vswarm secrets](img/secrets.png)
 
-It looks for SSH keys without a passphrase (from the key header), AWS `AKIA` keys, kubeconfigs with static tokens,
+**SSH keys without a passphrase** (read from the key header) are one finding per key. A key that a host behind
+vswarm's ssh gate or agent logs in with (its `IdentityFile` in `~/.ssh/config`, or ssh's default keys for a gated host
+that names none) is a **production key: MED**. Any other key (GitHub, a home server) is **LOW**: listed by `vswarm
+secrets` and `scan --all`, but it does not make the machine WARN, so a developer laptop with personal keys can pass.
+`vswarm fix <n>` offers the fix (above). A key accepted under 2.7's single "N SSH private keys" finding stays accepted.
+
+It also looks for AWS `AKIA` keys, kubeconfigs with static tokens,
 docker/gh/npm/pypi/netrc tokens, GCP service-account keys, gcloud `credentials.db` / `access_tokens.db`, Azure CLI token
 caches and service-principal secrets in `~/.azure`, `~/.vault-token`, Terraform Cloud tokens
 (`~/.terraform.d/credentials.tfrc.json`), secrets in `.zshrc`, and `.env` files in code folders.
@@ -305,13 +339,31 @@ known-malicious database (at most 3 seconds); when that is not possible, one lin
 
 | Exit code | Meaning |
 | --- | --- |
-| 0 | PASS or WARN |
-| 2 | WARN with `--strict` |
+| 0 | PASS, or WARN that the policy lets through |
+| 2 | WARN that the policy refuses (`vswarm policy warn refuse`), or WARN with `--strict` |
 | 3 | BLOCK |
 | 4 | vswarm itself failed |
 
 Options: `--quiet` print only on problems · `--strict` WARN blocks too · `--fresh` ignore the reused verdict ·
-`--then <command…>` run the command only when allowed.
+`--json` the decision as JSON on stdout (verdict, whether it is let through, the policy, the findings) ·
+`--then <command…>` run the command only when allowed (with `--then`, stdout belongs to the command; vswarm prints
+on stderr only). When a WARN is refused, one line on stderr says so and how to let it through.
+
+### One policy for WARN: vswarm policy
+
+BLOCK is always refused. What happens on **WARN** is one setting, for every gate (ssh, aws, kube, gcloud, `gate cmd`,
+`gate az`, `cert`) and for `vswarm agent` alike:
+
+```bash
+vswarm policy                 # policy: WARN is allowed (the default), BLOCK is always refused …
+vswarm policy warn refuse     # WARN stops ssh, aws, kubectl … and the agent's signatures too
+vswarm policy warn allow      # back to the default
+```
+
+The default is **allow**: WARN is let through with one line on stderr, BLOCK is refused. It is kept sealed in
+`~/.vswarm/sec/policy.json`; a policy file changed by hand counts as refuse and is reported (an edit can only make
+vswarm stricter). A protected key can have a setting of its own (`vswarm agent policy <key> --allow-warn | --strict`,
+and `--inherit` to follow the policy again); `vswarm why` and `vswarm agent status` list those.
 
 When the machine does not pass:
 
@@ -328,6 +380,13 @@ vswarm gate ssh "prod-*" "*.wallet.internal" 10.20.0.11
 ![vswarm gate ssh](img/gate.png)
 
 `vswarm gate status` shows it, `vswarm gate remove` takes it out.
+
+**Hosts that are gone.** `vswarm gate status` and `vswarm doctor` look up each host the gate and agent blocks name one
+by one (not patterns like `prod-*`): a DNS lookup, then a connection to its ssh port (the `HostName` and `Port` your
+config gives it), 2 seconds each, all at once, and, for hosts the agent signs for, when it last did ("not used for 40
+days"). Only these two commands do this; preflight and scans never touch the network for it. `vswarm gate ssh --prune`
+(and `vswarm agent prune` for the agent's hosts) asks about each host that did not answer and takes out the ones you
+confirm.
 
 ![vswarm gate status](img/gatestatus.png)
 
@@ -356,18 +415,25 @@ vswarm agent status                    # vswarm agent log: every signature and r
 **When it signs.** On every signature request for a key it holds, the agent decides the way preflight does, on a
 fresher verdict: the sealed verdict if it is at most **30 seconds** old (preflight reuses one for two minutes), or
 else a fresh quiet check, which the next 30 seconds reuse, so a burst of ssh connections costs one check. A forged
-`last.json` is never reused, and an open incident always blocks. BLOCK is refused. For a **protected** key WARN is
-refused too, unless the key was protected with `--allow-warn`. A key protected with `--confirm` (or added with
-`--confirm`) asks in a dialog every time, and no answer within 30 seconds is a no. Keys added with `agent add` sign
-on WARN, as preflight lets WARN through.
+`last.json` is never reused, and an open incident always blocks. BLOCK is refused. WARN goes by **the same policy as
+every gate** ([vswarm policy](#one-policy-for-warn-vswarm-policy)): allowed by default, so the ssh gate and the agent
+never disagree about one machine. A protected key can override it (`vswarm agent policy <key> --allow-warn` signs on
+WARN whatever the policy, `--strict` signs on PASS only, `--inherit` follows the policy again). A key protected with
+`--confirm` (or added with `--confirm`) asks in a dialog every time, and no answer within 30 seconds is a no.
 
-> **Changed in 2.7: protected keys are strict by default.** Before, WARN signed unless you gave `--strict`. Keys you
-> protected with 2.6 or earlier are strict now too, whatever they were protected with. To let one sign on WARN again:
-> `vswarm agent policy ~/.ssh/prod_key --allow-warn` (`--strict` turns it back). `vswarm agent status` shows each
-> key's policy. `--strict` is still accepted by `protect`, and changes nothing.
+> **Changed in 2.8: one WARN policy.** In 2.7 the ssh gate let WARN through while protected keys refused it, so ssh
+> passed the gate, the agent refused, and ssh fell back to asking for a password, which looked like a forgotten
+> password. Now gates and agent share one policy. Keys protected with 2.7 or earlier keep the setting they were
+> protected with (PASS only, unless they were protected with `--allow-warn`), and `vswarm agent status` and
+> `vswarm why` say so; `vswarm agent policy <key> --inherit` makes such a key follow the policy. Keys protected from
+> now on follow the policy unless you give `--allow-warn` or `--strict`.
 
-**When it refuses**, ssh gets `SSH_AGENT_FAILURE` and stops cleanly (`agent refused operation`), and a desktop
-notification says why and what to do (`vswarm preflight --fresh`, or `vswarm unlock` after an incident). Every
+**When it refuses**, the reason is on your terminal, before ssh connects: the agent block runs `vswarm agent check`
+first (below), which makes the same decision the agent will and, when it would refuse, prints why and the exact way
+out (`vswarm why`, `vswarm policy warn allow`, `vswarm agent policy <key> --allow-warn`, `vswarm agent on`, `vswarm
+unlock`), then ends the connection. A client that skips that check (one that reads no ssh config) gets
+`SSH_AGENT_FAILURE`, and with the block's settings ssh ends in `Permission denied`, never in a password prompt; a
+desktop notification says why. Every
 signature and every refusal goes into `~/.vswarm/sec/audit.log`, sealed and chained like the incident log, with the
 time, the key fingerprint and what it was for: the account and algorithm of an ssh login, the server's host key when
 the client says, or the namespace of `ssh-keygen -Y sign` (git commit signing). No signature leaves without its
@@ -380,15 +446,31 @@ those lines are set aside in `audit.log.unsealed-<time>`, `vswarm agent log` and
 chain starts. They are not taken as valid.
 
 **Getting keys in.**
-- `vswarm agent protect <key> [--confirm] [--allow-warn]`: ssh-add reads the key (a passphrase is typed at ssh's own
-  prompt, never into vswarm). vswarm encrypts it (AES-256-GCM, the wrapping key in the same store as the sealing key:
-  Keychain, Secret Service, or an owner-only file), writes `<key>.vswarm-backup` encrypted with a recovery code it
-  prints **once**, opens both again to check them, and only then overwrites and removes the key file. The `.pub`
-  stays, so `IdentityFile ~/.ssh/prod_key` still picks the right key from the agent. Write the recovery code down
-  somewhere off this machine. If the key file cannot be removed at the end, the recovery code is still shown, and
-  `agent status` and `doctor` say the file is still there; running `vswarm agent protect <key>` again removes it (only
-  while it is still that key, byte for byte).
-- `vswarm agent policy <key> --allow-warn | --strict` changes whether WARN signs with a protected key.
+- `vswarm agent protect <key> [--confirm] [--allow-warn | --strict] [--host a,b] [--anyway] [--no-verify]` proves the
+  key before it takes the file away:
+  1. **check**: a fresh check; if the machine's verdict would make the key refuse right away (BLOCK, or WARN under a
+     policy that refuses it), it says so and stops, unless `--anyway`.
+  2. **hosts**: the hosts in `~/.ssh/config` that log in with it, as `ssh -G` resolves each Host (an `IdentityFile`
+     naming it, or ssh's default keys for a host behind your gate; `--host` adds others). An `IdentityFile` that names
+     the key's `.pub` is warned about: ssh reads it as a private key whenever the agent is not used, and says
+     "UNPROTECTED PRIVATE KEY FILE".
+  3. **try**: a login that runs `true` on each of them with exactly this key, while the file is still on disk
+     (`ssh -o BatchMode=yes -o IdentityAgent=none -o IdentitiesOnly=yes -i <key> <host> true`). A server that refuses
+     it gets the `ssh-copy-id` command to add it, with `-o IdentityAgent=none -o IdentityFile=<a key it already
+     accepts>` filled in when one of the host's other keys works (and vswarm offers to run it). **Nothing is removed
+     until at least one host accepted the key**, unless `--no-verify`. These are your own logins to your own hosts,
+     made only when you run protect.
+  4. **protect**: ssh-add reads the key (a passphrase is typed at ssh's own prompt, never into vswarm). vswarm
+     encrypts it (AES-256-GCM, the wrapping key in the same store as the sealing key: Keychain, Secret Service, or an
+     owner-only file), writes `<key>.vswarm-backup` encrypted with a recovery code it prints **once**, opens both again
+     to check them, and only then overwrites and removes the key file. The `.pub` stays. Then the hosts that accepted
+     it are routed to the agent (`agent on` for them, started if it is not running), and the same login is tried
+     again through the agent.
+
+  Write the recovery code down somewhere off this machine. If the key file cannot be removed at the end, the recovery
+  code is still shown, and `agent status` and `doctor` say the file is still there; running `vswarm agent protect
+  <key>` again removes it (only while it is still that key, byte for byte).
+- `vswarm agent policy <key> --allow-warn | --strict | --inherit` sets what WARN does with a protected key.
 - `vswarm agent unprotect <key>` puts the file back byte for byte (with its passphrase, if it had one) and removes the
   vault entry and the backup.
 - `vswarm agent restore <key>.vswarm-backup` asks for the recovery code and writes the original file back, for when
@@ -400,9 +482,35 @@ chain starts. They are not taken as valid.
 
 | Way | What it is | Why |
 | --- | --- | --- |
-| `IdentityAgent` per host (default) | `agent on` writes a `Match originalhost …` block with `IdentityAgent` at the top of `~/.ssh/config` for the hosts of your ssh gate, or the patterns you name (`agent on "prod-*"`) | least surprising: your `SSH_AUTH_SOCK`, git and every other ssh are untouched |
+| `IdentityAgent` per host (default) | `agent on` writes a block at the top of `~/.ssh/config` for the hosts of your ssh gate, or the patterns you name (`agent on "prod-*"`); see below | least surprising: your `SSH_AUTH_SOCK`, git and every other ssh are untouched |
 | one socket for everything | `agent on --global` prints the `export SSH_AUTH_SOCK=…` line for your shell's rc file | GUI clients, paramiko and libssh2 read only `SSH_AUTH_SOCK` |
 | upstream | keys the agent does not hold are passed to your usual agent untouched: the `SSH_AUTH_SOCK` the service starts with, or `agent on --upstream <path>` (`none` for no upstream). `ssh-add -d` and `ssh-add -D` reach it too (protected keys stay; only `unprotect` takes them out). A signature there may take up to 60 s, for a key that asks first (`ssh-add -c`) or a hardware key waiting for a touch; `agent on --upstream-timeout <seconds>` changes that | always on; it is what keeps git and other keys working through the one socket |
+
+The block `agent on` writes, for the hosts it routes:
+
+```
+Match originalhost prod-* !exec "vswarm agent check --host %n --hostname %h --port %p"
+    ProxyCommand /bin/sh -c 'echo "vswarm agent: not connecting (the reason is above) · vswarm why" >&2; exit 1'
+Match originalhost prod-*
+    IdentityAgent "~/.vswarm/agent/agent.sock"
+    IdentityFile "~/.ssh/prod_key"
+    IdentitiesOnly yes
+    PasswordAuthentication no
+    KbdInteractiveAuthentication no
+```
+
+- **the check before the login** prints the reason and the way out on your terminal when the agent would refuse, and
+  ends the connection there. It also notes which name each host key belongs to (from `known_hosts`), so the audit log
+  can say which host a signature was for.
+- **`IdentityFile` names each protected key by its own path**, not its `.pub`: ssh reads the `.pub` beside it to ask the
+  agent, and when the agent is not used it finds no private key there and says nothing, instead of reading a public
+  key as a private one ("UNPROTECTED PRIVATE KEY FILE").
+- **`IdentitiesOnly yes`** offers those keys and each host's own `IdentityFile`, not every key an agent holds.
+- **no password prompts**: a key the agent refuses ends in `Permission denied`. For hosts that really need a password
+  or keyboard-interactive (2FA), `vswarm agent on --allow-passwords` leaves those two lines out, or leave such hosts out
+  of the patterns. Keys that live only in another agent and have no file (a hardware-backed or password-manager agent)
+  are not offered under `IdentitiesOnly`: name their `.pub` with `IdentityFile` for those hosts, or `agent on
+  --all-keys`. Both flags are remembered for the next `agent on`.
 
 The config block is a convenience, not the control. A client that goes around it reaches your usual agent, which no
 longer has the production key, so the login fails; a client that reaches vswarm agent gets a signature only while
@@ -411,7 +519,9 @@ the machine passes. If the production key is also loaded in your usual agent, `p
 
 The agent runs as a LaunchAgent (`~/Library/LaunchAgents/dev.vswarm.agent.plist`) on macOS and a systemd user service
 (`vswarm-agent.service`) on Linux, on `~/.vswarm/agent/agent.sock` in a folder only you can enter (checked when it
-starts). `vswarm agent off` removes the service and the config block; protected keys stay in the vault and cannot sign
+starts). The first time it is installed, macOS shows a "Background Items Added" notice for it (naming vswarm or bun):
+that is this LaunchAgent, and it is expected; `agent on` and `watch on` say so once. `vswarm agent off` removes the
+service and the config block; protected keys stay in the vault and cannot sign
 until you turn it on again or unprotect them. `vswarm doctor` reports it, `vswarm uninstall` turns it off, and
 `uninstall --purge` refuses while keys are protected. Not on Windows yet: OpenSSH uses a named pipe there
 (`\\.\pipe\openssh-ssh-agent`), and vswarm does not rely on Bun's named-pipe servers yet; use it inside WSL.
@@ -466,9 +576,13 @@ vswarm gate aws --off prod-admin · gate kube --off      # puts the files back
   token files, client certificates, passwords and the old `auth-provider` are refused: kubectl sends those without
   running anything. vswarm has no YAML library; it changes the one exec block line by line, and refuses a kubeconfig
   that is not in block style (as kubectl writes it) rather than reformatting it.
-- Both keep a backup next to the file and record exactly which lines they changed, so `--off` puts the bytes back. A
+- Both keep a backup in `~/.vswarm/backups` (not next to the file) and record exactly which lines they changed, so
+  `--off` puts the bytes back and removes the backup once no gate needs it. A
   section edited since (`aws configure set`, or kubectl rewriting the file) gets only vswarm's lines swapped back, and
-  `status` and `vswarm doctor` say when the gate was changed by hand. Running the command again does not wrap twice.
+  `status` and `vswarm doctor` say when the gate was changed by hand: also when static keys were added since, to the
+  profile or to a role that goes through it (aws sends those before it runs anything), and when a kubeconfig's plugin
+  runs another program called vswarm (only this vswarm's launcher, or exactly the one it wrote, counts). Running the
+  command again does not wrap twice.
   Scans know vswarm's own wrapper: gating is not reported as a changed helper, and the command behind it is still
   judged by what it runs.
 - preflight prints only on stderr, so the credential JSON the command prints reaches aws or kubectl untouched.
@@ -501,13 +615,15 @@ it does not.
 vswarm gate gcloud prod --cred-file ~/wif-prod.json   # hook: the token command runs preflight first
 vswarm gate gcloud "shop-*"                          # no hook for this sign-in: the command wrapper
 vswarm gate az "Prod-*"                              # Azure CLI: always the wrapper
-vswarm gate gcloud status · gate gcloud --off prod · gate az --off
+vswarm gate gcloud status · gate gcloud --off prod · gate az (status) · gate az --all · gate az --off
 ```
 
 - **gcloud with workload identity federation** (an external-account credential whose `credential_source.executable`
   runs a command for the token): vswarm writes a copy in `~/.vswarm/gate/gcloud-<configuration>.json` whose command
   is `vswarm preflight --quiet --then <your command>`, and sets `auth/credential_file_override` in that gcloud
-  configuration to it (the original is kept and restored by `--off`). This is the analogue of aws
+  configuration to it (the original is kept and restored by `--off`; the backup of the configuration file goes to
+  `~/.vswarm/backups`, since gcloud would read a copy in `configurations/` as a configuration of its own, and copies
+  an older vswarm left there are removed by `--off`). This is the analogue of aws
   `credential_process`: gcloud asks vswarm whenever it needs a new token, about hourly, from any shell, script or
   program, and a BLOCK means no token. A configuration that already points at such a file is adopted without
   `--cred-file`. The copy has no `output_file`, which would hand out a cached token without the check. gcloud runs a
@@ -519,7 +635,8 @@ vswarm gate gcloud status · gate gcloud --off prod · gate az --off
   project a command acts on (`--project`, `--configuration`, `CLOUDSDK_CORE_PROJECT`, the active configuration).
 - **az**: the Azure CLI signs in through MSAL and keeps its tokens in `~/.azure`; it has no setting that runs a command
   for a credential, and `az account get-access-token` only reads the cache. `gate az` is therefore the wrapper, matching
-  the subscription (`--subscription`, else the default in `azureProfile.json`). Programs that call `az` themselves
+  the subscription (`--subscription`, else the default in `azureProfile.json`); `gate az --all` wraps every run, and
+  `gate az` alone shows the status, as every gate does. Programs that call `az` themselves
   (Terraform, the Azure SDK's `AzureCliCredential`) are not checked.
 
 ### Commands with no credential hook: gate cmd
@@ -612,7 +729,10 @@ Then `source ~/.zshrc` (or open a new terminal) and try it:
   ![vswarm pkg npm install express](img/pkg-tree.png)
 
 - **Socket Firewall:** if `sfw` is installed, installs vswarm lets through also run through it (`sfw npm install …`),
-  so every download is checked against Socket's data too. `VSWARM_SFW=off` skips that.
+  so every download is checked against Socket's data too, inside the sandbox as well (`guard on --sandbox`; Socket's
+  own hosts are let through the sandbox's proxy then). `VSWARM_SFW=off` skips that.
+- **Suspicious contents** ask `Install anyway? [y/N]`: no is the default, and with no terminal to ask on the install
+  does not run.
 - Check by hand without the wrapper: `vswarm pkg npm install <name>`
 - A bare `npm install` / `npm ci` checks every locked version against OSV.
 - Skip once: `command npm install …` · turn off: `vswarm guard off` · for a session: `export VSWARM_GUARD=off`
@@ -647,8 +767,10 @@ then `command npm rebuild sharp` (pnpm: `pnpm rebuild`, bun: `bun pm trust`).
 With `--sandbox`, the install runs in the same sandbox as `vswarm try`, but in your project folder: that folder is
 writable except its `.git`, the rest of your home is out of sight (so `~/.npmrc` and private-registry tokens too), and
 only package registries are reachable. Global installs (`-g`) change files elsewhere and run without the sandbox. A
-private registry does not work there; install those with `command npm …`. Windows has `--ignore-scripts` but not the
-sandbox yet.
+private registry does not work there; install those with `command npm …`. The sandbox is a promise, so it fails
+closed: `guard on --sandbox` is refused where there is none (Windows, Linux without bubblewrap), and an install the
+guard would sandbox stops with the reason, rather than run outside it, when the sandbox has gone missing since (or
+cannot start, below). Windows has `--ignore-scripts` but not the sandbox yet.
 
 ### What is inside a package: content analysis and the version diff
 
@@ -734,8 +856,19 @@ An ordinary project:
 | network | only through the vswarm proxy, every host recorded | the same |
 
 Services already listening on your machine (databases, the Docker API, your dev servers) are out of reach too: on macOS
-each listening port is denied, on Linux the sandbox has its own network; `vswarm try … --localhost` lifts that on macOS
-when you test code against a server you run yourself.
+each listening port is denied, on Linux the sandbox has its own network; `vswarm try … --localhost` lifts that when
+you test code against a server you run yourself.
+
+The proxy, even with `--net all`, does not lead back into this machine or its cloud: a name is resolved first, every
+address it resolves to is checked, and the connection goes to the address that was checked (so a name that resolves
+to something else a moment later, DNS rebinding, gets nowhere). Loopback is refused unless `--localhost`; link-local
+addresses and the cloud metadata addresses (`169.254.169.254`, `fd00:ec2::254`, `100.100.100.200`) always.
+
+On Linux the sandbox gets a `/proc` of its own pid namespace. Where that cannot be mounted (a container with a masked
+`/proc`), `try` does not run: the host's `/proc`, even read-only, shows your other processes, and `/proc/<pid>/root` of
+any of them is your real home. Run it on the host, or start the container with `--security-opt systempaths=unconfined`
+(or `--privileged`). On macOS the sandbox also denies the system's background download service (`nsurlsessiond`) and
+Spotlight's index (`mds`).
 
 Verdicts: **DANGEROUS** (do not run it outside the sandbox) · **SUSPICIOUS** (read the findings first) ·
 **NOTHING SEEN** (in this run; not a guarantee) · **INCONCLUSIVE** (the command failed early).
@@ -752,7 +885,8 @@ it never does them without asking).
 1. **lock**: preflight blocks until `vswarm unlock`
 2. **evidence**: the files involved, with SHA-256
 3. **rotate credentials**: a checklist; **do it from another, clean device**
-4. **contain**: stop and quarantine login jobs, strip added lines, take malicious MCP servers out (copies kept as evidence)
+4. **contain**: stop and quarantine login jobs, strip added lines (exactly the lines the check recorded, all of them, and
+   the step reports how many actually went), take malicious MCP servers out (copies kept as evidence)
 5. **report**: `report.md` for your security team, and OSV-format drafts to report packages to their registry
 
 ![vswarm respond](img/respond.png)
@@ -786,10 +920,11 @@ signed with an SSH key, for a server or a team that decides ([server-side.md](se
 
 ## 11. Accept reviewed findings: accept
 
-When a finding is yours and on purpose, accept it by the id shown under it. Accepted findings no longer count in the
-verdict. Known-malicious packages cannot be accepted.
+When a finding is yours and on purpose, accept it by its number in the last check, or by the id shown under it.
+Accepted findings no longer count in the verdict. Known-malicious packages cannot be accepted.
 
 ```bash
+vswarm ok 3 5                   # findings 3 and 5 of the last check (vswarm accept 3 5 is the same)
 vswarm accept <id> [<id>…]      # or --all: everything in the last check
 vswarm accept --list
 vswarm accept --remove <id>
@@ -957,24 +1092,27 @@ Maintainers: the release steps are in [SECURITY.md](../SECURITY.md#for-the-maint
 
 | Command | What it does |
 | --- | --- |
-| `vswarm scan [--all] [--json] [--offline]` | check everything; exit 3 on BLOCK |
-| `vswarm baseline [--yes]` | record the clean state |
+| `vswarm scan [--all] [--json] [--offline]` (`check` is the same) | check everything; exit 3 on BLOCK |
+| `vswarm why` | a fresh check: each finding with the command to fix or accept it, then the policy |
+| `vswarm ok <n…>` · `vswarm fix <n>` | accept finding n of the last check · its automatic fix (shown, asked) or the steps |
+| `vswarm policy [warn allow\|refuse]` | what WARN does at every gate and in the agent (default allow) |
+| `vswarm baseline [--yes] [--accept-high]` | record the clean state (refused over HIGH/CRIT unless `--accept-high`) |
 | `vswarm diff` | what changed since the baseline |
 | `vswarm secrets` | long-lived credentials (values never shown) |
 | `vswarm agents` | MCP servers, hooks, permissions of AI agents |
 | `vswarm agents --inspect [--show] [--no-sandbox] [--timeout s]` | start MCP servers sandboxed, read and pin their tools |
 | `vswarm watch on [--every min]` · `off` · `status` · `run` | background check, hourly and on changes, with notifications (`quick` is what the real-time job runs) |
-| `vswarm preflight [--quiet] [--strict] [--fresh] [--max-age s] [--then cmd…]` | the PASS/WARN/BLOCK gate |
-| `vswarm gate ssh <pattern…> [--cert]` · `gate status` · `gate remove` | the gate in `~/.ssh/config` |
+| `vswarm preflight [--quiet] [--strict] [--fresh] [--max-age s] [--json] [--then cmd…]` | the PASS/WARN/BLOCK gate |
+| `vswarm gate ssh <pattern…> [--cert]` · `gate ssh --prune` · `gate status` · `gate remove` | the gate in `~/.ssh/config`; status probes its hosts |
 | `vswarm gate aws <profile…>` · `--off [profile…]` · `status` | aws: the profile's `credential_process` runs preflight |
 | `vswarm gate kube <context…>` · `--off [context…]` · `status` | kubectl: the user's exec plugin runs preflight |
 | `vswarm gate cmd [<name> [pattern…]]` · `gate cmd --off <name>` | a reminder before commands with no credential hook |
 | `vswarm gate gcloud <configuration> [--cred-file f]` · `gate gcloud <pattern…> [--wrapper]` · `--off [name]` · `status` | gcloud: the token command runs preflight, or the wrapper |
-| `vswarm gate az [subscription…]` · `--off` · `status` | az: the wrapper |
+| `vswarm gate az [subscription…]` · `--all` · `--off` · (no arguments: status) | az: the wrapper |
 | `vswarm ca init [--sk] [--principal a,b] [--ttl 15m]` · `ca server <account>` · `ca status` | CA for SSH certificates |
 | `vswarm cert [--host h]` | a short-lived certificate, only when preflight passes |
-| `vswarm agent protect <key> [--confirm] [--allow-warn]` · `policy <key> --allow-warn\|--strict` · `unprotect <key>` · `restore <backup>` | move an ssh key into the agent's vault, and back; whether WARN signs with it |
-| `vswarm agent on [hosts…] [--global] [--upstream path\|none] [--upstream-timeout s]` · `off` · `status` · `log` · `add <key>` · `run` | the ssh agent that signs only while the machine passes |
+| `vswarm agent protect <key> [--confirm] [--allow-warn\|--strict] [--host a,b] [--anyway] [--no-verify]` · `policy <key> --allow-warn\|--strict\|--inherit` · `unprotect <key>` · `restore <backup>` | try the key on its hosts, then move it into the agent's vault, and back; what WARN does with it |
+| `vswarm agent on [hosts…] [--global] [--allow-passwords] [--all-keys] [--upstream path\|none] [--upstream-timeout s]` · `off` · `status` · `log` · `prune` · `add <key>` · `run` · `check --host h` | the ssh agent that signs only while the machine passes |
 | `vswarm guard on [--ignore-scripts] [--sandbox] [--strict]` · `off` · `status` | the install guard in your shell |
 | `vswarm pkg <tool> [--] <args…>` | check an install command; exit 3 when it should stop |
 | `vswarm try <target> [--net none\|registries\|all] [--localhost] [--yes] [-- cmd…]` · `--list` · `--clean [id]` | run code in a sandbox |
@@ -987,7 +1125,7 @@ Maintainers: the release steps are in [SECURITY.md](../SECURITY.md#for-the-maint
 | `vswarm canary plant aws\|dns\|env` · `list` · `remove <id\|all>` | decoy credentials |
 | `vswarm selftest [--all] [--json]` | measured detection and false alarms, per technique |
 | `vswarm update [--unsigned]` · `vswarm trust [pin]` | updates to the newest correctly signed release |
-| `vswarm doctor` · `install [--no-path] [--yes]` · `uninstall [--purge]` · `completions zsh\|bash` · `version` | set-up |
+| `vswarm doctor` · `install [--path\|--no-path] [--yes]` · `uninstall [--purge]` · `completions zsh\|bash` · `version` | set-up; doctor also probes the gated hosts |
 
 ## 16. Files, settings and privacy
 
@@ -1009,10 +1147,17 @@ Everything lives in `~/.vswarm`, readable by you only:
 | `try/<id>/` | copies, fake homes and reports of `try` |
 | `ca/` | the CA and certificates |
 | `agent/agent.sock`, `agent/keys/` | the ssh agent's socket and its vault of protected keys |
-| `sec/audit.log` | every signature and refusal of `vswarm agent`, sealed and chained |
+| `sec/audit.log` | every signature and refusal of `vswarm agent`, sealed and chained, with the host's name when the check before the login saw it |
+| `sec/policy.json` | the WARN policy (`vswarm policy`), sealed |
+| `agent/hosts.json`, `agent/config.json` | which name each host key belongs to (written by `agent check`); the upstream agent and `agent on`'s flags |
+| `backups/` | copies of files vswarm changed for you (aws, kube and gcloud configs, `vswarm fix`), removed with the gate |
 | `trust/allowed_signers` | pinned release keys |
 
-Environment: `VSWARM_HOME` (moves `~/.vswarm`), `VSWARM_GUARD=off`, `VSWARM_SEC_DIR`, `VSWARM_TRY_DIR`,
+With `VSWARM_HOME` set, what is the user's whatever folder vswarm uses (`~/.ssh/config`, LaunchAgents and systemd
+units, shell rc files) is labelled "(system-wide, not in VSWARM_HOME)" in `doctor`, `agent status` and `watch status`,
+and a background job that runs another vswarm's launcher is not counted as this one's.
+
+Environment: `VSWARM_HOME` (moves `~/.vswarm`), `VSWARM_GUARD=off`, `VSWARM_SEC_DIR`, `VSWARM_TRY_DIR`, `VSWARM_BACKUP_DIR`,
 `VSWARM_CA_DIR`, `VSWARM_AGENT_DIR`, `VSWARM_AGENT_UPSTREAM`, `VSWARM_TRUST_FILE`, `NO_COLOR`, `FORCE_COLOR`; for the
 installer `VSWARM_REPO`, `VSWARM_REF`.
 
@@ -1065,10 +1210,12 @@ the keychain or keyring and check again.
 | --- | --- |
 | `Could not check chrome extensions … macOS privacy protection` | give your terminal Full Disk Access (System Settings → Privacy & Security) |
 | `vswarm try` on Linux: `No permissions to create new namespace` | Ubuntu 24.04: `sudo sysctl kernel.apparmor_restrict_unprivileged_userns=0`, or an AppArmor profile for bwrap |
-| `vswarm try` inside Docker | run the container with `--security-opt seccomp=unconfined --security-opt apparmor=unconfined` |
+| `vswarm try` inside Docker | run the container with `--security-opt seccomp=unconfined --security-opt apparmor=unconfined`, and `--security-opt systempaths=unconfined` so the sandbox can have its own `/proc` (it does not run without one) |
 | `strace is not installed` | `sudo apt install strace` (try works without it, but cannot see file attempts) |
 | Bun install: `unzip is required` | `sudo apt install unzip` |
-| ssh to a gated host fails on a machine you think is fine | `vswarm preflight --fresh` shows why; fix it or `vswarm accept <id>` |
+| ssh to a gated host fails on a machine you think is fine | `vswarm why` shows why, with `vswarm fix <n>` or `vswarm ok <n>` for each finding |
+| ssh asks for a password on a host routed to the agent | an agent block from before 2.8: run `vswarm agent on` again, and the refusal is said on the terminal and ends in `Permission denied` |
+| `vswarm agent: ssh to … refused: preflight warns, and … signs on PASS only` | a key protected with 2.7 or earlier keeps PASS only; `vswarm agent policy <key> --inherit` (follow the policy) or `--allow-warn` |
 | `Your baseline is older than these checks` | vswarm added checks; review them (e.g. `vswarm agents`), then `vswarm baseline` |
 | `not updating to vX: … not signed` | do not force it; compare the fingerprint (see [§14](#14-safe-updates-update-and-trust)) |
 | preflight keeps blocking after an incident | clean the machine → `vswarm baseline` → `vswarm unlock` |
@@ -1076,7 +1223,6 @@ the keychain or keyring and check again.
 | `vswarm's baseline was changed outside vswarm` | review `vswarm diff`, then `vswarm baseline` records and seals a new one |
 | `vswarm could not check its own files: its sealing key is not readable` | unlock the login keychain (`security unlock-keychain`) or the desktop keyring; `vswarm doctor` shows where the key is |
 | `vswarm agent: refused … its audit line could not be sealed and written` · `vswarm unlock`: `cannot record the unlock` · an old incident counts as open again | the same: the key store does not answer, and nothing is signed, unlocked or logged without a seal. It works again once the store answers (the agent retries by itself) |
-| `vswarm agent: refused … preflight warns and this key is strict` after upgrading to 2.7 | protected keys refuse on WARN by default now. Fix or accept the findings, or let that key sign on WARN: `vswarm agent policy <key> --allow-warn` |
 | `vswarm's sealing key was moved to a plain file, and vswarm did not move it` | someone changed `~/.vswarm/sec/keystore.json`. If it was not you, treat the machine as suspect (`vswarm respond`); then remove `keystore.json` |
 
 ### Windows (preview)
@@ -1094,7 +1240,10 @@ vswarm scan
 vswarm watch on      # a scheduled task \vswarm\watch for you only, with a toast when something new appears
 ```
 
-From a clone instead: `bun install`, then `bun src/cli.ts <command>`.
+`install` asks before it adds vswarm to your PATH (your user's, in the registry); `--path` says yes, `--no-path` no,
+and without a terminal to ask on it leaves PATH alone. From a clone instead: `bun install`, then `bun src/cli.ts
+<command>`; `watch on`, `guard on` and `gate cmd` write the launcher from that clone themselves when it is missing
+(PATH untouched).
 
 What is checked: Run and RunOnce values (HKCU, HKLM, 32-bit), Startup folders (shortcuts resolved), scheduled tasks
 outside `\Microsoft\`, auto-start services outside the Windows folder, WMI permanent event subscriptions (the stock
@@ -1104,8 +1253,9 @@ Chrome/Edge/Brave extensions, AI agent configs (Claude Desktop and VS Code in `%
 credential files. All of it comes from one read-only PowerShell pass per check
 ([windows-snapshot.ps1](../src/sec/collect/windows-snapshot.ps1)); a part it cannot read is shown as a gap.
 
-Working: everything except `try`, `agents --inspect` (they need the sandbox), `ca`, `cert`, `canary` and `shot`, which
-stop with exit 4; use those inside WSL. What differs from macOS and Linux:
+Working: everything except `try`, `ca`, `cert`, `canary`, `agent` and `shot`, which stop with exit 4; use those inside
+WSL. `agents --inspect` needs `--no-sandbox` there (no sandbox on Windows yet), and starts `npx`, `uvx` and other
+`.cmd` commands through `cmd.exe` with each word quoted. What differs from macOS and Linux:
 
 - `watch` is a scheduled task `\vswarm\watch` that runs the launcher every hour (or `--every` minutes) through
   `conhost --headless`, so no window flashes up, and shows a toast. There is no real-time part on Windows: Task
@@ -1117,7 +1267,8 @@ stop with exit 4; use those inside WSL. What differs from macOS and Linux:
 - `guard on` goes into `Documents\WindowsPowerShell\profile.ps1`, and into PowerShell 7's profile when it is
   installed. Each profile keeps its encoding. PowerShell runs no profile under the Restricted execution policy (the
   Windows default); `guard on` says so, and `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned` lets it run.
-  Skip it once with `npm.cmd …`.
+  Skip it once with `npm.cmd …`. A bare `yarn`, and `yarn --frozen-lockfile` with options only, are installs and are
+  checked, as in bash and zsh.
 - `respond` locks, keeps evidence and prints the PowerShell commands that would remove what it found
   (`Remove-ItemProperty`, `Disable-ScheduledTask`, `Set-Service`, `Remove-CimInstance`); it never runs them itself.
 - `uninstall` removes the task, the gate, the guard, the launcher and the PATH entry.

@@ -112,14 +112,36 @@ vswarm guard on                 # 4. ตรวจ npm, pip, brew ก่อนต
 | ระดับ | ความหมาย | ผล |
 | --- | --- | --- |
 | CRIT, HIGH | ผิดชัดเจน เช่น package อันตราย, login job ที่รันจาก `~/.cache` | **BLOCK**: ไม่ให้เข้า production |
-| MED | ควรตรวจ เช่น login job ใหม่, SSH key ไม่มีรหัสผ่าน | **WARN**: เข้าได้ แต่ควรแก้หรือยอมรับ |
+| MED | ควรตรวจ เช่น login job ใหม่, SSH key ไม่มีรหัสผ่านที่ host production ใช้ | **WARN**: ค่าเริ่มต้นคือปล่อยผ่าน ([นโยบาย](#นโยบายเดียวสำหรับ-warn-vswarm-policy)) แต่ควรแก้หรือยอมรับ |
 | LOW, INFO | ข้อมูลประกอบ ซ่อนไว้ ดูด้วย `--all` | **PASS** |
 
-ตัวเลือก: `--all` แสดงทุกระดับ · `--json` ผลลัพธ์สำหรับโปรแกรมอื่น · `--offline` ไม่ถาม OSV (ใช้ cache)
+ตัวเลือก: `--all` แสดงทุกระดับ · `--json` ผลลัพธ์สำหรับโปรแกรมอื่น · `--offline` ไม่ถาม OSV (ใช้ cache) ส่วน `vswarm check` คือคำสั่งเดียวกัน
+
+**ทุก finding มีหมายเลข** ทั้งใน scan, diff, preflight และ why เรียงแบบเดียวกันทุกครั้ง (ตามลำดับของผลตรวจที่บันทึกไว้) `vswarm ok 3` ยอมรับข้อ 3 ของผลตรวจล่าสุด (`vswarm accept <id>` ก็ยังใช้ได้) ส่วน `vswarm fix 3` จะแก้ข้อ 3 ให้อัตโนมัติถ้ามีวิธีที่ปลอดภัย โดยแสดงให้เห็นก่อนว่าจะทำอะไรแล้วถามก่อนทำ ถ้าไม่มีวิธีอัตโนมัติจะบอกขั้นตอนให้ทำเอง ส่วน `vswarm why` คือ `preflight --fresh` ที่เขียนวิธีออกไว้ใต้ทุกข้อ:
+
+```
+▼ vswarm why · a fresh check · 1078 items · 294 ms
+   1  MED   ~/.npmrc takes packages from an unsafe source
+        fix     vswarm fix 1  (remove 1 line from ~/.npmrc (a copy of the file goes to ~/.vswarm/backups); shows it and asks first)
+        accept  vswarm ok 1  (if you know it and it is expected)
+
+WARN · let through
+  policy: WARN is allowed (the default), BLOCK is always refused, by every gate and by vswarm agent · change it: vswarm policy warn refuse
+```
+
+| finding | สิ่งที่ `vswarm fix` ทำ |
+| --- | --- |
+| SSH key ไม่มีรหัสผ่านที่ host production ใช้ | เสนอ `vswarm agent protect <key>` (ซึ่งลองใช้กุญแจกับ host ก่อน [ดูข้างล่าง](#vswarm-agent)) ถ้าตอบไม่ ก็เสนอ `ssh-keygen -p -f <key>` แทน |
+| SSH key อื่นที่ไม่มีรหัสผ่าน | `ssh-keygen -p -f <key>` ซึ่งจะถามรหัสผ่านใหม่เอง |
+| แหล่ง package ที่ไม่ปลอดภัย (`http://`, IP ตรงๆ, registry ชื่อเลียนแบบ) | เอาบรรทัดเหล่านั้นออกจากไฟล์ และเก็บสำเนาไฟล์ไว้ใน `~/.vswarm/backups` |
+| บรรทัดเสี่ยงที่ถูกเพิ่มในไฟล์เริ่มต้น shell | เอาบรรทัดเหล่านั้นออกแบบเดียวกัน |
+| อย่างอื่น | ขั้นตอนให้ทำเอง และ `vswarm ok <n>` |
+
+รายงานออกทาง stdout (`vswarm scan > scan.txt` จึงเก็บผลไว้ได้ รวมถึง `diff`, `secrets`, `agents`, `why`, `policy` และคำสั่ง `--list` กับ `status`) ส่วนคำถาม ความคืบหน้า และทุกอย่างที่ด่านพิมพ์ ออกทาง stderr
 
 ### vswarm baseline
 
-บันทึกสภาพเครื่องตอนนี้เป็น "สภาพสะอาด" ทำบนเครื่องที่คุณไว้ใจเท่านั้น ถ้า scan เจอข้อร้ายแรง vswarm จะเตือนก่อนบันทึก และค่าเริ่มต้นของคำถามจะเป็น "ไม่"
+บันทึกสภาพเครื่องตอนนี้เป็น "สภาพสะอาด" ทำบนเครื่องที่คุณไว้ใจเท่านั้น ถ้าเจอข้อระดับ HIGH หรือ CRIT vswarm จะไม่บันทึกให้ (ใส่ `--yes` ก็ไม่บันทึก) และแสดงรายการข้อเหล่านั้น เพราะ baseline ที่บันทึกตอนนั้นจะทำให้สิ่งเหล่านั้นกลายเป็นเรื่องปกติไปตลอด ให้จัดการก่อน (`vswarm why` หรือ `vswarm respond` ถ้าไม่รู้จักมัน) หรือถ้ารู้แน่ว่าทุกข้อเป็นของเราเอง ใช้ `vswarm baseline --accept-high`
 
 ![vswarm baseline](img/baseline.png)
 
@@ -165,7 +187,9 @@ vswarm watch on [--every 60]     # vswarm watch status · vswarm watch off
 
 ![vswarm secrets](img/secrets.png)
 
-ตรวจ: SSH key ที่ไม่มีรหัสผ่าน (ดูจาก header ของไฟล์), AWS access key (`AKIA…`), kubeconfig ที่เก็บ token ตายตัว, token ของ docker/gh/npm/pypi/netrc, service account key ของ GCP, ไฟล์ `credentials.db` / `access_tokens.db` ของ gcloud, token cache และ secret ของ service principal ใน `~/.azure`, `~/.vault-token`, token ของ Terraform Cloud (`~/.terraform.d/credentials.tfrc.json`), secret ใน `.zshrc` และไฟล์ `.env` ในโฟลเดอร์โค้ด
+**SSH key ที่ไม่มีรหัสผ่าน** (ดูจาก header ของไฟล์) แยกเป็นหนึ่ง finding ต่อหนึ่งกุญแจ กุญแจที่ host หลังด่าน ssh หรือ agent ของ vswarm ใช้ login (เป็น `IdentityFile` ของ host นั้นใน `~/.ssh/config` หรือเป็นกุญแจ default ของ ssh สำหรับ host ที่มีด่านแต่ไม่ได้ระบุกุญแจ) ถือเป็น **กุญแจ production: ระดับ MED** ส่วนกุญแจอื่น (GitHub, server ที่บ้าน) เป็น **LOW** ยังเห็นใน `vswarm secrets` และ `scan --all` แต่ไม่ทำให้เครื่องเป็น WARN โน้ตบุ๊กนักพัฒนาที่มีแต่กุญแจส่วนตัวจึงผ่านได้ `vswarm fix <n>` มีวิธีแก้ให้ (ดูข้างบน) และกุญแจที่เคยยอมรับไว้ตอนที่ 2.7 รวมทุกกุญแจเป็น finding เดียว ก็ยังนับว่ายอมรับแล้ว
+
+นอกจากนั้นตรวจ: AWS access key (`AKIA…`), kubeconfig ที่เก็บ token ตายตัว, token ของ docker/gh/npm/pypi/netrc, service account key ของ GCP, ไฟล์ `credentials.db` / `access_tokens.db` ของ gcloud, token cache และ secret ของ service principal ใน `~/.azure`, `~/.vault-token`, token ของ Terraform Cloud (`~/.terraform.d/credentials.tfrc.json`), secret ใน `.zshrc` และไฟล์ `.env` ในโฟลเดอร์โค้ด
 
 วิธีแก้ที่แนะนำ:
 
@@ -244,12 +268,24 @@ config บอกแค่ว่ารัน server อะไร ส่วนค�
 
 | exit code | ความหมาย |
 | --- | --- |
-| 0 | PASS หรือ WARN |
-| 2 | WARN ตอนใช้ `--strict` |
+| 0 | PASS หรือ WARN ที่นโยบายปล่อยผ่าน |
+| 2 | WARN ที่นโยบายไม่ปล่อย (`vswarm policy warn refuse`) หรือ WARN ตอนใช้ `--strict` |
 | 3 | BLOCK |
 | 4 | vswarm เองทำงานผิดพลาด |
 
-ตัวเลือก: `--quiet` พิมพ์เฉพาะเมื่อมีปัญหา · `--strict` ให้ WARN หยุดด้วย · `--fresh` ไม่ใช้ผลที่จำไว้ · `--then <คำสั่ง…>` รันคำสั่งเฉพาะเมื่อผ่าน
+ตัวเลือก: `--quiet` พิมพ์เฉพาะเมื่อมีปัญหา · `--strict` ให้ WARN หยุดด้วย · `--fresh` ไม่ใช้ผลที่จำไว้ · `--json` คำตัดสินเป็น JSON ทาง stdout (verdict, ปล่อยผ่านหรือไม่, นโยบาย, รายการ finding) · `--then <คำสั่ง…>` รันคำสั่งเฉพาะเมื่อผ่าน (เมื่อใช้ `--then` stdout เป็นของคำสั่งนั้น vswarm พิมพ์ออก stderr อย่างเดียว) ถ้า WARN ถูกปฏิเสธ จะมีบรรทัดหนึ่งใน stderr บอกว่าถูกปฏิเสธและจะปล่อยผ่านได้อย่างไร
+
+### นโยบายเดียวสำหรับ WARN: vswarm policy
+
+BLOCK ถูกปฏิเสธเสมอ ส่วน **WARN** จะเป็นอย่างไรนั้นตั้งไว้ที่เดียว ใช้กับทุกด่าน (ssh, aws, kube, gcloud, `gate cmd`, `gate az`, `cert`) และกับ `vswarm agent` เหมือนกันหมด:
+
+```bash
+vswarm policy                 # policy: WARN is allowed (the default), BLOCK is always refused …
+vswarm policy warn refuse     # WARN หยุด ssh, aws, kubectl … และ agent ก็ไม่เซ็นให้ด้วย
+vswarm policy warn allow      # กลับไปค่าเริ่มต้น
+```
+
+ค่าเริ่มต้นคือ **allow**: WARN ผ่านได้พร้อมบรรทัดเตือนใน stderr ส่วน BLOCK ถูกปฏิเสธ ค่านี้เก็บแบบประทับตราไว้ใน `~/.vswarm/sec/policy.json` ถ้ามีใครแก้ไฟล์นี้เองจะนับเป็น refuse และถูกรายงาน (แก้ด้วยมือทำให้ vswarm เข้มขึ้นได้อย่างเดียว ไม่มีทางทำให้หลวมลง) กุญแจที่ protect ไว้ตั้งค่าของตัวเองได้ (`vswarm agent policy <กุญแจ> --allow-warn | --strict` และ `--inherit` เพื่อกลับมาใช้นโยบายกลาง) `vswarm why` และ `vswarm agent status` จะแสดงกุญแจที่ตั้งค่าของตัวเองไว้
 
 เมื่อเครื่องไม่ผ่าน:
 
@@ -266,6 +302,8 @@ vswarm gate ssh "prod-*" "*.wallet.internal" 10.20.0.11
 ![vswarm gate ssh](img/gate.png)
 
 ดูด่านที่ใส่ไว้ด้วย `vswarm gate status` ถอดด้วย `vswarm gate remove`
+
+**host ที่หายไปแล้ว** `vswarm gate status` และ `vswarm doctor` จะเช็ค host ที่ระบุชื่อตรงๆ ในบล็อกของด่านและของ agent (ไม่รวม pattern อย่าง `prod-*`): ถาม DNS แล้วลองต่อ port ssh ของมัน (ตาม `HostName` และ `Port` ใน config) รอครั้งละไม่เกิน 2 วินาที ทำพร้อมกันทุกตัว และสำหรับ host ที่ agent เซ็นให้ จะบอกด้วยว่าใช้ครั้งล่าสุดเมื่อไหร่ ("not used for 40 days") มีแค่สองคำสั่งนี้ที่ทำแบบนี้ preflight และ scan ไม่แตะเน็ตเพื่อเรื่องนี้เลย `vswarm gate ssh --prune` (และ `vswarm agent prune` สำหรับ host ของ agent) จะถามทีละ host ที่ไม่ตอบ แล้วเอาออกเฉพาะตัวที่เรายืนยัน
 
 ![vswarm gate status](img/gatestatus.png)
 
@@ -286,15 +324,21 @@ ssh prod-wallet-01                     # เซ็นให้ตอน prefligh
 vswarm agent status                    # vswarm agent log: ดูทุกครั้งที่เซ็นและที่ปฏิเสธ
 ```
 
-**เมื่อไหร่ถึงเซ็น** ทุกครั้งที่มีคำขอให้เซ็นด้วยกุญแจที่ agent ถืออยู่ มันจะตัดสินแบบเดียวกับ preflight แต่ใช้ผลที่สดกว่า คือผลที่ประทับตราไว้ซึ่งอายุไม่เกิน **30 วินาที** (preflight ใช้ซ้ำได้ถึงสองนาที) ถ้าเก่ากว่านั้นก็ตรวจใหม่แบบเงียบ แล้วใช้ผลนั้นต่ออีก 30 วินาที ssh ที่ต่อรัวๆ หลายครั้งจึงเสียเวลาตรวจแค่ครั้งเดียว `last.json` ที่ปลอมขึ้นมาจะไม่ถูกใช้ และถ้ามีเหตุการณ์ที่ยังเปิดอยู่ก็ BLOCK เสมอ ผล BLOCK จะถูกปฏิเสธ สำหรับกุญแจที่ **protect** ไว้ ผล WARN ก็ถูกปฏิเสธด้วย เว้นแต่ตอน protect จะใส่ `--allow-warn` ส่วนกุญแจที่ใส่ `--confirm` จะเด้งหน้าต่างถามทุกครั้ง ถ้าไม่ตอบภายใน 30 วินาทีถือว่าไม่อนุญาต กุญแจที่เพิ่มด้วย `agent add` ยังเซ็นตอน WARN เหมือนที่ preflight ปล่อย WARN ผ่าน
+**เมื่อไหร่ถึงเซ็น** ทุกครั้งที่มีคำขอให้เซ็นด้วยกุญแจที่ agent ถืออยู่ มันจะตัดสินแบบเดียวกับ preflight แต่ใช้ผลที่สดกว่า คือผลที่ประทับตราไว้ซึ่งอายุไม่เกิน **30 วินาที** (preflight ใช้ซ้ำได้ถึงสองนาที) ถ้าเก่ากว่านั้นก็ตรวจใหม่แบบเงียบ แล้วใช้ผลนั้นต่ออีก 30 วินาที ssh ที่ต่อรัวๆ หลายครั้งจึงเสียเวลาตรวจแค่ครั้งเดียว `last.json` ที่ปลอมขึ้นมาจะไม่ถูกใช้ และถ้ามีเหตุการณ์ที่ยังเปิดอยู่ก็ BLOCK เสมอ ผล BLOCK จะถูกปฏิเสธ ส่วน WARN ใช้ **นโยบายเดียวกับทุกด่าน** ([vswarm policy](#นโยบายเดียวสำหรับ-warn-vswarm-policy)) ค่าเริ่มต้นคือปล่อยผ่าน ด่าน ssh กับ agent จึงไม่มีวันตัดสินเครื่องเดียวกันไม่ตรงกัน กุญแจที่ protect ไว้ตั้งค่าของตัวเองทับได้ (`vswarm agent policy <กุญแจ> --allow-warn` เซ็นตอน WARN ไม่ว่านโยบายจะเป็นอะไร, `--strict` เซ็นเฉพาะตอน PASS, `--inherit` กลับไปใช้นโยบายกลาง) ส่วนกุญแจที่ใส่ `--confirm` จะเด้งหน้าต่างถามทุกครั้ง ถ้าไม่ตอบภายใน 30 วินาทีถือว่าไม่อนุญาต
 
-> **เปลี่ยนใน 2.7: กุญแจที่ protect ไว้เข้มงวดเป็นค่าเริ่มต้น** เดิม WARN จะเซ็นให้ถ้าไม่ได้ใส่ `--strict` ตอนนี้กุญแจที่ protect ไว้ด้วย 2.6 หรือเก่ากว่าก็เข้มงวดด้วย ไม่ว่าตอนนั้นจะใส่อะไรไว้ ถ้าอยากให้กุญแจตัวไหนกลับมาเซ็นตอน WARN ได้ ให้รัน `vswarm agent policy ~/.ssh/prod_key --allow-warn` (ใส่ `--strict` เพื่อเปลี่ยนกลับ) `vswarm agent status` บอกว่ากุญแจแต่ละตัวตั้งไว้แบบไหน ส่วน `protect --strict` ยังพิมพ์ได้ แต่ไม่มีผลอะไรเพิ่ม
+> **เปลี่ยนใน 2.8: นโยบาย WARN เหลือหนึ่งเดียว** ใน 2.7 ด่าน ssh ปล่อย WARN ผ่าน แต่กุญแจที่ protect ไว้กลับปฏิเสธ ssh จึงผ่านด่านไปได้ แล้ว agent ไม่ยอมเซ็น ssh เลยหันไปถามรหัสผ่านแทน ดูเหมือนเราลืมรหัสผ่านทั้งที่ไม่ได้ลืม ตอนนี้ด่านทุกด่านกับ agent ใช้นโยบายเดียวกัน กุญแจที่ protect ไว้ด้วย 2.7 หรือเก่ากว่ายังคงค่าที่ตั้งไว้ตอน protect (เซ็นเฉพาะ PASS เว้นแต่ตอนนั้นใส่ `--allow-warn`) และ `vswarm agent status` กับ `vswarm why` จะบอกให้รู้ ถ้าอยากให้กุญแจแบบนั้นใช้นโยบายกลาง สั่ง `vswarm agent policy <กุญแจ> --inherit` ส่วนกุญแจที่ protect จากนี้ไปจะใช้นโยบายกลาง เว้นแต่จะใส่ `--allow-warn` หรือ `--strict`
 
-**เมื่อปฏิเสธ** ssh จะได้ `SSH_AGENT_FAILURE` แล้วหยุดอย่างเรียบร้อย (`agent refused operation`) พร้อมแจ้งเตือนบนหน้าจอว่าทำไมและต้องทำอะไรต่อ (`vswarm preflight --fresh` หรือ `vswarm unlock` หลังจัดการเหตุการณ์เสร็จ) ทุกครั้งที่เซ็นและทุกครั้งที่ปฏิเสธจะถูกจดไว้ใน `~/.vswarm/sec/audit.log` ซึ่งประทับตราต่อกันเป็นสายเหมือนบันทึกเหตุการณ์ มีเวลา ลายนิ้วมือของกุญแจ และเซ็นไปเพื่ออะไร เช่น login ssh เป็น account ไหนด้วย algorithm อะไร host key ของ server (ถ้า client บอกมา) หรือ namespace ของ `ssh-keygen -Y sign` (การเซ็น commit ของ git) ไม่มีลายเซ็นไหนออกไปโดยไม่มีบรรทัดที่ประทับตราแล้วในบันทึก: ถ้าที่เก็บกุญแจไม่ตอบ (login Keychain ยังล็อกอยู่ตอน agent เริ่ม หรือ keyring ยังไม่พร้อม) บรรทัดนั้นประทับตราไม่ได้ ลายเซ็นจึงถูกปฏิเสธ และการแจ้งเตือนจะบอกเหตุผลนี้ ไม่มีอะไรที่ไม่ได้ประทับตราถูกเขียนลงบันทึกเลย agent จะลองถามที่เก็บกุญแจใหม่หลังรอสักครู่ (เริ่มที่หนึ่งวินาที แล้วเพิ่มเป็นสองเท่าจนถึงหนึ่งนาที) พอ Keychain ตอบก็กลับมาใช้ได้เอง ส่วนบันทึกจาก 2.6 หรือเก่ากว่าที่มีบรรทัดไม่ได้ประทับตรา (2.6 เขียนแบบนั้นตอนที่ที่เก็บกุญแจไม่ตอบ แล้วกลับรายงานว่าบันทึกถูกแก้) จะถูกจับได้ครั้งเดียว: บรรทัดเหล่านั้นถูกย้ายไปเก็บที่ `audit.log.unsealed-<เวลา>` แล้ว `vswarm agent log` และ `vswarm doctor` บอกให้รู้ จากนั้นเริ่มสายใหม่ บรรทัดพวกนั้นไม่ถูกนับว่าใช้ได้
+**เมื่อปฏิเสธ** เหตุผลจะขึ้นใน terminal ก่อนที่ ssh จะเชื่อมต่อ: บล็อกของ agent สั่ง `vswarm agent check` ก่อน (ดูข้างล่าง) ซึ่งตัดสินแบบเดียวกับที่ agent จะตัดสิน ถ้า agent จะปฏิเสธ มันจะพิมพ์เหตุผลและคำสั่งที่ใช้แก้ให้เห็นตรงๆ (`vswarm why`, `vswarm policy warn allow`, `vswarm agent policy <กุญแจ> --allow-warn`, `vswarm agent on`, `vswarm unlock`) แล้วจบการเชื่อมต่อตรงนั้น ส่วน client ที่ข้ามการเช็คนี้ไป (ตัวที่ไม่อ่าน ssh config) จะได้ `SSH_AGENT_FAILURE` และด้วยค่าที่บล็อกตั้งไว้ ssh จะจบด้วย `Permission denied` ไม่หันไปถามรหัสผ่าน และมีแจ้งเตือนบนหน้าจอบอกเหตุผลด้วย ทุกครั้งที่เซ็นและทุกครั้งที่ปฏิเสธจะถูกจดไว้ใน `~/.vswarm/sec/audit.log` ซึ่งประทับตราต่อกันเป็นสายเหมือนบันทึกเหตุการณ์ มีเวลา ลายนิ้วมือของกุญแจ และเซ็นไปเพื่ออะไร เช่น login ssh เป็น account ไหนด้วย algorithm อะไร host key ของ server (ถ้า client บอกมา) หรือ namespace ของ `ssh-keygen -Y sign` (การเซ็น commit ของ git) ไม่มีลายเซ็นไหนออกไปโดยไม่มีบรรทัดที่ประทับตราแล้วในบันทึก: ถ้าที่เก็บกุญแจไม่ตอบ (login Keychain ยังล็อกอยู่ตอน agent เริ่ม หรือ keyring ยังไม่พร้อม) บรรทัดนั้นประทับตราไม่ได้ ลายเซ็นจึงถูกปฏิเสธ และการแจ้งเตือนจะบอกเหตุผลนี้ ไม่มีอะไรที่ไม่ได้ประทับตราถูกเขียนลงบันทึกเลย agent จะลองถามที่เก็บกุญแจใหม่หลังรอสักครู่ (เริ่มที่หนึ่งวินาที แล้วเพิ่มเป็นสองเท่าจนถึงหนึ่งนาที) พอ Keychain ตอบก็กลับมาใช้ได้เอง ส่วนบันทึกจาก 2.6 หรือเก่ากว่าที่มีบรรทัดไม่ได้ประทับตรา (2.6 เขียนแบบนั้นตอนที่ที่เก็บกุญแจไม่ตอบ แล้วกลับรายงานว่าบันทึกถูกแก้) จะถูกจับได้ครั้งเดียว: บรรทัดเหล่านั้นถูกย้ายไปเก็บที่ `audit.log.unsealed-<เวลา>` แล้ว `vswarm agent log` และ `vswarm doctor` บอกให้รู้ จากนั้นเริ่มสายใหม่ บรรทัดพวกนั้นไม่ถูกนับว่าใช้ได้
 
 **เอากุญแจเข้า agent**
-- `vswarm agent protect <กุญแจ> [--confirm] [--allow-warn]`: ให้ ssh-add เป็นคนอ่านกุญแจ (ถ้ามี passphrase ก็พิมพ์ที่ช่องถามของ ssh เอง ไม่ได้พิมพ์ให้ vswarm) แล้ว vswarm เข้ารหัสด้วย AES-256-GCM โดยกุญแจห่อเก็บไว้ที่เดียวกับกุญแจประทับตรา (Keychain, Secret Service หรือไฟล์ที่เจ้าของอ่านได้คนเดียว) เขียนสำรองไว้ที่ `<กุญแจ>.vswarm-backup` ซึ่งเข้ารหัสด้วยรหัสกู้คืนที่แสดงให้เห็น **ครั้งเดียว** เปิดทั้งสองอย่างดูอีกรอบว่าใช้ได้จริง แล้วค่อยเขียนทับและลบไฟล์กุญแจ ไฟล์ `.pub` ยังอยู่ `IdentityFile ~/.ssh/prod_key` จึงยังเลือกกุญแจถูกตัวจาก agent ได้ รหัสกู้คืนให้จดเก็บไว้นอกเครื่องนี้ ถ้าขั้นสุดท้ายลบไฟล์กุญแจไม่สำเร็จ รหัสกู้คืนก็ยังแสดงให้เห็น และ `agent status` กับ `doctor` จะบอกว่าไฟล์ยังอยู่ ให้รัน `vswarm agent protect <กุญแจ>` อีกครั้งเพื่อลบให้เสร็จ (ลบเฉพาะเมื่อไฟล์นั้นยังเป็นกุญแจตัวเดิมทุกไบต์)
-- `vswarm agent policy <กุญแจ> --allow-warn | --strict` เปลี่ยนว่ากุญแจที่ protect ไว้จะเซ็นตอน WARN หรือไม่
+- `vswarm agent protect <กุญแจ> [--confirm] [--allow-warn | --strict] [--host a,b] [--anyway] [--no-verify]` พิสูจน์ก่อนว่ากุญแจใช้ได้ แล้วค่อยเอาไฟล์ออก:
+  1. **ตรวจเครื่อง**: ตรวจใหม่หนึ่งรอบ ถ้าผลของเครื่องตอนนี้จะทำให้กุญแจถูกปฏิเสธทันที (BLOCK หรือ WARN ภายใต้นโยบายที่ไม่ปล่อย WARN) จะบอกแล้วหยุด เว้นแต่ใส่ `--anyway`
+  2. **หา host**: host ใน `~/.ssh/config` ที่ login ด้วยกุญแจนี้ ตามที่ `ssh -G` อ่านแต่ละ Host ออกมา (มี `IdentityFile` ชี้มาที่กุญแจนี้ หรือเป็นกุญแจ default ของ ssh สำหรับ host หลังด่าน และเพิ่มเองได้ด้วย `--host`) ถ้า `IdentityFile` ชี้ไปที่ `.pub` ของกุญแจ จะเตือน เพราะเมื่อไม่ได้ใช้ agent ssh จะอ่านไฟล์ public key เป็น private key แล้วขึ้นข้อความ "UNPROTECTED PRIVATE KEY FILE"
+  3. **ลองใช้**: login ไปรัน `true` บนแต่ละ host ด้วยกุญแจนี้ตัวเดียว ขณะที่ไฟล์ยังอยู่บนดิสก์ (`ssh -o BatchMode=yes -o IdentityAgent=none -o IdentitiesOnly=yes -i <กุญแจ> <host> true`) ถ้า server ไม่รับกุญแจ จะแสดงคำสั่ง `ssh-copy-id` สำหรับเพิ่มกุญแจให้ พร้อม `-o IdentityAgent=none -o IdentityFile=<กุญแจที่ server รับอยู่แล้ว>` ที่เติมให้ถ้ากุญแจตัวอื่นของ host นั้นใช้ได้ (และเสนอรันให้) **ไม่มีการลบไฟล์จนกว่าจะมีอย่างน้อยหนึ่ง host ที่รับกุญแจ** เว้นแต่ใส่ `--no-verify` การ login เหล่านี้คือการ login ของเราเองไปยัง host ของเราเอง และเกิดเฉพาะตอนที่เราสั่ง protect เท่านั้น
+  4. **protect**: ให้ ssh-add เป็นคนอ่านกุญแจ (ถ้ามี passphrase ก็พิมพ์ที่ช่องถามของ ssh เอง ไม่ได้พิมพ์ให้ vswarm) แล้ว vswarm เข้ารหัสด้วย AES-256-GCM โดยกุญแจห่อเก็บไว้ที่เดียวกับกุญแจประทับตรา (Keychain, Secret Service หรือไฟล์ที่เจ้าของอ่านได้คนเดียว) เขียนสำรองไว้ที่ `<กุญแจ>.vswarm-backup` ซึ่งเข้ารหัสด้วยรหัสกู้คืนที่แสดงให้เห็น **ครั้งเดียว** เปิดทั้งสองอย่างดูอีกรอบว่าใช้ได้จริง แล้วค่อยเขียนทับและลบไฟล์กุญแจ ไฟล์ `.pub` ยังอยู่ จากนั้นส่ง host ที่รับกุญแจไปใช้ agent (`agent on` สำหรับ host เหล่านั้น และเปิด agent ให้ถ้ายังไม่ได้รัน) แล้วลอง login แบบเดิมอีกครั้งผ่าน agent
+
+  รหัสกู้คืนให้จดเก็บไว้นอกเครื่องนี้ ถ้าขั้นสุดท้ายลบไฟล์กุญแจไม่สำเร็จ รหัสกู้คืนก็ยังแสดงให้เห็น และ `agent status` กับ `doctor` จะบอกว่าไฟล์ยังอยู่ ให้รัน `vswarm agent protect <กุญแจ>` อีกครั้งเพื่อลบให้เสร็จ (ลบเฉพาะเมื่อไฟล์นั้นยังเป็นกุญแจตัวเดิมทุกไบต์)
+- `vswarm agent policy <กุญแจ> --allow-warn | --strict | --inherit` ตั้งว่ากุญแจที่ protect ไว้จะทำอย่างไรตอน WARN
 - `vswarm agent unprotect <กุญแจ>` เอาไฟล์กลับมาที่เดิมแบบตรงทุกไบต์ (passphrase เดิมก็ยังอยู่) แล้วลบของในตู้เซฟและไฟล์สำรอง
 - `vswarm agent restore <กุญแจ>.vswarm-backup` ถามรหัสกู้คืนแล้วเขียนไฟล์เดิมกลับ ใช้ตอนตู้เซฟหรือรายการใน Keychain หายไป
 - `vswarm agent add <กุญแจ> [--confirm] [--life วินาที]` ถือกุญแจไว้ในหน่วยความจำอย่างเดียวจนกว่า agent จะรีสตาร์ท ตรวจแบบเดียวกัน แต่ไฟล์ยังอยู่บนดิสก์
@@ -303,13 +347,31 @@ vswarm agent status                    # vswarm agent log: ดูทุกคร
 
 | ทาง | คืออะไร | เพราะอะไร |
 | --- | --- | --- |
-| `IdentityAgent` ราย host (ค่าเริ่มต้น) | `agent on` เขียนบล็อก `Match originalhost …` พร้อม `IdentityAgent` ไว้บนสุดของ `~/.ssh/config` ให้ host ที่มีด่าน ssh อยู่แล้ว หรือ pattern ที่เราระบุ (`agent on "prod-*"`) | ไม่ทำให้ใครแปลกใจ: `SSH_AUTH_SOCK` ของเรา git และ ssh อื่นๆ เหมือนเดิมทุกอย่าง |
+| `IdentityAgent` ราย host (ค่าเริ่มต้น) | `agent on` เขียนบล็อกไว้บนสุดของ `~/.ssh/config` ให้ host ที่มีด่าน ssh อยู่แล้ว หรือ pattern ที่เราระบุ (`agent on "prod-*"`) ดูข้างล่าง | ไม่ทำให้ใครแปลกใจ: `SSH_AUTH_SOCK` ของเรา git และ ssh อื่นๆ เหมือนเดิมทุกอย่าง |
 | socket เดียวสำหรับทุกอย่าง | `agent on --global` พิมพ์บรรทัด `export SSH_AUTH_SOCK=…` ให้ไปใส่ในไฟล์ rc ของ shell | โปรแกรม GUI, paramiko และ libssh2 อ่านแค่ `SSH_AUTH_SOCK` |
 | ส่งต่อ (upstream) | กุญแจที่ agent ไม่ได้ถือ จะถูกส่งต่อไปให้ agent ตัวเดิมของเราโดยไม่แตะอะไร คือ `SSH_AUTH_SOCK` ที่ service ได้มาตอนเริ่ม หรือ `agent on --upstream <path>` (`none` ถ้าไม่ต้องการ) `ssh-add -d` และ `ssh-add -D` ก็ส่งต่อไปถึง agent ตัวเดิมด้วย (กุญแจที่ protect ไว้ยังอยู่ ต้อง `unprotect` เท่านั้นถึงจะออก) และการเซ็นที่ส่งต่อไปรอได้ถึง 60 วินาที สำหรับกุญแจที่ต้องถามก่อน (`ssh-add -c`) หรือกุญแจฮาร์ดแวร์ที่รอให้แตะ เปลี่ยนได้ด้วย `agent on --upstream-timeout <วินาที>` | เปิดอยู่เสมอ ทำให้ git และกุญแจอื่นยังใช้ได้ผ่าน socket เดียวกัน |
 
+บล็อกที่ `agent on` เขียนให้ host ที่ส่งมาใช้ agent:
+
+```
+Match originalhost prod-* !exec "vswarm agent check --host %n --hostname %h --port %p"
+    ProxyCommand /bin/sh -c 'echo "vswarm agent: not connecting (the reason is above) · vswarm why" >&2; exit 1'
+Match originalhost prod-*
+    IdentityAgent "~/.vswarm/agent/agent.sock"
+    IdentityFile "~/.ssh/prod_key"
+    IdentitiesOnly yes
+    PasswordAuthentication no
+    KbdInteractiveAuthentication no
+```
+
+- **เช็คก่อน login** ถ้า agent จะปฏิเสธ มันพิมพ์เหตุผลและวิธีแก้ใน terminal แล้วจบการเชื่อมต่อตรงนั้น และจดไว้ด้วยว่า host key แต่ละตัวเป็นของ host ชื่ออะไร (จาก `known_hosts`) บันทึก audit จึงบอกได้ว่าเซ็นให้ host ไหน
+- **`IdentityFile` ชี้ไปที่ตัวกุญแจที่ protect ไว้** ไม่ใช่ `.pub` ของมัน: ssh อ่าน `.pub` ที่อยู่ข้างกันไปถาม agent และเมื่อไม่ได้ใช้ agent ก็ไม่เจอ private key ตรงนั้นและไม่พูดอะไร แทนที่จะเอา public key ไปอ่านเป็น private key ("UNPROTECTED PRIVATE KEY FILE")
+- **`IdentitiesOnly yes`** เสนอเฉพาะกุญแจเหล่านี้และ `IdentityFile` ของ host นั้นเอง ไม่ใช่ทุกกุญแจที่ agent มี
+- **ไม่ถามรหัสผ่าน**: กุญแจที่ agent ปฏิเสธจะจบด้วย `Permission denied` สำหรับ host ที่ต้องใช้รหัสผ่านหรือ keyboard-interactive จริงๆ (เช่น 2FA) ใช้ `vswarm agent on --allow-passwords` เพื่อไม่ใส่สองบรรทัดนั้น หรือไม่ต้องใส่ host แบบนั้นไว้ใน pattern ส่วนกุญแจที่อยู่ใน agent อื่นอย่างเดียวและไม่มีไฟล์ (agent ที่ใช้ฮาร์ดแวร์หรือของตัวจัดการรหัสผ่าน) จะไม่ถูกเสนอเมื่อเปิด `IdentitiesOnly` ให้ระบุ `.pub` ของมันด้วย `IdentityFile` สำหรับ host เหล่านั้น หรือใช้ `agent on --all-keys` ทั้งสองตัวเลือกจะถูกจำไว้ใช้ตอน `agent on` ครั้งต่อไป
+
 บล็อกใน config เป็นแค่ความสะดวก ไม่ใช่ตัวกัน client ที่อ้อมบล็อกนี้ไปจะไปเจอ agent ตัวเดิมของเรา ซึ่งไม่มีกุญแจ production แล้ว จึง login ไม่ได้ ส่วน client ที่มาถึง vswarm agent จะได้ลายเซ็นเฉพาะตอนเครื่องผ่าน ถ้ากุญแจ production ยังโหลดค้างอยู่ใน agent ตัวเดิม `protect` จะบอก ให้เอาออกจากตรงนั้นด้วย (`ssh-add -d ~/.ssh/prod_key.pub`)
 
-บน macOS agent รันเป็น LaunchAgent (`~/Library/LaunchAgents/dev.vswarm.agent.plist`) บน Linux เป็น systemd user service (`vswarm-agent.service`) ฟังอยู่ที่ `~/.vswarm/agent/agent.sock` ในโฟลเดอร์ที่เราเข้าได้คนเดียว (เช็คทุกครั้งที่เริ่ม) `vswarm agent off` เอา service และบล็อกใน config ออก กุญแจที่ protect ไว้ยังอยู่ในตู้เซฟ แต่เซ็นไม่ได้จนกว่าจะเปิดใหม่หรือ unprotect `vswarm doctor` รายงานสถานะของมัน `vswarm uninstall` ปิดให้ และ `uninstall --purge` จะไม่ยอมทำถ้ายังมีกุญแจในตู้เซฟ ยังไม่มีบน Windows: ที่นั่น OpenSSH ใช้ named pipe (`\\.\pipe\openssh-ssh-agent`) และ vswarm ยังไม่ฝากงานนี้ไว้กับ named-pipe server ของ Bun ให้ใช้ใน WSL แทน
+บน macOS agent รันเป็น LaunchAgent (`~/Library/LaunchAgents/dev.vswarm.agent.plist`) บน Linux เป็น systemd user service (`vswarm-agent.service`) ฟังอยู่ที่ `~/.vswarm/agent/agent.sock` ในโฟลเดอร์ที่เราเข้าได้คนเดียว (เช็คทุกครั้งที่เริ่ม) ครั้งแรกที่ติดตั้ง macOS จะขึ้นแจ้งเตือน "Background Items Added" (เป็นชื่อ vswarm หรือ bun) นั่นคือ LaunchAgent ตัวนี้ และเป็นเรื่องปกติ `agent on` กับ `watch on` จะบอกเรื่องนี้หนึ่งครั้ง `vswarm agent off` เอา service และบล็อกใน config ออก กุญแจที่ protect ไว้ยังอยู่ในตู้เซฟ แต่เซ็นไม่ได้จนกว่าจะเปิดใหม่หรือ unprotect `vswarm doctor` รายงานสถานะของมัน `vswarm uninstall` ปิดให้ และ `uninstall --purge` จะไม่ยอมทำถ้ายังมีกุญแจในตู้เซฟ ยังไม่มีบน Windows: ที่นั่น OpenSSH ใช้ named pipe (`\\.\pipe\openssh-ssh-agent`) และ vswarm ยังไม่ฝากงานนี้ไว้กับ named-pipe server ของ Bun ให้ใช้ใน WSL แทน
 
 **ปิดอะไรได้ และอะไรยังปิดไม่ได้**
 - ปิดได้: การอ้อม config (client ไหน ทางไหน หรือลบบล็อกทิ้ง ก็ใช้กุญแจไม่ได้) และการก๊อปไฟล์กุญแจออกจากดิสก์ (โปรแกรม backup หรือ sync, stealer ที่ zip `~/.ssh` ไปทั้งโฟลเดอร์, commit พลาด) เพราะไฟล์หายไปแล้ว และตู้เซฟเปิดได้ด้วยกุญแจห่อเท่านั้น
@@ -348,9 +410,9 @@ vswarm gate aws --off prod-admin · gate kube --off      # คืนไฟล์
   รหัสผ่าน และ `auth-provider` แบบเก่าจะถูกปฏิเสธ เพราะ kubectl ส่งไปเลยโดยไม่รันอะไร vswarm ไม่มี library YAML
   จึงแก้เฉพาะบล็อก exec นั้นทีละบรรทัด และถ้า kubeconfig ไม่ได้เขียนแบบ block (แบบที่ kubectl เขียน) ก็จะปฏิเสธ
   แทนที่จะจัดรูปแบบไฟล์ใหม่ทั้งไฟล์
-- ทั้งสองแบบเก็บไฟล์ backup ไว้ข้างไฟล์เดิม และจดไว้ว่าเปลี่ยนบรรทัดไหนบ้าง `--off` จึงคืนไฟล์ได้ตรงทุกไบต์ ถ้า
+- ทั้งสองแบบเก็บไฟล์ backup ไว้ใน `~/.vswarm/backups` (ไม่ได้วางข้างไฟล์เดิม) และจดไว้ว่าเปลี่ยนบรรทัดไหนบ้าง `--off` จึงคืนไฟล์ได้ตรงทุกไบต์ และลบ backup ทิ้งเมื่อไม่มีด่านไหนต้องใช้แล้ว ถ้า
   section ถูกแก้ทีหลัง (`aws configure set` หรือ kubectl เขียนไฟล์ใหม่) จะสลับคืนเฉพาะบรรทัดของ vswarm และ
-  `status` กับ `vswarm doctor` จะบอกเมื่อมีคนไปแก้ด่านด้วยมือ สั่งซ้ำก็ไม่ครอบซ้อน การ scan รู้จักตัวครอบของ
+  `status` กับ `vswarm doctor` จะบอกเมื่อมีคนไปแก้ด่านด้วยมือ รวมถึงเมื่อมีคนเพิ่ม key แบบถาวรเข้าไปทีหลัง ทั้งใน profile เองหรือใน role ที่ผ่านด่านนี้ (aws ส่ง key พวกนั้นไปก่อนจะรันอะไร) และเมื่อ plugin ใน kubeconfig รันโปรแกรมอื่นที่ชื่อ vswarm (นับเฉพาะ launcher ของ vswarm ตัวนี้ หรือตัวที่มันเขียนไว้ตอนใส่ด่านเท่านั้น) สั่งซ้ำก็ไม่ครอบซ้อน การ scan รู้จักตัวครอบของ
   vswarm เอง: การ gate ไม่ถูกรายงานว่า helper เปลี่ยน และคำสั่งข้างในยังถูกตรวจตามสิ่งที่มันรันจริง
 - preflight พิมพ์ข้อความออก stderr เท่านั้น JSON ของ credential ที่คำสั่งพิมพ์ออกมาจึงถึง aws หรือ kubectl ครบไม่เพี้ยน
 
@@ -381,13 +443,13 @@ vswarm คุมที่ **credential** เมื่อเครื่องม
 vswarm gate gcloud prod --cred-file ~/wif-prod.json   # hook: คำสั่งขอ token จะรัน preflight ก่อน
 vswarm gate gcloud "shop-*"                          # การ login แบบนี้ไม่มี hook จึงใช้ตัวครอบคำสั่ง
 vswarm gate az "Prod-*"                              # Azure CLI: ใช้ตัวครอบเสมอ
-vswarm gate gcloud status · gate gcloud --off prod · gate az --off
+vswarm gate gcloud status · gate gcloud --off prod · gate az (ดูสถานะ) · gate az --all · gate az --off
 ```
 
 - **gcloud ที่ใช้ workload identity federation** (credential แบบ external account ที่ `credential_source.executable`
   รันคำสั่งเพื่อเอา token): vswarm เขียนสำเนาไว้ที่ `~/.vswarm/gate/gcloud-<configuration>.json` โดยเปลี่ยนคำสั่งเป็น
   `vswarm preflight --quiet --then <คำสั่งเดิม>` แล้วตั้ง `auth/credential_file_override` ของ configuration นั้นให้ชี้ไปที่สำเนา
-  (ค่าเดิมเก็บไว้ และ `--off` คืนให้) แบบเดียวกับ `credential_process` ของ aws: ทุกครั้งที่ gcloud ต้องการ token ใหม่
+  (ค่าเดิมเก็บไว้ และ `--off` คืนให้ ส่วนสำเนาของไฟล์ configuration เก็บไว้ใน `~/.vswarm/backups` เพราะถ้าวางไว้ใน `configurations/` gcloud จะอ่านสำเนานั้นเป็น configuration อีกตัว และ `--off` จะลบสำเนาที่ vswarm รุ่นก่อนทิ้งไว้ตรงนั้นด้วย) แบบเดียวกับ `credential_process` ของ aws: ทุกครั้งที่ gcloud ต้องการ token ใหม่
   (ประมาณชั่วโมงละครั้ง) จาก shell, script หรือโปรแกรมไหนก็ตาม มันจะถาม vswarm ก่อน และถ้า BLOCK ก็ไม่ได้ token
   configuration ที่ชี้ไปที่ไฟล์แบบนี้อยู่แล้วจะถูกรับมาใช้ได้เลยโดยไม่ต้องใส่ `--cred-file` สำเนาจะไม่มี `output_file`
   เพราะ token ที่ cache ไว้ตรงนั้นจะถูกใช้โดยไม่ผ่านการตรวจ gcloud จะรันคำสั่งของ credential ก็ต่อเมื่อมี
@@ -399,7 +461,7 @@ vswarm gate gcloud status · gate gcloud --off prod · gate az --off
   และ project ที่คำสั่งนั้นใช้ (`--project`, `--configuration`, `CLOUDSDK_CORE_PROJECT`, configuration ที่ active อยู่)
 - **az**: Azure CLI login ผ่าน MSAL และเก็บ token ไว้ใน `~/.azure` ไม่มีค่าตั้งใดที่ให้รันคำสั่งเพื่อเอา credential และ
   `az account get-access-token` ก็แค่อ่านจาก cache ดังนั้น `gate az` จึงเป็นตัวครอบคำสั่ง โดยเทียบกับ subscription
-  (`--subscription` หรือค่า default ใน `azureProfile.json`) โปรแกรมที่เรียก `az` เอง (Terraform, `AzureCliCredential` ของ Azure SDK)
+  (`--subscription` หรือค่า default ใน `azureProfile.json`) ส่วน `gate az --all` ครอบทุกครั้งที่รัน และ `gate az` เฉยๆ คือดูสถานะ เหมือนด่านอื่นทุกด่าน โปรแกรมที่เรียก `az` เอง (Terraform, `AzureCliCredential` ของ Azure SDK)
   จะไม่ผ่านการตรวจ
 
 ### คำสั่งที่ไม่มี hook ของ credential: gate cmd
@@ -481,7 +543,8 @@ malware ส่วนใหญ่มาในรูป package เช่นชื
 
   ![vswarm pkg npm install express](img/pkg-tree.png)
 
-- **Socket Firewall:** ถ้าเครื่องมี `sfw` การติดตั้งที่ vswarm ปล่อยผ่านจะถูกส่งต่อให้ `sfw` ด้วย (`sfw npm install …`) ทุกไฟล์ที่ดาวน์โหลดจึงถูกเช็คกับข้อมูลของ Socket อีกชั้น ปิดได้ด้วย `VSWARM_SFW=off`
+- **Socket Firewall:** ถ้าเครื่องมี `sfw` การติดตั้งที่ vswarm ปล่อยผ่านจะถูกส่งต่อให้ `sfw` ด้วย (`sfw npm install …`) ทุกไฟล์ที่ดาวน์โหลดจึงถูกเช็คกับข้อมูลของ Socket อีกชั้น รวมถึงตอนติดตั้งใน sandbox (`guard on --sandbox` ซึ่งจะเปิดให้ proxy ของ sandbox ต่อไปยัง host ของ Socket ได้) ปิดได้ด้วย `VSWARM_SFW=off`
+- **เนื้อหาน่าสงสัย** จะถาม `Install anyway? [y/N]` ค่าเริ่มต้นคือไม่ และถ้าไม่มี terminal ให้ถาม จะไม่ติดตั้ง
 - ตรวจเองโดยไม่ต้องเปิด guard: `vswarm pkg npm install <ชื่อ>`
 - `npm install` ที่ไม่ระบุชื่อ package จะเช็คทุกเวอร์ชันใน lockfile กับ OSV
 - ข้ามครั้งเดียว: `command npm install …` · ปิด: `vswarm guard off` · ปิดชั่วคราวทั้ง session: `export VSWARM_GUARD=off`
@@ -498,7 +561,7 @@ vswarm guard on --ignore-scripts --sandbox   # และติดตั้งใ
 
 เมื่อเปิด `--ignore-scripts` vswarm จะรันคำสั่งติดตั้งเองหลังตรวจเสร็จ โดยเติม `--ignore-scripts` ต่อจาก subcommand (yarn 2 ขึ้นไปใช้ `YARN_ENABLE_SCRIPTS=false` แทน) ทำให้ `preinstall`/`postinstall` ของ package ไหนก็ไม่ได้รัน ซึ่งเป็นทางที่ malware บน npm ใช้เริ่มทำงานบ่อยที่สุด สิ่งที่จะพัง: package ที่ต้อง build หรือดาวน์โหลดของตอนติดตั้ง เช่น native module (`sharp`, `bcrypt`, `sqlite3`, `canvas`), browser ของ `puppeteer` และ `playwright`, `esbuild` รุ่นเก่า, hook ของ `husky` ถ้าไว้ใจแล้วค่อยสั่งรันสคริปต์เองทีละตัว: ดูก่อนว่ามันทำอะไรด้วย `vswarm try . -- npm rebuild sharp` แล้วค่อยรันจริงด้วย `command npm rebuild sharp` (pnpm ใช้ `pnpm rebuild`, bun ใช้ `bun pm trust`)
 
-เมื่อเปิด `--sandbox` การติดตั้งจะรันใน sandbox เดียวกับ `vswarm try` แต่ทำงานในโฟลเดอร์โปรเจกต์จริง: เขียนในโฟลเดอร์นั้นได้ ยกเว้น `.git` ส่วนที่เหลือของ home มองไม่เห็น (รวมถึง `~/.npmrc` และ token ของ registry ส่วนตัว) และออกเน็ตได้แค่ package registry การติดตั้งแบบ global (`-g`) ไปแก้ไฟล์ที่อื่นจึงไม่รันใน sandbox ถ้าใช้ registry ส่วนตัว ให้ติดตั้งด้วย `command npm …` บน Windows มี `--ignore-scripts` แต่ยังไม่มี sandbox
+เมื่อเปิด `--sandbox` การติดตั้งจะรันใน sandbox เดียวกับ `vswarm try` แต่ทำงานในโฟลเดอร์โปรเจกต์จริง: เขียนในโฟลเดอร์นั้นได้ ยกเว้น `.git` ส่วนที่เหลือของ home มองไม่เห็น (รวมถึง `~/.npmrc` และ token ของ registry ส่วนตัว) และออกเน็ตได้แค่ package registry การติดตั้งแบบ global (`-g`) ไปแก้ไฟล์ที่อื่นจึงไม่รันใน sandbox ถ้าใช้ registry ส่วนตัว ให้ติดตั้งด้วย `command npm …` sandbox เป็นคำสัญญา จึงต้องไม่หลวมเมื่อมันไม่มี: `guard on --sandbox` จะไม่ยอมเปิดในที่ที่ไม่มี sandbox (Windows, Linux ที่ไม่มี bubblewrap) และถ้าต่อมา sandbox หายไปหรือเริ่มไม่ได้ (ดูข้อ 9) การติดตั้งที่ guard ต้องรันใน sandbox จะหยุดพร้อมบอกเหตุผล ไม่แอบรันนอก sandbox บน Windows มี `--ignore-scripts` แต่ยังไม่มี sandbox
 
 ### ข้างใน package มีอะไร: อ่านเนื้อหาและเทียบกับเวอร์ชันก่อน
 
@@ -551,7 +614,11 @@ vswarm try setup.zip                              # zip, tar.gz หรือไ�
 | home | home ปลอม ไม่มี token ใน environment | เหมือนกัน |
 | network | ออกได้ผ่าน proxy ของ vswarm เท่านั้น ทุก host ถูกบันทึก | เหมือนกัน |
 
-บริการที่เครื่องคุณเปิดรออยู่แล้ว (ฐานข้อมูล, Docker API, dev server ของคุณ) ก็เข้าไม่ถึงเช่นกัน: บน macOS ทุก port ที่เปิดรอจะถูกปฏิเสธทีละ port ส่วน Linux sandbox มี network ของตัวเอง; ใช้ `vswarm try … --localhost` เมื่อต้องการทดสอบโค้ดกับ server ที่คุณรันเองบน macOS
+บริการที่เครื่องคุณเปิดรออยู่แล้ว (ฐานข้อมูล, Docker API, dev server ของคุณ) ก็เข้าไม่ถึงเช่นกัน: บน macOS ทุก port ที่เปิดรอจะถูกปฏิเสธทีละ port ส่วน Linux sandbox มี network ของตัวเอง; ใช้ `vswarm try … --localhost` เมื่อต้องการทดสอบโค้ดกับ server ที่คุณรันเอง
+
+proxy ไม่พาย้อนกลับเข้าเครื่องนี้หรือเข้าระบบ cloud ของเครื่อง แม้จะใช้ `--net all`: ชื่อ host ถูกถาม DNS ก่อน ทุก address ที่ได้มาถูกตรวจ แล้วเชื่อมต่อไปที่ address ที่ตรวจแล้วเท่านั้น (ชื่อที่อีกครู่หนึ่งชี้ไปที่อื่น หรือ DNS rebinding จึงไปไหนไม่ได้) loopback ถูกปฏิเสธ เว้นแต่ใส่ `--localhost` ส่วน link-local และ address ของ cloud metadata (`169.254.169.254`, `fd00:ec2::254`, `100.100.100.200`) ถูกปฏิเสธเสมอ
+
+บน Linux sandbox จะได้ `/proc` ของ pid namespace ตัวเอง ถ้าที่ไหน mount ให้ไม่ได้ (เช่น container ที่ปิดบัง `/proc` ไว้) `try` จะไม่รัน เพราะ `/proc` ของเครื่องจริง แม้จะอ่านได้อย่างเดียว ก็มองเห็น process อื่นของเรา และ `/proc/<pid>/root` ของตัวไหนก็ได้คือ home จริงของเรา ให้รันบนเครื่องจริง หรือเปิด container ด้วย `--security-opt systempaths=unconfined` (หรือ `--privileged`) ส่วนบน macOS sandbox ยังปิดบริการดาวน์โหลดเบื้องหลังของระบบ (`nsurlsessiond`) และดัชนี Spotlight (`mds`) ด้วย
 
 ผลลัพธ์: **DANGEROUS** (อย่ารันนอก sandbox) · **SUSPICIOUS** (อ่านก่อนรันจริง) · **NOTHING SEEN** (ไม่เจออะไรในรอบนี้ ไม่ใช่การรับประกัน) · **INCONCLUSIVE** (คำสั่งล้มก่อนจบ)
 
@@ -566,7 +633,7 @@ vswarm try setup.zip                              # zip, tar.gz หรือไ�
 1. **lock:** preflight จะ BLOCK จนกว่าจะ `vswarm unlock`
 2. **evidence:** เก็บไฟล์ที่เกี่ยวข้อง พร้อม SHA-256
 3. **rotate credentials:** รายการ credential ที่ต้องเปลี่ยน **ทำจากอุปกรณ์อื่นที่สะอาด**
-4. **contain:** หยุดและกักกัน login job, ลบบรรทัดที่ถูกเพิ่ม, เอา MCP server อันตรายออก (เก็บสำเนาไว้เป็นหลักฐาน)
+4. **contain:** หยุดและกักกัน login job, ลบบรรทัดที่ถูกเพิ่ม (ลบตรงตามบรรทัดที่การตรวจบันทึกไว้ ครบทุกบรรทัด และบอกจำนวนที่ลบได้จริง), เอา MCP server อันตรายออก (เก็บสำเนาไว้เป็นหลักฐาน)
 5. **report:** เขียน `report.md` สำหรับทีม security และร่างรายงาน OSV สำหรับแจ้ง registry
 
 ![vswarm respond](img/respond.png)
@@ -591,9 +658,10 @@ vswarm unlock        # ปิดเหตุการณ์ preflight ให้�
 
 ## 11. ยอมรับสิ่งที่ตรวจแล้ว: accept
 
-ถ้าตรวจแล้วว่าสิ่งที่เจอเป็นของคุณเองและตั้งใจให้เป็นแบบนั้น ให้ยอมรับด้วย id ที่แสดงใต้แต่ละข้อ สิ่งที่ยอมรับแล้วจะไม่นับในผล preflight อีก (package ที่มีรายงานว่าอันตรายยอมรับไม่ได้)
+ถ้าตรวจแล้วว่าสิ่งที่เจอเป็นของคุณเองและตั้งใจให้เป็นแบบนั้น ให้ยอมรับด้วยหมายเลขในผลตรวจล่าสุด หรือด้วย id ที่แสดงใต้แต่ละข้อ สิ่งที่ยอมรับแล้วจะไม่นับในผล preflight อีก (package ที่มีรายงานว่าอันตรายยอมรับไม่ได้)
 
 ```bash
+vswarm ok 3 5                   # ข้อ 3 และ 5 ของผลตรวจล่าสุด (vswarm accept 3 5 ก็ได้)
 vswarm accept <id> [<id>…]      # หรือ --all ยอมรับทุกข้อในผลล่าสุด
 vswarm accept --list
 vswarm accept --remove <id>
@@ -717,24 +785,27 @@ vswarm trust           # fingerprint ของกุญแจที่เคร�
 
 | คำสั่ง | ทำอะไร |
 | --- | --- |
-| `vswarm scan [--all] [--json] [--offline]` | ตรวจทุกอย่าง exit 3 เมื่อ BLOCK |
-| `vswarm baseline [--yes]` | บันทึกสภาพสะอาด |
+| `vswarm scan [--all] [--json] [--offline]` (`check` คือคำสั่งเดียวกัน) | ตรวจทุกอย่าง exit 3 เมื่อ BLOCK |
+| `vswarm why` | ตรวจใหม่ แล้วบอกคำสั่งที่ใช้แก้หรือยอมรับใต้แต่ละข้อ และนโยบายตอนท้าย |
+| `vswarm ok <n…>` · `vswarm fix <n>` | ยอมรับข้อ n ของผลล่าสุด · แก้ข้อ n อัตโนมัติ (แสดงก่อนและถาม) หรือบอกขั้นตอน |
+| `vswarm policy [warn allow\|refuse]` | WARN ผ่านได้หรือไม่ ที่ทุกด่านและใน agent (ค่าเริ่มต้น allow) |
+| `vswarm baseline [--yes] [--accept-high]` | บันทึกสภาพสะอาด (ไม่บันทึกถ้ามี HIGH/CRIT เว้นแต่ใส่ `--accept-high`) |
 | `vswarm diff` | สิ่งที่เปลี่ยนจาก baseline |
 | `vswarm secrets` | credential อายุยาว (ไม่แสดงค่า) |
 | `vswarm agents` | MCP server, hook, permission ของ AI agent |
 | `vswarm agents --inspect [--show] [--no-sandbox] [--timeout s]` | เริ่ม MCP server ใน sandbox อ่านและ pin tool |
 | `vswarm watch on [--every นาที]` · `off` · `status` · `run` | ตรวจเบื้องหลังทุกชั่วโมงและทันทีที่มีการเปลี่ยน พร้อมแจ้งเตือน (`quick` คือสิ่งที่ job แบบ real-time รัน) |
-| `vswarm preflight [--quiet] [--strict] [--fresh] [--max-age s] [--then cmd…]` | ด่าน PASS/WARN/BLOCK |
-| `vswarm gate ssh <pattern…> [--cert]` · `gate status` · `gate remove` | ด่านใน `~/.ssh/config` |
+| `vswarm preflight [--quiet] [--strict] [--fresh] [--max-age s] [--json] [--then cmd…]` | ด่าน PASS/WARN/BLOCK |
+| `vswarm gate ssh <pattern…> [--cert]` · `gate ssh --prune` · `gate status` · `gate remove` | ด่านใน `~/.ssh/config` และ status เช็คว่า host ยังตอบอยู่ไหม |
 | `vswarm gate aws <profile…>` · `--off [profile…]` · `status` | aws: `credential_process` ของ profile รัน preflight ก่อน |
 | `vswarm gate kube <context…>` · `--off [context…]` · `status` | kubectl: exec plugin ของ user รัน preflight ก่อน |
 | `vswarm gate cmd [<ชื่อ> [pattern…]]` · `gate cmd --off <ชื่อ>` | ตัวเตือนก่อนคำสั่งที่ไม่มี hook ของ credential |
 | `vswarm gate gcloud <configuration> [--cred-file f]` · `gate gcloud <pattern…> [--wrapper]` · `--off [ชื่อ]` · `status` | gcloud: คำสั่งขอ token รัน preflight ก่อน หรือใช้ตัวครอบ |
-| `vswarm gate az [subscription…]` · `--off` · `status` | az: ตัวครอบคำสั่ง |
+| `vswarm gate az [subscription…]` · `--all` · `--off` · (ไม่ใส่อะไร: ดูสถานะ) | az: ตัวครอบคำสั่ง |
 | `vswarm ca init [--sk] [--principal a,b] [--ttl 15m]` · `ca server <account>` · `ca status` | CA สำหรับใบรับรอง ssh |
 | `vswarm cert [--host h]` | ขอใบรับรองอายุสั้น (เฉพาะตอนผ่าน) |
-| `vswarm agent protect <กุญแจ> [--confirm] [--allow-warn]` · `policy <กุญแจ> --allow-warn\|--strict` · `unprotect <กุญแจ>` · `restore <ไฟล์สำรอง>` | ย้ายกุญแจ ssh เข้าตู้เซฟของ agent และเอากลับ และตั้งว่าจะเซ็นตอน WARN หรือไม่ |
-| `vswarm agent on [host…] [--global] [--upstream path\|none] [--upstream-timeout วินาที]` · `off` · `status` · `log` · `add <กุญแจ>` · `run` | ssh agent ที่เซ็นให้เฉพาะตอนเครื่องผ่าน |
+| `vswarm agent protect <กุญแจ> [--confirm] [--allow-warn\|--strict] [--host a,b] [--anyway] [--no-verify]` · `policy <กุญแจ> --allow-warn\|--strict\|--inherit` · `unprotect <กุญแจ>` · `restore <ไฟล์สำรอง>` | ลองกุญแจกับ host ของมันก่อน แล้วย้ายเข้าตู้เซฟของ agent และเอากลับ และตั้งว่าจะทำอย่างไรตอน WARN |
+| `vswarm agent on [host…] [--global] [--allow-passwords] [--all-keys] [--upstream path\|none] [--upstream-timeout วินาที]` · `off` · `status` · `log` · `prune` · `add <กุญแจ>` · `run` · `check --host h` | ssh agent ที่เซ็นให้เฉพาะตอนเครื่องผ่าน |
 | `vswarm guard on [--ignore-scripts] [--sandbox] [--strict]` · `off` · `status` | ด่านตรวจ package ใน shell |
 | `vswarm pkg <tool> [--] <args…>` | ตรวจคำสั่งติดตั้งเอง exit 3 เมื่อควรหยุด |
 | `vswarm try <target> [--net none\|registries\|all] [--localhost] [--yes] [-- cmd…]` · `--list` · `--clean [id]` | รันโค้ดใน sandbox |
@@ -747,7 +818,7 @@ vswarm trust           # fingerprint ของกุญแจที่เคร�
 | `vswarm canary plant aws\|dns\|env` · `list` · `remove <id\|all>` | credential ล่อ |
 | `vswarm selftest [--all] [--json]` | วัดอัตราการจับและการแจ้งผิด แยกตามเทคนิค |
 | `vswarm update [--unsigned]` · `vswarm trust [pin]` | อัปเดตไป release ล่าสุดที่เซ็นถูกต้อง |
-| `vswarm doctor` · `install [--no-path] [--yes]` · `uninstall [--purge]` · `completions zsh\|bash` · `version` | ติดตั้งและดูแล |
+| `vswarm doctor` · `install [--path\|--no-path] [--yes]` · `uninstall [--purge]` · `completions zsh\|bash` · `version` | ติดตั้งและดูแล และ doctor เช็ค host ที่มีด่านด้วย |
 
 ## 16. ไฟล์ ค่าตั้ง และความเป็นส่วนตัว
 
@@ -769,10 +840,15 @@ vswarm trust           # fingerprint ของกุญแจที่เคร�
 | `try/<id>/` | สำเนาโค้ด, home ปลอม, รายงานของ `try` |
 | `ca/` | CA และใบรับรอง |
 | `agent/agent.sock`, `agent/keys/` | socket ของ ssh agent และตู้เซฟเก็บกุญแจที่ protect ไว้ |
-| `sec/audit.log` | ทุกครั้งที่ `vswarm agent` เซ็นหรือปฏิเสธ ประทับตราต่อกันเป็นสาย |
+| `sec/audit.log` | ทุกครั้งที่ `vswarm agent` เซ็นหรือปฏิเสธ ประทับตราต่อกันเป็นสาย พร้อมชื่อ host ถ้าการเช็คก่อน login เห็น |
+| `sec/policy.json` | นโยบาย WARN (`vswarm policy`) แบบประทับตรา |
+| `agent/hosts.json`, `agent/config.json` | host key แต่ละตัวเป็นของ host ชื่ออะไร (เขียนโดย `agent check`), agent ตัวเดิมที่ส่งต่อ และตัวเลือกของ `agent on` |
+| `backups/` | สำเนาไฟล์ที่ vswarm แก้ให้ (config ของ aws, kube และ gcloud, `vswarm fix`) ลบทิ้งพร้อมด่าน |
 | `trust/allowed_signers` | กุญแจ release ที่ยอมรับ |
 
-ตัวแปร environment: `VSWARM_HOME` (ย้าย `~/.vswarm`), `VSWARM_GUARD=off`, `VSWARM_SEC_DIR`, `VSWARM_TRY_DIR`, `VSWARM_CA_DIR`, `VSWARM_AGENT_DIR`, `VSWARM_AGENT_UPSTREAM`, `VSWARM_TRUST_FILE`, `NO_COLOR`, `FORCE_COLOR` · ตอนติดตั้ง: `VSWARM_REPO`, `VSWARM_REF`
+เมื่อตั้ง `VSWARM_HOME` ไว้ สิ่งที่เป็นของผู้ใช้ไม่ว่า vswarm จะใช้โฟลเดอร์ไหน (`~/.ssh/config`, LaunchAgents และ systemd unit, ไฟล์ rc ของ shell) จะมีป้าย "(system-wide, not in VSWARM_HOME)" ใน `doctor`, `agent status` และ `watch status` และ job เบื้องหลังที่รัน launcher ของ vswarm ตัวอื่นจะไม่นับว่าเป็นของตัวนี้
+
+ตัวแปร environment: `VSWARM_HOME` (ย้าย `~/.vswarm`), `VSWARM_GUARD=off`, `VSWARM_SEC_DIR`, `VSWARM_TRY_DIR`, `VSWARM_BACKUP_DIR`, `VSWARM_CA_DIR`, `VSWARM_AGENT_DIR`, `VSWARM_AGENT_UPSTREAM`, `VSWARM_TRUST_FILE`, `NO_COLOR`, `FORCE_COLOR` · ตอนติดตั้ง: `VSWARM_REPO`, `VSWARM_REF`
 
 **ข้อมูลที่ออกจากเครื่อง:**
 - ชื่อและเวอร์ชันของ package ไปที่ `api.osv.dev` เพื่อเช็คกับรายการ package อันตราย (cache 1 วัน, `--offline` เพื่อปิด ส่วน `preflight --quiet` จะถามเฉพาะเวอร์ชันที่ยังไม่เคยถาม)
@@ -800,10 +876,12 @@ vswarm รันด้วยสิทธิ์ของเรา บนเคร
 | --- | --- |
 | `Could not check chrome extensions … macOS privacy protection` | ให้ terminal ได้ Full Disk Access (System Settings → Privacy & Security) |
 | `vswarm try` บน Linux: `No permissions to create new namespace` | Ubuntu 24.04: `sudo sysctl kernel.apparmor_restrict_unprivileged_userns=0` หรือทำ AppArmor profile ให้ bwrap |
-| `vswarm try` ใน Docker | รัน container ด้วย `--security-opt seccomp=unconfined --security-opt apparmor=unconfined` |
+| `vswarm try` ใน Docker | รัน container ด้วย `--security-opt seccomp=unconfined --security-opt apparmor=unconfined` และ `--security-opt systempaths=unconfined` เพื่อให้ sandbox มี `/proc` ของตัวเอง (ไม่มีก็ไม่รัน) |
 | `strace is not installed` | `sudo apt install strace` (ไม่มีก็ใช้ได้ แต่จะไม่เห็นการพยายามเปิดไฟล์) |
 | ติดตั้ง Bun ไม่ได้: `unzip is required` | `sudo apt install unzip` |
-| ssh เข้า host ที่ใส่ด่านไม่ได้ ทั้งที่เครื่องปกติ | `vswarm preflight --fresh` ดูว่าเจออะไร แล้วแก้ หรือ `vswarm accept <id>` |
+| ssh เข้า host ที่ใส่ด่านไม่ได้ ทั้งที่เครื่องปกติ | `vswarm why` บอกว่าเจออะไร พร้อม `vswarm fix <n>` หรือ `vswarm ok <n>` ใต้แต่ละข้อ |
+| ssh ถามรหัสผ่านตอนเข้า host ที่ส่งไปใช้ agent | เป็นบล็อกของ agent จากก่อน 2.8: สั่ง `vswarm agent on` อีกครั้ง แล้วการปฏิเสธจะขึ้นใน terminal และจบด้วย `Permission denied` |
+| `vswarm agent: ssh to … refused: preflight warns, and … signs on PASS only` | กุญแจที่ protect ไว้ด้วย 2.7 หรือเก่ากว่ายังเซ็นเฉพาะ PASS สั่ง `vswarm agent policy <กุญแจ> --inherit` (ใช้นโยบายกลาง) หรือ `--allow-warn` |
 | `Your baseline is older than these checks` | vswarm เพิ่มการตรวจใหม่ ดูรายการ (เช่น `vswarm agents`) แล้ว `vswarm baseline` |
 | `not updating to vX: … not signed` | อย่าเพิ่งอัปเดต เทียบ fingerprint กับที่ประกาศไว้ (ดู[ข้อ 14](#14-อัปเดตอย่างปลอดภัย-update-และ-trust)) |
 | `the incident is open` / preflight BLOCK ตลอด | ทำความสะอาดเครื่อง → `vswarm baseline` → `vswarm unlock` |
@@ -811,7 +889,6 @@ vswarm รันด้วยสิทธิ์ของเรา บนเคร
 | `vswarm's baseline was changed outside vswarm` | ดู `vswarm diff` ให้แน่ใจก่อน แล้ว `vswarm baseline` เพื่อบันทึกและประทับตราใหม่ |
 | `vswarm could not check its own files: its sealing key is not readable` | ปลดล็อก login keychain (`security unlock-keychain`) หรือ keyring ของเดสก์ท็อป `vswarm doctor` บอกว่ากุญแจอยู่ที่ไหน |
 | `vswarm agent: refused … its audit line could not be sealed and written` · `vswarm unlock`: `cannot record the unlock` · เหตุการณ์เก่ากลับมานับว่าเปิดอีก | สาเหตุเดียวกัน: ที่เก็บกุญแจไม่ตอบ และ vswarm ไม่เซ็น ไม่ปลดล็อก และไม่จดอะไรที่ไม่มีตรา พอที่เก็บกุญแจตอบก็ใช้ได้ตามเดิม (agent ลองใหม่เอง) |
-| `vswarm agent: refused … preflight warns and this key is strict` หลังอัปเกรดเป็น 2.7 | ตอนนี้กุญแจที่ protect ไว้ปฏิเสธตอน WARN เป็นค่าเริ่มต้น แก้หรือ accept finding ให้เรียบร้อย หรือให้กุญแจตัวนั้นเซ็นตอน WARN ได้: `vswarm agent policy <กุญแจ> --allow-warn` |
 | `vswarm's sealing key was moved to a plain file, and vswarm did not move it` | มีคนแก้ `~/.vswarm/sec/keystore.json` ถ้าไม่ใช่เรา ให้ถือว่าเครื่องอาจโดนแล้ว (`vswarm respond`) จากนั้นลบ `keystore.json` ทิ้ง |
 
 ### Windows (รุ่นทดลอง)
@@ -827,7 +904,7 @@ vswarm scan
 vswarm watch on      # scheduled task \vswarm\watch ของคุณคนเดียว มี toast แจ้งเมื่อเจอของใหม่
 ```
 
-ถ้ารันจากโค้ดที่ clone มา: `bun install` แล้ว `bun src/cli.ts <คำสั่ง>`
+`install` จะถามก่อนเพิ่ม vswarm เข้า PATH (ของผู้ใช้ใน registry) ใส่ `--path` คือตอบใช่ `--no-path` คือไม่ และถ้าไม่มี terminal ให้ถามก็จะไม่แตะ PATH ถ้ารันจากโค้ดที่ clone มา: `bun install` แล้ว `bun src/cli.ts <คำสั่ง>` ส่วน `watch on`, `guard on` และ `gate cmd` จะเขียน launcher จาก clone นั้นให้เองถ้ายังไม่มี (ไม่แตะ PATH)
 
 สิ่งที่ตรวจ: ค่า Run และ RunOnce (HKCU, HKLM, 32-bit), โฟลเดอร์ Startup (อ่าน shortcut ว่าเปิดอะไร), scheduled task
 ที่อยู่นอก `\Microsoft\`, service ที่เริ่มเองและไม่ได้อยู่ในโฟลเดอร์ Windows, WMI event subscription แบบถาวร (ตัว
@@ -837,8 +914,9 @@ extension ของ Chrome/Edge/Brave, ค่าตั้งของ AI agent (
 ที่พบบ่อย ทั้งหมดมาจากการอ่าน PowerShell รอบเดียวต่อการตรวจ ([windows-snapshot.ps1](../src/sec/collect/windows-snapshot.ps1))
 ส่วนไหนอ่านไม่ได้จะแสดงเป็นช่องว่างที่ยังไม่ได้ตรวจ
 
-ใช้ได้ทุกคำสั่ง ยกเว้น `try` และ `agents --inspect` (ต้องใช้ sandbox) กับ `ca`, `cert`, `canary` และ `shot` ซึ่งจะหยุดพร้อม
-exit 4 ถ้าจะใช้ให้ใช้ใน WSL ส่วนที่ต่างจาก macOS และ Linux:
+ใช้ได้ทุกคำสั่ง ยกเว้น `try`, `ca`, `cert`, `canary`, `agent` และ `shot` ซึ่งจะหยุดพร้อม exit 4 ถ้าจะใช้ให้ใช้ใน WSL ส่วน
+`agents --inspect` ต้องใส่ `--no-sandbox` (บน Windows ยังไม่มี sandbox) และจะเริ่มคำสั่งแบบ `.cmd` อย่าง `npx` หรือ `uvx` ผ่าน
+`cmd.exe` โดยใส่เครื่องหมายคำพูดครอบทุกคำ ส่วนที่ต่างจาก macOS และ Linux:
 
 - `watch` เป็น scheduled task ชื่อ `\vswarm\watch` ที่รัน launcher ทุกชั่วโมง (หรือตาม `--every` นาที) ผ่าน
   `conhost --headless` จึงไม่มีหน้าต่างเด้งขึ้นมา และแจ้งเตือนด้วย toast ตอนสแกนจะถือว่า task นี้เป็นของ vswarm
@@ -850,7 +928,8 @@ exit 4 ถ้าจะใช้ให้ใช้ใน WSL ส่วนที�
 - `guard on` จะเขียนลง `Documents\WindowsPowerShell\profile.ps1` และลง profile ของ PowerShell 7 ด้วยถ้าติดตั้งไว้
   โดยคง encoding เดิมของไฟล์ไว้ ถ้า execution policy เป็น Restricted (ค่าเริ่มต้นของ Windows) PowerShell จะไม่รัน
   profile เลย `guard on` จะเตือนเรื่องนี้ และแก้ได้ด้วย `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned`
-  ถ้าจะข้าม guard ครั้งเดียวให้พิมพ์ `npm.cmd …`
+  ถ้าจะข้าม guard ครั้งเดียวให้พิมพ์ `npm.cmd …` ส่วน `yarn` เฉยๆ และ `yarn --frozen-lockfile` ที่มีแต่ตัวเลือก ถือเป็นการติดตั้ง
+  และถูกตรวจเหมือนใน bash และ zsh
 - `respond` จะล็อก เก็บหลักฐาน และพิมพ์คำสั่ง PowerShell สำหรับลบสิ่งที่เจอ (`Remove-ItemProperty`,
   `Disable-ScheduledTask`, `Set-Service`, `Remove-CimInstance`) ให้คุณรันเอง มันไม่รันเอง
 - `uninstall` จะลบ task, gate, guard, launcher และ PATH ออก

@@ -84,7 +84,11 @@ What it does:
   passes, whatever client or route asks: `ssh -F /dev/null`, an IP address, a GUI client, paramiko, or a deleted
   config block get no signature from a blocked machine, and a copy of `~/.ssh` no longer holds the key. Every
   signature is sealed and chained in its audit log: one whose line cannot be sealed is not made. A protected key
-  signs on a verdict at most 30 seconds old, and on PASS only unless protected with `--allow-warn`. It does
+  signs on a verdict at most 30 seconds old. BLOCK is always refused; WARN follows **one policy shared with every
+  gate** (`vswarm policy`, allow by default, kept sealed; a policy file edited by hand counts as refuse), unless the
+  key has a setting of its own (`agent policy --allow-warn | --strict`; keys from 2.7 and older keep the one they
+  were protected with). `agent protect` removes a key file only after a login to one of its hosts succeeded with it,
+  and the agent's ssh block ends a refused login in "Permission denied" rather than a password prompt. It does
   **not** stop malware running as you from asking the agent to sign while the machine passes, reading the agent's
   memory, or reading the wrapping key the way vswarm does. Hardware keys (`-sk`) and short-lived certificates are
   stronger, and combine with it.
@@ -101,7 +105,13 @@ What it does:
   path and time limits). It looks for install-time code that decodes and runs hidden code, reads credentials, reaches
   the network or persists, and for what is new since the release before (an account-takeover release). This is
   pattern reading: well-hidden code can get past it, and a package that only misbehaves later is not seen. Install
-  scripts run only when you opt in, and then only in the `try` sandbox.
+  scripts run only when you opt in, and then only in the `try` sandbox. Where the sandbox was promised
+  (`guard on --sandbox`) and is not available, the install stops instead of running outside it; a suspicious package
+  installs only on an explicit yes at a terminal.
+- **Keeps `try` inside its walls.** On Linux the sandbox runs only with a `/proc` of its own pid namespace (without
+  one, it refuses to run: the host's `/proc` would expose other processes' `/proc/<pid>/root`). The proxy, even with
+  `--net all`, resolves a name first and refuses loopback (unless `--localhost`), link-local and cloud metadata
+  addresses, connecting only to the address it checked.
 - **Is not the enforcement point** for production. The decision that cannot be bypassed from the laptop belongs on
   the server: short-lived certificates, a bastion or SSH CA that asks for a fresh signed report, device trust in your
   identity provider. See [docs/server-side.md](docs/server-side.md).
@@ -110,8 +120,12 @@ What it does:
 
 - Ways to make `vswarm preflight` pass on a machine that should be blocked (bypasses of a rule or of the lock), short
   of reading the sealing key the way vswarm itself does.
-- Ways to get a signature from `vswarm agent` with a protected key while the machine is blocked or locked, or to
-  read a protected key from its vault or backup, short of reading the wrapping key or the agent's memory.
+- Ways to get a signature from `vswarm agent` with a protected key while the machine is blocked or locked, or on a
+  WARN that the policy (or the key's own setting) refuses, or to read a protected key from its vault or backup, short
+  of reading the wrapping key or the agent's memory.
+- Ways to make a gate let a WARN through that `vswarm policy` refuses.
+- Code run by `vswarm try` that reaches this machine's loopback services, link-local or cloud metadata addresses
+  through the proxy (without `--localhost`), or reads another process's files through `/proc`.
 - Ways to make `vswarm update` or the installer accept a release that is not signed by a pinned key, or an older one.
 - Ways to make vswarm run code, change files, or send data it should not (it should only send package names and
   versions to api.osv.dev and the registries, and download package archives from the registries).
