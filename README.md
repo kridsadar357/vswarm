@@ -55,6 +55,24 @@ vswarm selftest             # plant fake threats in a sandbox home, measure dete
 vswarm watch on             # check hourly, and within seconds when a login job, rc or agent config changes
 ```
 
+### The dashboard: vswarm ui
+
+```bash
+vswarm ui                   # a local page in plain words, Thai or English; Ctrl+C to stop
+vswarm report --html        # the same view as one HTML file to share, credentials masked
+```
+
+One big answer (**Safe**, **Check this** or **Stop**) with the reason, the findings as cards that say why each
+matters and what to do ("Needs action", "Fine if it's yours", "For your information"), recent events (checks, the
+watch, key use by `vswarm agent`, incidents) and a tile per protection. It is made for someone who does not read
+security output. From the page you can run a check and mark a finding as yours; everything else (respond, unlock,
+gates, keys, uninstall) stays in the terminal and the page shows the command to copy. It listens on 127.0.0.1 only,
+with a one-time key in the link; see [SECURITY.md](SECURITY.md#the-local-dashboard-vswarm-ui).
+
+![vswarm ui in Thai: Check this, four cards, protection tiles and recent events](docs/img/ui-th-light.png)
+
+<sub>A fake demo machine. English and dark mode: [light](docs/img/ui-en-light.png) · [dark](docs/img/ui-en-dark.png) · [Thai dark](docs/img/ui-th-dark.png) · [narrow screen](docs/img/ui-th-phone.png).</sub>
+
 ### Gate production access
 
 ```bash

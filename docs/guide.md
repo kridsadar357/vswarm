@@ -200,6 +200,43 @@ watch status` and `vswarm doctor` show whether the real-time part is on; an olde
 
 ![vswarm watch run](img/watch-run.png)
 
+### vswarm ui: the dashboard
+
+```bash
+vswarm ui              # opens http://127.0.0.1:<port>/#t=<one-time key> in your browser
+vswarm ui --no-open    # only print the link (a server without a desktop, or another browser)
+```
+
+A local page for people who do not read security output, in Thai or English:
+
+- **the answer**, big: **Safe**, **Check this** or **Stop**, one sentence on why, and when it last checked. Technical
+  words come second and small ("starting point (baseline)").
+- **things to look at**: each finding as a card with what it is, why it matters and what to do, grouped as *Needs
+  action* (high and critical, or vswarm's own files), *Fine if it's yours* (medium) and *For your information* (low).
+  The technical title and details are one click away.
+- **recent events**: checks, background and real-time watch runs, notifications, the baseline, what you marked as
+  yours, every signature and refusal by `vswarm agent` (with the host, when `~/.ssh/known_hosts` names its key in the
+  clear) and incidents.
+- **protection at a glance**: background watch, install guard, production keys in the vault (with each key's rule and
+  its last use), production doors (ssh, AWS, Kubernetes, gcloud and command gates), AI tool servers inspected, and
+  where the key that seals vswarm's records is kept.
+
+The page reads what vswarm already keeps; it does not run a check by itself. It can do three things, each after a
+dialog that says exactly what will happen, and each echoed in the terminal where `vswarm ui` runs: **Run a check
+now** (the same check as `vswarm scan`), **This is mine** (the same as `vswarm accept <id>` for one finding; not for a
+known-malicious package, vswarm's own files, a team requirement or anything critical) and the language switch.
+Everything that changes protection (respond, unlock, baseline, gates, guard, watch, agent protect and unprotect,
+policies, uninstall) stays in the terminal, and the page shows the command to copy.
+
+The language follows `LANG`; the switch on the page is remembered (`~/.vswarm/sec/ui.json`) and `VSWARM_LANG=th|en`
+overrides both. The page stops after 30 minutes without use, or on Ctrl+C. How it keeps other sites and other users
+out is in [SECURITY.md](../SECURITY.md#the-local-dashboard-vswarm-ui).
+
+![vswarm ui](img/ui-en-light.png)
+
+`vswarm report --html [--out file]` writes the same view as one self-contained HTML file to send to your team: a
+fresh check, no server and no buttons, credentials masked, home folders shown as `~` and the user name left out.
+
 ## 4. Credentials on the machine: secrets
 
 `vswarm secrets` says where long-lived credentials are. **It never reads values out**, only where and what kind.
@@ -981,6 +1018,8 @@ Maintainers: the release steps are in [SECURITY.md](../SECURITY.md#for-the-maint
 | `vswarm respond [--yes] [--force]` | incident response |
 | `vswarm report [incident]` | write the report again |
 | `vswarm report --json [--sign key] [--out dir]` | this machine's state for a server or team, optionally signed |
+| `vswarm report --html [--out file]` | the dashboard as one HTML file to share; credentials masked |
+| `vswarm ui [--no-open]` | a local page in plain words (127.0.0.1 only, one-time key, Thai or English) |
 | `vswarm unlock [--force]` | close the incident |
 | `vswarm accept <id…>` · `--all` · `--list` · `--remove <id>` | accept reviewed findings |
 | `vswarm team join <git url> [--fingerprint fp]` · `sync` · `status` · `leave` · `sign <file> --key k` | a signed team policy ([team.md](team.md)) |

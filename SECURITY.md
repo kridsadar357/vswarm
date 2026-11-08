@@ -106,6 +106,40 @@ What it does:
   the server: short-lived certificates, a bastion or SSH CA that asks for a fresh signed report, device trust in your
   identity provider. See [docs/server-side.md](docs/server-side.md).
 
+## The local dashboard (vswarm ui)
+
+`vswarm ui` serves a page on this machine. What keeps other people and other web pages out of it:
+
+- **This machine only.** It binds `127.0.0.1` on a random free port; there is no option for another address and no
+  remote mode. It never listens on `::1`, `0.0.0.0` or a LAN address.
+- **A key per run.** Each run makes a random 256-bit key, kept in memory only (never on disk). The browser gets it in
+  the URL fragment (`#t=…`), which browsers do not send to servers and servers do not log; the page sends it back as
+  `Authorization: Bearer …` on every API request. No cookies. The link is printed in the terminal too: treat it like a
+  password for the next 30 minutes.
+- **Every request is checked**: the `Host` header must be exactly `127.0.0.1:<port>` (DNS rebinding), and an
+  `Origin` or `Sec-Fetch-Site` header, when sent, must be same-origin (CSRF). No CORS headers are ever sent, so a page
+  on another site can neither read an answer nor send the `Authorization` header. Everything about the machine is
+  under `/api` and needs the key; the static files (page, script, style, language files) are the same for everyone
+  and hold no machine data.
+- **Nothing changes on a GET.** The three actions (run a check, accept one finding, the language) are POSTs with the
+  key and a JSON body. Accepting refuses known-malicious packages, vswarm's own files, team requirements and critical
+  findings, and takes only findings from the sealed last check, by a reference that means nothing outside this run.
+  Every action is echoed in the terminal. Unprotect, restore, `unlock --force`, respond, policies, gates and uninstall
+  are never offered.
+- **Headers**: `Content-Security-Policy: default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self'
+  data:; connect-src 'self'; frame-ancestors 'none'` (no inline script or style), `X-Content-Type-Options: nosniff`,
+  `Referrer-Policy: no-referrer`, `Cache-Control: no-store`, `X-Frame-Options: DENY`.
+- **Output**: finding details are masked already; every string is masked again before it leaves (tokens, URL
+  passwords, `--token`-style values, long hex/base64) and the home folder is shown as `~`. The page puts data in with
+  `textContent` only, never as HTML.
+- **Lifetime**: it stops after 30 minutes without use (the page's own refresh does not count), and on Ctrl+C.
+- **`vswarm report --html`** writes a file with no server: its own CSP lets only its exact script and style run (by
+  hash) and nothing load; the embedded data is escaped so it cannot close its `<script>` element.
+
+What it does not stop: another program running as you can read the link from your terminal or browser, and use the
+page as you would. That is the same-user limit described above; the page offers nothing that the `vswarm` command
+does not.
+
 ## In scope
 
 - Ways to make `vswarm preflight` pass on a machine that should be blocked (bypasses of a rule or of the lock), short
@@ -120,6 +154,8 @@ What it does:
 - Archives that make the package reader write outside its folder, run anything, or exhaust memory or time past its
   limits.
 - Credential values ending up in output, reports, or files under `~/.vswarm`.
+- Ways for a web page, another user on the machine or the network to read from or act through `vswarm ui`
+  without the link of that run.
 - Weaknesses in `vswarm respond` that could destroy evidence or damage the machine beyond what the user approved.
 
 ## Not a vulnerability
