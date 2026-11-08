@@ -153,6 +153,8 @@ function usage() {
   row("vswarm respond", "lock, evidence, credential checklist, quarantine, report");
   row("vswarm report [incident]", "write the incident report again");
   row("vswarm report --json [--sign key] [--out dir]", "this machine's state for a server that decides (signed with an SSH key)");
+  row("vswarm report --html [--out file]", "one self-contained page of this machine's state, to share with a team");
+  row("vswarm ui", "open the dashboard in your browser (this computer only, plain language, Thai or English)");
   row("vswarm unlock", "close the incident once the machine is clean");
   console.log(`\n  ${c.bold("team")}`);
   row("vswarm team join <git url> [--fingerprint fp]", "follow a signed team policy (accepted findings, allowlists, required checks)");
