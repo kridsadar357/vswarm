@@ -150,6 +150,25 @@ What it does not stop: another program running as you can read the link from you
 page as you would. That is the same-user limit described above; the page offers nothing that the `vswarm` command
 does not.
 
+## vswarm setup and the language setting
+
+`vswarm setup` is a guide over the commands that already exist, and has no power of its own: each step calls the
+same code as `baseline`, `ok`, `fix`, `watch on`, `guard on`, `agents --inspect`, `gate ssh`, `agent protect` and
+`policy`, with the same checks.
+
+- **Asks before every change**, and every question can be answered no. Without a terminal to ask on, it prints the
+  plan and changes nothing. `--yes` takes the recommended answers but never decides which hosts are production and
+  never moves a key: those need a person.
+- **The baseline refusal stands**: over HIGH or CRIT findings nobody marked as theirs, setup does not record the
+  starting point, exactly as `vswarm baseline` without `--accept-high` refuses.
+- **No passphrase passes through vswarm.** A key with a passphrase is unlocked by ssh's own prompts (`agent protect`'s
+  test logins, `ssh-copy-id`, `ssh-keygen -p`); vswarm neither asks for nor stores one. Keys move only through
+  `agent protect`, which logs in with the key first and removes the file only after a server accepted it; the recovery
+  code is shown once, and setup says to keep it in a password manager.
+- **The language** (`vswarm lang`, the dashboard's switch, `ui.json` beside vswarm's state) changes words only, so it
+  is not sealed. Verdicts, `--json`, exit codes, logs and every sealed file are the same in any language, and what a
+  gate or the agent decides never depends on it.
+
 ## In scope
 
 - Ways to make `vswarm preflight` pass on a machine that should be blocked (bypasses of a rule or of the lock), short

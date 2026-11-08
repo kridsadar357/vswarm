@@ -50,7 +50,7 @@ curl -fsSL https://raw.githubusercontent.com/kridsadar357/vswarm/main/install.sh
 ตัวติดตั้งจะ:
 - ดาวน์โหลด vswarm ไปไว้ที่ `~/.vswarm/app` และติดตั้ง release ล่าสุดหลังตรวจลายเซ็นแล้ว (ดู[ข้อ 14](#14-อัปเดตอย่างปลอดภัย-update-และ-trust))
 - ใส่คำสั่ง `vswarm` ใน PATH และติดตั้ง tab completion ของ zsh/bash
-- ถามว่าจะบันทึก baseline เลยไหม
+- จบด้วยขั้นต่อไปขั้นเดียว: `vswarm setup` ใน terminal ใหม่ ([ข้อ 2](#2-เริ่มต้นใน-5-นาที))
 
 บน Linux ถ้าจะใช้ `vswarm try` ให้ลงเพิ่ม:
 
@@ -62,17 +62,37 @@ sudo apt install bubblewrap strace      # Fedora: dnf · Arch: pacman
 
 ตรวจการติดตั้งด้วย `vswarm doctor`
 
-![vswarm doctor](img/doctor.png)
+![vswarm doctor](img/doctor-th.png)
 
-ดูคำสั่งทั้งหมดด้วย `vswarm help`
+ดูคำสั่งทั้งหมดด้วย `vswarm help` (แบ่งเป็นหมวด ใช้ประจำ, เมื่อเจออะไรบางอย่าง, ก่อนเข้า production และขั้นสูง)
 
-![vswarm help](img/help.png)
+![vswarm help](img/help-th.png)
 
 ถอนการติดตั้งด้วย `vswarm uninstall` (ข้อมูลใน `~/.vswarm` ยังอยู่) หรือ `vswarm uninstall --purge` เพื่อลบทั้งหมด
 
 ถ้าอยากลองใช้โดยไม่ให้แตะไฟล์ shell หรือ PATH ให้ตั้ง `VSWARM_HOME` เป็นโฟลเดอร์แยก แล้วรัน `vswarm install --no-path --yes` จาก checkout ตัว launcher, completions และข้อมูลทั้งหมดจะอยู่ในโฟลเดอร์นั้น และจะยังไม่ทำ baseline ส่วน `watch`, `agent` และ `gate cmd` ต้องมี launcher นี้ก่อน
 
 ## 2. เริ่มต้นใน 5 นาที
+
+```bash
+vswarm setup
+```
+
+ตั้งค่าทีละขั้น ถามทีละคำถาม ทุกขั้นคือคำสั่งที่สั่งเองได้อยู่แล้ว setup จึงไม่ทำอะไรเกินกว่าคำสั่งเหล่านั้น:
+
+1. บอกในย่อหน้าเดียวว่าจะทำอะไร และระบบจะแสดงอะไร: บน macOS เมื่อเปิดการเฝ้าดู macOS จะขึ้นข้อความ *Background Items Added: vswarm* ซึ่งเป็นเรื่องปกติ (คือตัวเฝ้าดูของ vswarm) บน Linux การเฝ้าดูคือ systemd unit ของผู้ใช้ ส่วนบน Windows คือ scheduled task
+2. **ตรวจเครื่อง**: แต่ละเรื่องที่เจอมีประโยคอธิบายสั้นๆ กด `f` เพื่อแก้ (`vswarm fix` ซึ่งแสดงสิ่งที่จะเปลี่ยนแล้วถามอีกครั้ง) หรือ `o` ถ้าเป็นของคุณเอง (`vswarm ok`) กด Enter เพื่อข้าม
+3. **จุดอ้างอิง (baseline)**: ถ้ายังมีเรื่องร้ายแรง (HIGH หรือ CRIT) ที่ไม่มีใครยืนยันว่าเป็นของตัวเอง จะไม่ยอมบันทึก เหมือนที่ `vswarm baseline` ปฏิเสธ
+4. **การป้องกันที่ทำงานเอง**: การเฝ้าดูเบื้องหลัง (`watch on`) การตรวจก่อนติดตั้ง (`guard on`) และการตรวจ tool server ของ AI ที่ยังไม่เคยตรวจ (`agents --inspect` ใน sandbox)
+5. **Production**: เครื่องใน `~/.ssh/config` แสดงพร้อมหมายเลข พิมพ์หมายเลขหรือชื่อของเครื่อง production แล้วเครื่องเหล่านั้นจะได้ด่าน (`gate ssh`) สำหรับกุญแจแต่ละดอกที่เครื่องเหล่านั้นใช้ setup จะเสนอให้ย้ายเข้าตู้เซฟ (`agent protect`): ลองกุญแจกับเซิร์ฟเวอร์ก่อน ย้ายเข้าตู้เซฟเฉพาะเมื่อมีเซิร์ฟเวอร์รับแล้ว (ถ้าเซิร์ฟเวอร์ยังไม่รู้จักกุญแจ จะเสนอ `ssh-copy-id` ให้) และแสดงรหัสกู้คืนแค่ครั้งเดียว ให้เก็บไว้ในโปรแกรมจัดการรหัสผ่าน รหัสผ่านของกุญแจมีแต่เครื่องมือของ ssh เองที่ถาม
+6. **เมื่อมีเรื่องที่ควรดู**: "ถ้ามีเรื่องเล็กๆ ที่ควรดู ยังให้เข้า production ได้ไหม? (แนะนำ: ได้)" ซึ่งก็คือ `vswarm policy warn allow` หรือ `refuse`
+7. สรุปว่าตอนนี้เปิดอะไรอยู่ ดูภาพรวมได้ที่ไหน (`vswarm ui`) และยกเลิกทั้งหมดได้อย่างไร (`vswarm uninstall`)
+
+ทุกคำถามตอบ "ไม่" ได้ และสั่ง setup ซ้ำได้เสมอ: จะบอกว่าอะไรเปิดอยู่แล้ว และเสนอเฉพาะสิ่งที่ยังขาด `vswarm setup --yes` ใช้คำตอบที่แนะนำโดยไม่ถาม แต่จะไม่เลือกเครื่อง production และไม่ย้ายกุญแจแทนคุณ ถ้าไม่มี terminal (สคริปต์, CI) setup จะแสดงแผนอย่างเดียวโดยไม่เปลี่ยนอะไร
+
+![vswarm setup ภาษาไทย](img/setup-th.png)
+
+ถ้าจะทำเองทีละคำสั่ง:
 
 ```bash
 vswarm scan                     # 1. ดูสภาพเครื่องตอนนี้
@@ -83,13 +103,38 @@ vswarm guard on                 # 4. ตรวจ npm, pip, brew ก่อนต
 
 หลังจากนี้ ถ้ามีอะไรแปลกปลอมเกิดขึ้นบนเครื่อง เช่น login job ใหม่, บรรทัดใหม่ใน `.zshrc`, MCP server ใหม่ หรือ Homebrew tap ของคนอื่น การ `ssh prod-…` ครั้งถัดไปจะถูกหยุด และบอกว่าเจออะไร
 
+### vswarm พูดอย่างไร
+
+ผลตรวจทุกคำสั่งใช้สถานะชุดเดียวกัน เป็นคำง่ายๆ พร้อมจุดสีแบบไฟจราจร และมีป้ายเดิมอยู่ข้างๆ:
+
+| สถานะ | ป้าย | ความหมาย |
+| --- | --- | --- |
+| ● ปลอดภัย | PASS | ไม่ต้องทำอะไร |
+| ● ควรดูสักนิด | WARN | มีของใหม่หรือของที่เปลี่ยนไป ส่วนใหญ่เป็นของคุณเอง ยังเข้า production ได้ เว้นแต่นโยบายจะไม่ให้ |
+| ● หยุดก่อน | BLOCK | มีสิ่งที่อาจเป็นการโจมตี เข้า production ไม่ได้จนกว่าจะจัดการเรียบร้อย |
+
+ผลตรวจเริ่มด้วยสถานะและประโยคเดียว ("ไม่พบสิ่งอันตราย มี 1 เรื่องที่ควรดู") แล้วแบ่งเรื่องที่เจอตามสิ่งที่ต้องทำ: **ต้องจัดการ**, **ควรดู**, **แค่ให้รู้** (ซ่อนไว้ เว้นแต่สั่ง `--all`) แต่ละเรื่องมีหมายเลข หัวข้อภาษาง่ายๆ เหตุผลหนึ่งประโยค และคำสั่งเดียวที่ควรรัน: `vswarm fix 2` ถ้า vswarm แก้ให้ได้, `vswarm ok 2` ถ้าเป็นของคุณ หรือ `vswarm why 2` เพื่อดูให้ละเอียดก่อน หัวข้อทางเทคนิคของ vswarm แสดงจางๆ อยู่ข้างใต้ ส่วนรายละเอียดทั้งหมดดูได้ด้วย `--details` (และ `vswarm why`) จำนวนรายการและเวลาที่ใช้อยู่บรรทัดจางๆ ด้านล่าง ส่วนที่ตรวจไม่ได้เหลือบรรทัดสั้นๆ บรรทัดเดียวพร้อมวิธีแก้ ศัพท์เทคนิคใช้คำไทยก่อนแล้ววงเล็บคำเดิม: จุดอ้างอิง (baseline), ด่าน (gate), ตู้เซฟ (vault)
+
+สีใช้บอกสถานะและสิ่งที่ต้องทำเท่านั้น ถ้าตั้ง `NO_COLOR` ไว้ จุด คำ และป้ายก็ยังบอกได้ครบ vswarm ใช้สี 24-bit เมื่อ terminal บอกว่ารองรับ (`COLORTERM=truecolor`) นอกนั้นใช้ 16 สีพื้นฐาน และตัดบรรทัดตามความกว้างของ terminal (หรือ `COLUMNS`) โดยวัดความกว้างของภาษาไทยตามที่แสดงจริงและตัดตรงรอยต่อคำ ผลที่ส่งเข้าไฟล์หรือ pipe จะไม่ตัดบรรทัด ส่วน `--json` และ exit code เหมือนเดิมทุกอย่าง
+
+### ภาษาไทยหรืออังกฤษ: vswarm lang
+
+```bash
+vswarm lang th      # ภาษาไทย ทั้งใน terminal และใน vswarm ui
+vswarm lang en      # ภาษาอังกฤษ
+vswarm lang auto    # ตามภาษาของระบบ: LC_ALL, LC_MESSAGES, LANG แล้วตามด้วยภาษาที่เลือกไว้ใน macOS
+vswarm lang         # ตอนนี้ใช้ภาษาอะไร และเพราะอะไร
+```
+
+ตั้งครั้งเดียวใช้ทั้ง terminal และหน้าภาพรวม (ปุ่มเปลี่ยนภาษาในหน้า `vswarm ui` ก็คือค่าเดียวกันนี้) เก็บไว้ที่ `~/.vswarm/sec/ui.json` ถ้าจะเปลี่ยนเฉพาะครั้งเดียวหรือเฉพาะ shell นั้นใช้ `VSWARM_LANG=th|en|auto` ชื่อคำสั่ง ตัวเลือก path และชื่อทางเทคนิคยังเป็นภาษาอังกฤษตามที่พิมพ์ ประโยคที่ยังไม่ได้แปลจะแสดงเป็นภาษาอังกฤษ ส่วน `--json` บันทึก log และข้อมูลที่ปิดผนึกของ vswarm เป็นภาษาอังกฤษเสมอ บน Windows ค่า `auto` คือภาษาอังกฤษ และภาษาไทยจะแสดงเมื่อเขียนลง console (ซึ่ง vswarm ตั้งเป็น UTF-8 ระหว่างรัน) หรือเมื่อส่งเข้า pipe ที่ code page ของ console เป็น UTF-8 อยู่แล้ว (PowerShell 5.1 อ่านผลของโปรแกรมตาม code page นั้น) นอกนั้นใช้ `VSWARM_LANG=th` เพื่อขอภาษาไทย
+
 ## 3. ตรวจเครื่อง: scan, baseline, diff
 
 ### vswarm scan
 
 ตรวจทุกอย่างที่รันโค้ดได้ ฝังตัวได้ หรือถือสิทธิ์เข้าระบบอยู่ ใช้เวลาไม่ถึง 1 วินาที
 
-![vswarm scan](img/scan.png)
+![vswarm scan](img/scan-th.png)
 
 | ตรวจอะไร | macOS | Linux |
 | --- | --- | --- |
@@ -115,19 +160,28 @@ vswarm guard on                 # 4. ตรวจ npm, pip, brew ก่อนต
 | MED | ควรตรวจ เช่น login job ใหม่, SSH key ไม่มีรหัสผ่านที่ host production ใช้ | **WARN**: ค่าเริ่มต้นคือปล่อยผ่าน ([นโยบาย](#นโยบายเดียวสำหรับ-warn-vswarm-policy)) แต่ควรแก้หรือยอมรับ |
 | LOW, INFO | ข้อมูลประกอบ ซ่อนไว้ ดูด้วย `--all` | **PASS** |
 
-ตัวเลือก: `--all` แสดงทุกระดับ · `--json` ผลลัพธ์สำหรับโปรแกรมอื่น · `--offline` ไม่ถาม OSV (ใช้ cache) ส่วน `vswarm check` คือคำสั่งเดียวกัน
+ตัวเลือก: `--all` แสดงทุกระดับ · `--details` แสดงรายละเอียดทางเทคนิคทั้งหมดใต้แต่ละข้อ · `--json` ผลลัพธ์สำหรับโปรแกรมอื่น (ภาษาอังกฤษ เหมือนเดิม) · `--offline` ไม่ถาม OSV (ใช้ cache) ส่วน `vswarm check` คือคำสั่งเดียวกัน
 
-**ทุก finding มีหมายเลข** ทั้งใน scan, diff, preflight และ why เรียงแบบเดียวกันทุกครั้ง (ตามลำดับของผลตรวจที่บันทึกไว้) `vswarm ok 3` ยอมรับข้อ 3 ของผลตรวจล่าสุด (`vswarm accept <id>` ก็ยังใช้ได้) ส่วน `vswarm fix 3` จะแก้ข้อ 3 ให้อัตโนมัติถ้ามีวิธีที่ปลอดภัย โดยแสดงให้เห็นก่อนว่าจะทำอะไรแล้วถามก่อนทำ ถ้าไม่มีวิธีอัตโนมัติจะบอกขั้นตอนให้ทำเอง ส่วน `vswarm why` คือ `preflight --fresh` ที่เขียนวิธีออกไว้ใต้ทุกข้อ:
+**ทุก finding มีหมายเลข** ทั้งใน scan, diff, preflight และ why เรียงแบบเดียวกันทุกครั้ง (ตามลำดับของผลตรวจที่บันทึกไว้) `vswarm ok 3` ยอมรับข้อ 3 ของผลตรวจล่าสุด (`vswarm accept <id>` ก็ยังใช้ได้) ส่วน `vswarm fix 3` จะแก้ข้อ 3 ให้อัตโนมัติถ้ามีวิธีที่ปลอดภัย โดยแสดงให้เห็นก่อนว่าจะทำอะไรแล้วถามก่อนทำ ถ้าไม่มีวิธีอัตโนมัติจะบอกขั้นตอนให้ทำเอง ส่วน `vswarm why` คือ `preflight --fresh` ที่เขียนไว้ใต้ทุกข้อว่าทำไมถึงสำคัญ ควรทำอะไร มีทางออกอะไรบ้าง (วิธีแก้และสิ่งที่จะเปลี่ยน หรือยืนยันว่าเป็นของคุณ) แล้วตามด้วยรายละเอียด `vswarm why 3` แสดงเฉพาะข้อ 3:
 
 ```
-▼ vswarm why · a fresh check · 1078 items · 294 ms
-   1  MED   ~/.npmrc takes packages from an unsafe source
-        fix     vswarm fix 1  (remove 1 line from ~/.npmrc (a copy of the file goes to ~/.vswarm/backups); shows it and asks first)
-        accept  vswarm ok 1  (if you know it and it is expected)
+▼ vswarm why · ตรวจใหม่: ทุกเรื่องที่เจอ ทำไมถึงสำคัญ และควรทำอะไร
+● ควรดูสักนิด  ไม่พบสิ่งอันตราย มี 1 เรื่องที่ควรดู  WARN
+  ตรวจเมื่อสักครู่
 
-WARN · let through
-  policy: WARN is allowed (the default), BLOCK is always refused, by every gate and by vswarm agent · change it: vswarm policy warn refuse
+   1   เครื่องมือลง package ดึง package จากแหล่งที่ไม่ปลอดภัย
+       แหล่งที่ไม่เข้ารหัสหรือชื่อเลียนแบบ ส่ง package ที่ถูกดัดแปลงมาได้
+       ชี้กลับไปที่ registry ทางการ เว้นแต่แหล่งนั้นเป็นของคุณเอง
+       → ให้ vswarm แก้: vswarm fix 1
+         ลบ 1 บรรทัดออกจาก ~/.npmrc (เก็บสำเนาไฟล์ไว้ที่ ~/.vswarm/backups)
+       → ถ้าเป็นของคุณเอง: vswarm ok 1
+       ~/.npmrc takes packages from an unsafe source
+
+● ควรดูสักนิด WARN  เข้า production ได้
+  นโยบาย: ควรดูสักนิด (WARN) ยังเข้า production ได้ (ค่าเริ่มต้น) ส่วนหยุดก่อน (BLOCK) ไม่ให้ผ่านเสมอ …
 ```
+
+![vswarm why ภาษาไทย](img/why-th.png)
 
 | finding | สิ่งที่ `vswarm fix` ทำ |
 | --- | --- |
@@ -151,7 +205,7 @@ WARN · let through
 
 แสดงเฉพาะสิ่งที่เปลี่ยนไปจาก baseline นี่คือคำสั่งที่ใช้บ่อยที่สุด ตัวอย่างนี้คือหลังจากลง "AI coding tool" ปลอมตัวหนึ่ง ซึ่งแอบฝัง systemd unit เพิ่มบรรทัดใน `.bashrc` และเพิ่ม MCP server ใน Cursor
 
-![vswarm diff](img/diff.png)
+![vswarm diff](img/diff-th.png)
 
 vswarm ไม่นับบล็อกที่มันเขียนเอง (PATH, ด่าน ssh, ด่าน package, canary) เป็นการเปลี่ยนแปลง แต่ถ้ามีใครแก้บล็อกเหล่านั้นแม้แต่ตัวอักษรเดียว จะถูกตรวจเหมือนบรรทัดอื่น
 
@@ -206,7 +260,7 @@ vswarm ui --no-open    # แค่พิมพ์ลิงก์ออกมา 
 ส่วนอะไรที่เปลี่ยนการป้องกัน (respond, unlock, baseline, ด่านต่างๆ, guard, watch, การย้ายกุญแจเข้าออกตู้เซฟ, นโยบาย, การถอนติดตั้ง)
 ยังต้องทำใน terminal หน้าเว็บจะแสดงคำสั่งให้คัดลอกไปวาง
 
-ภาษาเริ่มต้นตาม `LANG` ภาษาที่เลือกบนหน้าเว็บจะถูกจำไว้ (`~/.vswarm/sec/ui.json`) และ `VSWARM_LANG=th|en` มีผลเหนือทั้งสองอย่าง
+ภาษาคือค่าเดียวกับที่ `vswarm lang` ตั้งให้ terminal ([ข้อ 2](#ภาษาไทยหรืออังกฤษ-vswarm-lang)) ปุ่มเปลี่ยนภาษาบนหน้าเว็บก็เปลี่ยนค่านี้ (`~/.vswarm/sec/ui.json`) และ `VSWARM_LANG=th|en|auto` มีผลเหนือค่านี้
 หน้านี้ปิดเองเมื่อไม่ได้ใช้ 30 นาที หรือกด Ctrl+C วิธีที่มันกันเว็บอื่นและผู้ใช้อื่นไว้อยู่ใน [SECURITY.md](../SECURITY.md#the-local-dashboard-vswarm-ui)
 
 ![vswarm ui ภาษาไทย](img/ui-th-light.png)
@@ -218,7 +272,7 @@ vswarm ui --no-open    # แค่พิมพ์ลิงก์ออกมา 
 
 `vswarm secrets` บอกว่า credential อายุยาวอยู่ที่ไหนในเครื่อง **ไม่อ่านค่าออกมาแสดงเด็ดขาด** บอกแค่ตำแหน่งและชนิด
 
-![vswarm secrets](img/secrets.png)
+![vswarm secrets](img/secrets-th.png)
 
 **SSH key ที่ไม่มีรหัสผ่าน** (ดูจาก header ของไฟล์) แยกเป็นหนึ่ง finding ต่อหนึ่งกุญแจ กุญแจที่ host หลังด่าน ssh หรือ agent ของ vswarm ใช้ login (เป็น `IdentityFile` ของ host นั้นใน `~/.ssh/config` หรือเป็นกุญแจ default ของ ssh สำหรับ host ที่มีด่านแต่ไม่ได้ระบุกุญแจ) ถือเป็น **กุญแจ production: ระดับ MED** ส่วนกุญแจอื่น (GitHub, server ที่บ้าน) เป็น **LOW** ยังเห็นใน `vswarm secrets` และ `scan --all` แต่ไม่ทำให้เครื่องเป็น WARN โน้ตบุ๊กนักพัฒนาที่มีแต่กุญแจส่วนตัวจึงผ่านได้ `vswarm fix <n>` มีวิธีแก้ให้ (ดูข้างบน) และกุญแจที่เคยยอมรับไว้ตอนที่ 2.7 รวมทุกกุญแจเป็น finding เดียว ก็ยังนับว่ายอมรับแล้ว
 
@@ -297,7 +351,7 @@ config บอกแค่ว่ารัน server อะไร ส่วนค�
 
 ตรวจแล้วตอบว่า PASS, WARN หรือ BLOCK ผ่าน exit code จึงใช้เป็นด่านให้เครื่องมืออื่นได้ ผลจะถูกจำไว้ 2 นาที ครั้งต่อไปจึงใช้เวลาประมาณ 20 ms แต่จะใช้ผลเดิมก็ต่อเมื่อตราประทับของมันยังตรง ถ้ามีคนไปแก้หรือเขียน `last.json` เอง vswarm จะไม่เชื่อและตรวจเครื่องใหม่ทันที ในโหมด `--quiet` package ที่เพิ่งลงหลังการตรวจเต็มครั้งล่าสุดจะถูกเช็คกับฐานข้อมูล package อันตรายด้วย (รอไม่เกิน 3 วินาที) ถ้าเช็คไม่ได้จะมีบรรทัดบอกว่ามีกี่ตัวที่ยังไม่ได้เช็ค
 
-![vswarm preflight ตอนผ่าน](img/preflight-pass.png)
+![vswarm preflight ตอนผ่าน](img/preflight-pass-th.png)
 
 | exit code | ความหมาย |
 | --- | --- |
@@ -322,7 +376,7 @@ vswarm policy warn allow      # กลับไปค่าเริ่มต้
 
 เมื่อเครื่องไม่ผ่าน:
 
-![vswarm preflight ตอน BLOCK](img/preflight-block.png)
+![vswarm preflight ตอน BLOCK](img/preflight-block-th.png)
 
 ### vswarm gate ssh
 
@@ -818,9 +872,11 @@ vswarm trust           # fingerprint ของกุญแจที่เคร�
 
 | คำสั่ง | ทำอะไร |
 | --- | --- |
-| `vswarm scan [--all] [--json] [--offline]` (`check` คือคำสั่งเดียวกัน) | ตรวจทุกอย่าง exit 3 เมื่อ BLOCK |
-| `vswarm why` | ตรวจใหม่ แล้วบอกคำสั่งที่ใช้แก้หรือยอมรับใต้แต่ละข้อ และนโยบายตอนท้าย |
-| `vswarm ok <n…>` · `vswarm fix <n>` | ยอมรับข้อ n ของผลล่าสุด · แก้ข้อ n อัตโนมัติ (แสดงก่อนและถาม) หรือบอกขั้นตอน |
+| `vswarm setup [--yes]` | ตั้งค่าทีละขั้น: ตรวจเครื่อง จุดอ้างอิง การเฝ้าดู การตรวจก่อนติดตั้ง tool server ของ AI ด่านและกุญแจของ production และคำถามเรื่อง WARN สั่งซ้ำ: เสนอเฉพาะสิ่งที่ยังขาด ไม่มี terminal: แสดงแผนอย่างเดียว |
+| `vswarm lang [th\|en\|auto]` | ภาษาของ terminal และหน้าภาพรวม (ค่าเดียวใช้ทั้งสองที่ `VSWARM_LANG` มีผลเหนือกว่า) |
+| `vswarm scan [--all] [--details] [--json] [--offline]` (`check` คือคำสั่งเดียวกัน) | ตรวจทุกอย่าง exit 3 เมื่อ BLOCK |
+| `vswarm why [n]` | ตรวจใหม่ แล้วบอกใต้แต่ละข้อ (หรือเฉพาะข้อ n) ว่าทำไมถึงสำคัญ ทางออกทุกทาง และรายละเอียด แล้วตามด้วยนโยบาย |
+| `vswarm ok <n…>` · `vswarm fix <n>` | ยืนยันว่าข้อ n ของผลล่าสุดเป็นของคุณ · แก้ข้อ n อัตโนมัติ (แสดงก่อนและถาม) หรือบอกขั้นตอน |
 | `vswarm policy [warn allow\|refuse]` | WARN ผ่านได้หรือไม่ ที่ทุกด่านและใน agent (ค่าเริ่มต้น allow) |
 | `vswarm baseline [--yes] [--accept-high]` | บันทึกสภาพสะอาด (ไม่บันทึกถ้ามี HIGH/CRIT เว้นแต่ใส่ `--accept-high`) |
 | `vswarm diff` | สิ่งที่เปลี่ยนจาก baseline |
@@ -877,6 +933,7 @@ vswarm trust           # fingerprint ของกุญแจที่เคร�
 | `agent/agent.sock`, `agent/keys/` | socket ของ ssh agent และตู้เซฟเก็บกุญแจที่ protect ไว้ |
 | `sec/audit.log` | ทุกครั้งที่ `vswarm agent` เซ็นหรือปฏิเสธ ประทับตราต่อกันเป็นสาย พร้อมชื่อ host ถ้าการเช็คก่อน login เห็น |
 | `sec/policy.json` | นโยบาย WARN (`vswarm policy`) แบบประทับตรา |
+| `sec/ui.json` | ภาษา (`vswarm lang` หรือปุ่มบนหน้า `vswarm ui`) ไม่ได้ประทับตรา เพราะเปลี่ยนแค่ถ้อยคำ |
 | `agent/hosts.json`, `agent/config.json` | host key แต่ละตัวเป็นของ host ชื่ออะไร (เขียนโดย `agent check`), agent ตัวเดิมที่ส่งต่อ และตัวเลือกของ `agent on` |
 | `backups/` | สำเนาไฟล์ที่ vswarm แก้ให้ (config ของ aws, kube และ gcloud, `vswarm fix`) ลบทิ้งพร้อมด่าน |
 | `trust/allowed_signers` | กุญแจ release ที่ยอมรับ |
@@ -909,7 +966,9 @@ vswarm รันด้วยสิทธิ์ของเรา บนเคร
 
 | อาการ | วิธีแก้ |
 | --- | --- |
-| `Could not check chrome extensions … macOS privacy protection` | ให้ terminal ได้ Full Disk Access (System Settings → Privacy & Security) |
+| `ยังไม่ได้ตรวจ: chrome extensions · ถ้าจะให้ตรวจด้วย ให้สิทธิ์ Full Disk Access กับ terminal` | System Settings → Privacy & Security → Full Disk Access แล้วเพิ่ม terminal ที่ใช้ |
+| ภาษาไทยขึ้นเป็น `?` หรือกล่องบน Windows | Windows Terminal แสดงภาษาไทยได้ ส่วนตอนส่งเข้า pipe นั้น PowerShell 5.1 อ่านผลตาม code page ของ console vswarm จึงเขียนเป็นภาษาอังกฤษ เว้นแต่ code page เป็น UTF-8 (`chcp 65001`) หรือตั้ง `VSWARM_LANG=th` |
+| ภาษาไม่ตรงกับที่ต้องการ | `vswarm lang` บอกว่าตอนนี้ใช้ภาษาอะไรเพราะอะไร `vswarm lang th\|en\|auto` เปลี่ยนได้ และ `VSWARM_LANG` ที่ตั้งไว้ใน shell มีผลเหนือกว่า |
 | `vswarm try` บน Linux: `No permissions to create new namespace` | Ubuntu 24.04: `sudo sysctl kernel.apparmor_restrict_unprivileged_userns=0` หรือทำ AppArmor profile ให้ bwrap |
 | `vswarm try` ใน Docker | รัน container ด้วย `--security-opt seccomp=unconfined --security-opt apparmor=unconfined` และ `--security-opt systempaths=unconfined` เพื่อให้ sandbox มี `/proc` ของตัวเอง (ไม่มีก็ไม่รัน) |
 | `strace is not installed` | `sudo apt install strace` (ไม่มีก็ใช้ได้ แต่จะไม่เห็นการพยายามเปิดไฟล์) |

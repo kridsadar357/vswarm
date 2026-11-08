@@ -24,6 +24,12 @@ shot() {
     script -qfec "$cmd" /dev/null < /dev/null > "$OUT/$name.ansi" 2>&1
   fi
 }
+# The same shot in Thai: <name>-th.png, the command shown as it is typed (the language comes from VSWARM_LANG).
+shot_th() {
+  local name=$1
+  shift
+  VSWARM_LANG=th shot "$name-th" "$@"
+}
 
 # ── a developer laptop: two keys (one with a passphrase), an AWS profile, agents, an ssh config with production hosts
 ssh-keygen -q -t ed25519 -N "" -C dev@laptop -f ~/.ssh/deploy_ed25519
@@ -49,11 +55,27 @@ EOF
 printf 'DATABASE_URL=postgres://shop:%s@db.internal/shop\nSTRIPE_SECRET_KEY=%s\n' "$(printf 'p%.0s' $(seq 16))" "sk_$(printf 'l%.0s' 1)ive_$(printf 'z%.0s' $(seq 24))" > ~/projects/shop/.env
 echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.bashrc
 
+# ── 0 vswarm setup, on a copy of this laptop with a home of its own, so every shot after it starts from scratch.
+# Answers: skip the one finding, take the starting point, no background watch (no systemd user manager in a
+# container), the install guard, no inspection now, prod-wallet-01 and prod-api-02 are production, keep the key where
+# it is (there is no server to try it on), and production still works on Check this.
+setup_shot() {
+  local h=/tmp/setup-$2
+  rm -rf "$h" && mkdir -p "$h" && cp -a ~/.ssh ~/.aws ~/.claude ~/.cursor ~/projects ~/.bashrc "$h"/
+  HOME="$h" VSWARM_HOME="$h/.vswarm" VSWARM_LANG=$2 shot "$1" "vswarm setup" '\r|y\r|n\r|y\r|n\r|1 2\r|n\r|y\r'
+}
+setup_shot setup en
+setup_shot setup-th th
+
 # ── 1 install and first look
 shot help    "vswarm help"
+shot_th help "vswarm help"
 shot doctor  "vswarm doctor"
+shot_th doctor "vswarm doctor"
 shot scan    "vswarm scan"
+shot_th scan "vswarm scan"
 shot secrets "vswarm secrets"
+shot_th secrets "vswarm secrets"
 shot agents  "vswarm agents"
 # an MCP server whose tool descriptions hide instructions (a harmless imitation from the test fixtures)
 mkdir -p ~/mcp/calc && cp ~/vswarm-src/test/fixtures/evil-mcp/server.js ~/mcp/calc/server.js && echo '{"name":"calc"}' > ~/mcp/calc/package.json
@@ -71,6 +93,7 @@ vswarm gate ssh "prod-*" >/dev/null 2>&1
 shot gate      'vswarm gate ssh "prod-*"'
 shot gatestatus "vswarm gate status"
 shot preflight-pass "vswarm preflight && echo allowed"
+shot_th preflight-pass "vswarm preflight && echo allowed"
 
 # ── 3 something changes: a fake "AI coding tool" plants a login job, an rc line and an MCP server
 printf '[Unit]\nDescription=AI assistant updater\n[Service]\nExecStart=%%h/.cache/.aiup/updater --daemon\n[Install]\nWantedBy=default.target\n' > ~/.config/systemd/user/ai-updater.service
@@ -83,7 +106,11 @@ json.dump(d, open(p, "w"), indent=1)
 EOF
 shot watch-run "vswarm watch run"
 shot diff "vswarm diff"
+shot_th diff "vswarm diff"
 shot preflight-block "vswarm preflight --fresh"
+shot_th preflight-block "vswarm preflight --fresh"
+shot why "vswarm why"
+shot_th why "vswarm why"
 shot ssh-blocked "ssh prod-wallet-01"
 
 # ── 4 respond, report, unlock

@@ -791,5 +791,26 @@
   "cli.ui.link": "ลิงก์นี้มีกุญแจใช้ครั้งเดียวของรอบนี้ อย่าส่งให้ใคร · ภาษา: {name} (เปลี่ยนได้ในหน้านั้น หรือ: vswarm lang th|en|auto)",
   "cli.ui.noBrowser": "เปิดเบราว์เซอร์จากตรงนี้ไม่ได้ ให้เปิดลิงก์ข้างบนเอง",
   "cli.ui.stopped": "ปิด vswarm ui แล้ว",
-  "cli.ui.idle": "vswarm ui ปิดเองเพราะไม่ได้ใช้ 30 นาที · เปิดใหม่ได้ด้วย vswarm ui"
+  "cli.ui.idle": "vswarm ui ปิดเองเพราะไม่ได้ใช้ 30 นาที · เปิดใหม่ได้ด้วย vswarm ui",
+
+  "cli.guard.scripts": "การติดตั้งด้วย npm, pnpm, yarn และ bun จะรันพร้อม --ignore-scripts ถ้าจะให้ package รันคำสั่งของมัน ให้สั่งเองด้วย npm rebuild <package>",
+  "cli.guard.sandboxWin": "ตั้ง --sandbox ไว้ แต่ Windows ยังไม่มี sandbox: การติดตั้งด้วย npm, pnpm, yarn และ bun จะถูกปฏิเสธจนกว่าจะสั่ง guard on โดยไม่ใส่ --sandbox",
+  "cli.guard.sandbox": "การติดตั้งเหล่านั้นรันใน sandbox: เขียนได้เฉพาะโฟลเดอร์นี้ (ยกเว้น .git) ส่วนอื่นของ home ถูกซ่อน และต่อได้แค่ package registry ถ้าไม่มี sandbox จะถูกปฏิเสธ",
+  "cli.guard.strict": "โหมดเข้ม: หยุดการติดตั้งเมื่อ registry หรือ OSV ไม่ตอบ",
+  "cli.guard.isOn": "ตรวจก่อนติดตั้ง package อยู่",
+  "cli.guard.isOff": "ยังไม่ได้ตรวจก่อนติดตั้ง package",
+  "cli.guard.added": "เพิ่มไว้ใน {file} แล้ว",
+  "cli.guard.removed": "เอาออกจาก {file} แล้ว",
+  "cli.guard.alreadyOn": "เปิดอยู่แล้วใน {file}",
+  "cli.guard.alreadyOff": "ปิดอยู่แล้วใน {file}",
+  "cli.guard.now": "ตอนนี้ {tools} จะถาม vswarm ก่อนติดตั้ง",
+  "cli.guard.psPolicy": "execution policy ของ PowerShell เป็น {policy} ซึ่งไม่รัน profile ใดๆ การตรวจก่อนติดตั้งจึงยังไม่ทำงาน",
+  "cli.guard.psPolicyHow": "อนุญาตสคริปต์ในเครื่องสำหรับผู้ใช้ของคุณ: Set-ExecutionPolicy -Scope CurrentUser RemoteSigned",
+  "cli.guard.newPs": "หน้าต่าง PowerShell ใหม่จะมีให้เลย ส่วนหน้าต่างนี้: . {file}",
+  "cli.guard.newTerm": "terminal ที่เปิดใหม่จะมีให้เลย ส่วน terminal นี้: source {file}",
+  "cli.guard.try": "ลองดู: npm install axois   (ชื่อเลียนแบบ axios จะไม่มีอะไรถูกติดตั้งจนกว่าคุณจะตอบตกลง)",
+  "cli.guard.offPs": "เปิดหน้าต่าง PowerShell ใหม่",
+  "cli.guard.offTerm": "เปิด terminal ใหม่ หรือ: unset -f npm npx pnpm yarn bun bunx pip pip3 uv uvx pipx brew",
+  "cli.install.launcherWritten": "สร้างคำสั่ง vswarm แล้ว",
+  "cli.install.launcherWhere": "{launcher} · รัน {cli} · ยังไม่อยู่ใน PATH (vswarm install --path จะเพิ่มให้)"
 }

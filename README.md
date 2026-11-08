@@ -44,18 +44,43 @@ curl -fsSL https://raw.githubusercontent.com/kridsadar357/vswarm/main/install.sh
 git clone https://github.com/kridsadar357/vswarm.git && cd vswarm && ./vswarm install
 ```
 
+Then one step, in a new terminal:
+
+```bash
+vswarm setup
+```
+
+It says what it will do, checks the machine and explains each finding in one sentence (fix it, or say it is yours),
+records the starting point (baseline), offers the background watch, the install guard and an inspection of AI tool
+servers, asks which hosts in `~/.ssh/config` are production and puts a door (gate) in front of them, offers to move
+their keys into the key safe (`agent protect`, which tries each key on its server first), and asks the one policy
+question in plain words. Every step can be skipped; run it again and it offers only what is missing. `--yes` takes
+the recommended answers (it never picks production hosts or moves keys); without a terminal it prints the plan and
+changes nothing. On macOS, turning the watch on makes macOS show *Background Items Added: vswarm*: that is expected.
+
+![vswarm setup](docs/img/setup.png)
+
 ## Use
 
 ```bash
-vswarm scan                 # what is on this machine that deserves attention (numbered findings, on stdout)
-vswarm why                  # each finding with the exact command to fix it or accept it, and the WARN policy
-vswarm fix 2 · vswarm ok 3  # fix finding 2 (shows what, asks first) · accept finding 3
+vswarm scan                 # the state in one line (Safe, Check this or Stop), then numbered findings with one command each
+vswarm why [n]              # each finding: why it matters, every way out (fix, or mark it as yours), the details, the policy
+vswarm fix 2 · vswarm ok 3  # fix finding 2 (shows what, asks first) · mark finding 3 as yours
 vswarm baseline             # on a machine you trust: "this is clean" (refused over HIGH/CRIT findings unless --accept-high)
 vswarm diff                 # later: what changed since then
 vswarm secrets              # long-lived credentials (never prints values)
 vswarm selftest             # plant fake threats in a sandbox home, measure detection
 vswarm watch on             # check hourly, and within seconds when a login job, rc or agent config changes
+vswarm lang th              # Thai in the terminal and the dashboard (th, en or auto; VSWARM_LANG=… for one run)
 ```
+
+Every report speaks one vocabulary: **● Safe**, **● Check this** or **● Stop** with a plain sentence first ("Nothing
+dangerous, 1 thing worth a look"), then the findings grouped as *Needs action*, *Worth a look* and *FYI*, each with a
+plain title, why it matters, one command to run, and vswarm's technical title dimmed under it (`--details` for the
+rest). The PASS / WARN / BLOCK tag stays beside the state, and `--json` and exit codes are unchanged, so scripts keep
+working. Colour marks the state and the action only; `NO_COLOR` loses nothing, lines wrap at the terminal's width.
+
+![vswarm scan](docs/img/scan.png)
 
 ### The dashboard: vswarm ui
 

@@ -791,5 +791,26 @@
   "cli.ui.link": "The link holds a one-time key for this run; keep it to yourself. Language: {name} (switch it on the page, or: vswarm lang th|en|auto).",
   "cli.ui.noBrowser": "no browser could be opened from here: open the link above",
   "cli.ui.stopped": "vswarm ui stopped",
-  "cli.ui.idle": "vswarm ui stopped after 30 minutes unused · vswarm ui to open it again"
+  "cli.ui.idle": "vswarm ui stopped after 30 minutes unused · vswarm ui to open it again",
+
+  "cli.guard.scripts": "npm, pnpm, yarn and bun installs run with --ignore-scripts; run a package's scripts deliberately with npm rebuild <package>",
+  "cli.guard.sandboxWin": "--sandbox is set, and Windows has no sandbox yet: npm, pnpm, yarn and bun installs are refused until guard on without --sandbox",
+  "cli.guard.sandbox": "those installs run in the sandbox: this folder writable (not .git), the rest of your home hidden, package registries only; where the sandbox is missing they are refused",
+  "cli.guard.strict": "strict: an install is stopped when a registry or OSV does not answer",
+  "cli.guard.isOn": "install guard is on",
+  "cli.guard.isOff": "install guard is off",
+  "cli.guard.added": "added to {file}",
+  "cli.guard.removed": "removed from {file}",
+  "cli.guard.alreadyOn": "already on in {file}",
+  "cli.guard.alreadyOff": "already off in {file}",
+  "cli.guard.now": "{tools} now ask vswarm before installing",
+  "cli.guard.psPolicy": "PowerShell's execution policy is {policy}: it runs no profile, so the guard stays off",
+  "cli.guard.psPolicyHow": "allow local scripts for your user: Set-ExecutionPolicy -Scope CurrentUser RemoteSigned",
+  "cli.guard.newPs": "new PowerShell windows have it; this one: . {file}",
+  "cli.guard.newTerm": "new terminals have it; this one: source {file}",
+  "cli.guard.try": "try it: npm install axois   (a look-alike of axios; nothing is installed unless you say so)",
+  "cli.guard.offPs": "open a new PowerShell window",
+  "cli.guard.offTerm": "open a new terminal, or: unset -f npm npx pnpm yarn bun bunx pip pip3 uv uvx pipx brew",
+  "cli.install.launcherWritten": "launcher written",
+  "cli.install.launcherWhere": "{launcher} · runs {cli} · not on your PATH (vswarm install --path adds it)"
 }

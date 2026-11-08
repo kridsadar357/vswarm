@@ -11,7 +11,7 @@ import { blockRegex, files, forgetKey, loadBaseline, lockState, readBaseline, re
 import { GUARD_END, GUARD_START, guardBlock, loadGuardConfig, psGuardBlock, saveGuardConfig, type GuardConfig } from "./sec/pkg";
 import { fingerprints, PIN, secureUpdate } from "./sec/update";
 import { GATE_END, GATE_START } from "./sec/sshblocks";
-import { cells, colorDepth, dateOf, palette, verdictMark, wrap } from "./sec/print";
+import { cells, colorDepth, dateOf, palette, verdictMark, width, wrap } from "./sec/print";
 import { t, type Key } from "./i18n";
 
 export const CLI = resolve(import.meta.dir, "cli.ts");
@@ -61,7 +61,9 @@ export function canAsk(): boolean {
 export async function ask(question: string, { secret = false } = {}): Promise<string> {
   const k = keyboard();
   if (!k) return "";
-  process.stderr.write(`  ${c.cyan("?")} ${question} `);
+  // A long question wraps at the width, under itself, so the answer never lands in the middle of a word.
+  const w = width(process.stderr);
+  process.stderr.write(`  ${c.cyan("?")} ${wrap(question, w ? w - 5 : 0).join("\n    ")} `);
   k.setRawMode(true);
   k.resume();
   let value = "";
@@ -133,7 +135,7 @@ export function ensureLauncher(say: (t: string) => void = (t) => console.error(t
   if (existsSync(launcherPath())) return launcherPath();
   ensureHome();
   writeLauncher();
-  say(`  ${c.lime("✔")} launcher written ${c.dim(`${launcherPath()} · runs ${CLI} · not on your PATH (vswarm install --path adds it)`)}`);
+  say(`  ${c.lime("✔")} ${t("cli.install.launcherWritten")} ${c.dim(t("cli.install.launcherWhere", { launcher: launcherPath(), cli: CLI }))}`);
   return launcherPath();
 }
 
@@ -448,7 +450,7 @@ export async function doctor(): Promise<boolean> {
   const mark = verdictMark(v);
   console.log(`  ${mark.slice(0, mark.lastIndexOf(" "))}  ${nBad ? t("cli.doc.head.bad", { n: nBad }) : nWarn ? t("cli.doc.head.warn", { n: nWarn }) : t("cli.doc.head.ok")}`);
   const sign: Record<Level, string> = { ok: c.lime("✔"), warn: c.amber("!"), bad: c.rose("✖"), off: c.dim("·") };
-  const w0 = (process.stdout.isTTY && process.stdout.columns) || 0;
+  const w0 = width(process.stdout);
   for (const [head, ls] of groups) {
     console.log(`\n  ${c.bold(t(head))}`);
     for (const l of ls) {
@@ -656,17 +658,17 @@ export function guardBody(launcher: string, g: GuardConfig, win = WIN): string {
 
 /** What the guard settings mean, one line each. */
 function guardSettings(g: GuardConfig) {
-  if (g.ignoreScripts) console.log(`  ${c.dim("· npm, pnpm, yarn and bun installs run with --ignore-scripts; run a package's scripts deliberately with npm rebuild <package>")}`);
-  if (g.sandbox) console.log(`  ${c.dim(WIN ? "· --sandbox is set, and Windows has no sandbox yet: npm, pnpm, yarn and bun installs are refused until guard on without --sandbox" : "· those installs run in the sandbox: this folder writable (not .git), the rest of your home hidden, package registries only; where the sandbox is missing they are refused")}`);
-  if (g.strict) console.log(`  ${c.dim("· strict: an install is stopped when a registry or OSV does not answer")}`);
+  if (g.ignoreScripts) console.log(`  ${c.dim(`· ${t("cli.guard.scripts")}`)}`);
+  if (g.sandbox) console.log(`  ${c.dim(`· ${t(WIN ? "cli.guard.sandboxWin" : "cli.guard.sandbox")}`)}`);
+  if (g.strict) console.log(`  ${c.dim(`· ${t("cli.guard.strict")}`)}`);
 }
 
 export async function guard(args: string[]) {
   const action = args.shift() ?? "status";
   const want: GuardConfig = { ignoreScripts: args.includes("--ignore-scripts"), sandbox: args.includes("--sandbox"), strict: args.includes("--strict") };
   if (action === "status") {
-    if (await guardOn()) ok("install guard is on", (await guardFiles()).join(", "));
-    else console.log(`  ${c.dim("·")} install guard is off  ${c.dim("vswarm guard on")}`);
+    if (await guardOn()) ok(t("cli.guard.isOn"), (await guardFiles()).join(", "));
+    else console.log(`  ${c.dim("·")} ${t("cli.guard.isOff")}  ${c.dim("vswarm guard on")}`);
     guardSettings(loadGuardConfig());
     return;
   }
@@ -680,19 +682,19 @@ export async function guard(args: string[]) {
   const body = action === "off" ? null : guardBody(launcher!, want);
   for (const f of await guardFiles(action === "on")) {
     const changed = setBlock(f, body, GUARD_START, GUARD_END);
-    ok(changed ? `${action === "on" ? "added to" : "removed from"} ${f}` : `already ${action} in ${f}`);
+    ok(t(changed ? (action === "on" ? "cli.guard.added" : "cli.guard.removed") : action === "on" ? "cli.guard.alreadyOn" : "cli.guard.alreadyOff", { file: f }));
   }
   if (action === "on") {
-    console.log(`  ${c.dim(`npm, npx, pnpm, yarn, bun, bunx, pip, pip3, uv, uvx, pipx${WIN ? "" : " and brew"} now ask vswarm before installing`)}`);
+    console.log(`  ${c.dim(t("cli.guard.now", { tools: `npm, npx, pnpm, yarn, bun, bunx, pip, pip3, uv, uvx, pipx${WIN ? "" : ", brew"}` }))}`);
     guardSettings(want);
     if (WIN) {
       const p = await profilesRun();
-      if (!p.ok) warn(`PowerShell's execution policy is ${p.policy}: it runs no profile, so the guard stays off`, "allow local scripts for your user: Set-ExecutionPolicy -Scope CurrentUser RemoteSigned");
-      console.log(`  ${c.dim("new PowerShell windows have it; this one: . " + (await guardFiles(true))[0])}`);
-    } else console.log(`  ${c.dim("new terminals have it; this one: source " + (await guardFiles())[0])}`);
-    console.log(`  ${c.dim("try it: npm install axois   (a look-alike of axios; nothing is installed unless you say so)")}`);
-  } else if (WIN) console.log(`  ${c.dim("open a new PowerShell window")}`);
-  else console.log(`  ${c.dim("open a new terminal, or: unset -f npm npx pnpm yarn bun bunx pip pip3 uv uvx pipx brew")}`);
+      if (!p.ok) warn(t("cli.guard.psPolicy", { policy: p.policy }), t("cli.guard.psPolicyHow"));
+      console.log(`  ${c.dim(t("cli.guard.newPs", { file: (await guardFiles(true))[0] }))}`);
+    } else console.log(`  ${c.dim(t("cli.guard.newTerm", { file: (await guardFiles())[0] }))}`);
+    console.log(`  ${c.dim(t("cli.guard.try"))}`);
+  } else if (WIN) console.log(`  ${c.dim(t("cli.guard.offPs"))}`);
+  else console.log(`  ${c.dim(t("cli.guard.offTerm"))}`);
 }
 
 /**

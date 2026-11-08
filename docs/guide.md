@@ -56,9 +56,9 @@ macOS and Linux. Needs git. The installer uses the Bun on your PATH; without one
 curl -fsSL https://raw.githubusercontent.com/kridsadar357/vswarm/main/install.sh | sh
 ```
 
-The installer downloads vswarm into `~/.vswarm/app`, puts `vswarm` on your PATH with zsh/bash completions, and
-offers to record a baseline. It installs the newest release after checking its signature (see
-[§14](#14-safe-updates-update-and-trust)).
+The installer downloads vswarm into `~/.vswarm/app` and puts `vswarm` on your PATH with zsh/bash completions. It
+installs the newest release after checking its signature (see [§14](#14-safe-updates-update-and-trust)). It ends with
+one next step: `vswarm setup`, in a new terminal ([§2](#2-five-minute-start)).
 
 On Linux, `vswarm try` also needs `sudo apt install bubblewrap strace` (dnf / pacman have the same packages). Installing
 Bun needs `unzip`. Windows: a preview that checks the machine, see [Windows (preview)](#windows-preview).
@@ -80,6 +80,39 @@ baseline is taken. `watch`, `agent` and `gate cmd` need that launcher.
 ## 2. Five-minute start
 
 ```bash
+vswarm setup
+```
+
+One guided path, a question at a time. Every step is a command you could run by hand, and setup does nothing they
+would not:
+
+1. It says in one paragraph what it will do, and what your system will show: on macOS, turning the watch on makes macOS
+   announce *Background Items Added: vswarm* (expected: it is vswarm's watch); on Linux the watch is a pair of user
+   systemd units, on Windows a scheduled task.
+2. **Check**: a check of the machine, each finding in one plain sentence with `f` to fix it (`vswarm fix`, which shows
+   the exact change and asks again) or `o` when it is yours (`vswarm ok`), Enter to skip.
+3. **Starting point**: the baseline, refused over HIGH or CRIT findings nobody marked as theirs, exactly as
+   `vswarm baseline` refuses it.
+4. **Protection that runs by itself**: the background watch (`watch on`), the install guard (`guard on`), and an
+   inspection of AI tool servers that were never inspected (`agents --inspect`, in the sandbox).
+5. **Production**: the hosts in `~/.ssh/config`, numbered; type the numbers or names of the production ones and they
+   get a door (`gate ssh`). For each key those hosts log in with, setup offers the key safe (`agent protect`): the key
+   is tried on its server first, moved into the vault only once a server accepts it (with `ssh-copy-id` offered when
+   one does not know it yet), and a recovery code is shown once, for your password manager. A passphrase is only ever
+   asked by ssh's own tools.
+6. **When something needs a look**: "If something small needs a look, should production still work? (recommended:
+   yes)", which is `vswarm policy warn allow` or `refuse`.
+7. What is on now, how to see it all (`vswarm ui`) and how to undo everything (`vswarm uninstall`).
+
+Each question can be answered *no*, and setup can be run again: it says what is on already and offers only what is
+missing. `vswarm setup --yes` takes the recommended answers without asking, but never decides which hosts are
+production and never moves a key; without a terminal (a script, CI) setup prints the plan and changes nothing.
+
+![vswarm setup](img/setup.png)
+
+By hand, the same start is:
+
+```bash
 vswarm scan                     # 1. what is on this machine now
 vswarm baseline                 # 2. if it is clean, remember it
 vswarm gate ssh "prod-*"        # 3. ssh to prod-* only while the machine passes
@@ -88,6 +121,45 @@ vswarm guard on                 # 4. check npm, pip and brew installs first
 
 From then on, when something new appears (a login job, a line in `.zshrc`, an MCP server, a third-party Homebrew tap),
 the next `ssh prod-…` stops and says what it found.
+
+### How vswarm talks
+
+Every report uses the same three states, in plain words with a traffic-light dot, the stable tag beside them:
+
+| State | Tag | Means |
+| --- | --- | --- |
+| ● Safe | PASS | nothing to do |
+| ● Check this | WARN | something new or changed, most likely yours: worth a look; production still works unless the policy says otherwise |
+| ● Stop | BLOCK | something that could be an attack: production access is refused until it is sorted |
+
+A report starts with the state and one sentence ("Nothing dangerous, 1 thing worth a look"), then the findings by
+what to do: **Needs action**, **Worth a look**, **FYI** (hidden unless `--all`). Each one has a number, a plain title,
+why it matters in one sentence, and one command: `vswarm fix 2` where vswarm can fix it, `vswarm ok 2` when it is
+yours, `vswarm why 2` to look closer first. vswarm's technical title is dimmed underneath; `--details` (and
+`vswarm why`) show every detail. Items and time go to a dim footer, and a part that could not be checked is one dim
+line with the way to include it. The words are plain first with the term in brackets: starting point (baseline),
+door (gate), key safe (vault).
+
+Colour marks the state and the action, nothing else: with `NO_COLOR` the dot, the words and the tag still say it all.
+vswarm uses 24-bit colour where the terminal says it has it (`COLORTERM=truecolor`) and the 16 basic colours
+otherwise, and wraps at the terminal's width (or `COLUMNS`); output into a file or a pipe is not wrapped. `--json`
+and exit codes are unchanged.
+
+### Thai or English: vswarm lang
+
+```bash
+vswarm lang th      # Thai, in the terminal and in vswarm ui
+vswarm lang en      # English
+vswarm lang auto    # the system's: LC_ALL, LC_MESSAGES, LANG, then macOS's preferred languages
+vswarm lang         # which one, and why
+```
+
+One setting serves the terminal and the dashboard (it is the language switch on the `vswarm ui` page too), kept in
+`~/.vswarm/sec/ui.json`. `VSWARM_LANG=th|en|auto` overrides it for one run or one shell. Command names, flags, paths
+and technical identifiers stay as they are typed. A sentence not translated yet comes out in English. `--json`,
+logs and vswarm's sealed records are always English. On Windows, `auto` means English, and Thai is written to a
+console (set to UTF-8 for the run) or into a pipe only when the console's code page is UTF-8 already (PowerShell 5.1
+reads a program's output in that code page): otherwise `VSWARM_LANG=th` asks for it anyway.
 
 ## 3. Check the machine: scan, baseline, diff
 
@@ -127,23 +199,34 @@ login entry starts a program that is running right now, that is one finding, whi
 | MED | worth a look: a new login job, an SSH key without a passphrase that production hosts use | **WARN**: allowed by default ([the policy](#one-policy-for-warn-vswarm-policy)), fix or accept it |
 | LOW, INFO | context; hidden unless `--all` | **PASS** |
 
-Options: `--all` every severity · `--json` machine-readable · `--offline` no OSV lookup (cache only). `vswarm check` is
-the same command.
+Options: `--all` every severity · `--details` every technical detail under each finding · `--json` machine-readable
+(English, unchanged) · `--offline` no OSV lookup (cache only). `vswarm check` is the same command.
 
 **Findings are numbered**, in scan, diff, preflight and why, the same way each time (the order of the check as it was
 saved). `vswarm ok 3` accepts finding 3 of the last check (`vswarm accept <id>` still works), and `vswarm fix 3` runs
 its automatic fix where there is one, after showing exactly what it will do and asking; where there is none it prints
-the steps. `vswarm why` is `preflight --fresh` with that spelled out under each finding:
+the steps. `vswarm why` is `preflight --fresh` with that spelled out under each finding: why it matters, what to do,
+every way out (the fix and what it changes, or marking it as yours), then the details. `vswarm why 3` shows finding 3
+alone.
 
 ```
-▼ vswarm why · a fresh check · 1078 items · 294 ms
-   1  MED   ~/.npmrc takes packages from an unsafe source
-        fix     vswarm fix 1  (remove 1 line from ~/.npmrc (a copy of the file goes to ~/.vswarm/backups); shows it and asks first)
-        accept  vswarm ok 1  (if you know it and it is expected)
+▼ vswarm why · a fresh check: each finding, why it matters and what to do
+● Check this  Nothing dangerous, 1 thing worth a look.  WARN
+  checked just now
 
-WARN · let through
+   1   A package tool takes packages from an unsafe source
+       An unencrypted or look-alike source can hand out altered packages.
+       Point it back at the official registry unless you run that source.
+       → Fix it: vswarm fix 1
+         remove 1 line from ~/.npmrc (a copy of the file goes to ~/.vswarm/backups)
+       → If it's yours: vswarm ok 1
+       ~/.npmrc takes packages from an unsafe source
+
+● Check this WARN  production access goes ahead
   policy: WARN is allowed (the default), BLOCK is always refused, by every gate and by vswarm agent · change it: vswarm policy warn refuse
 ```
+
+![vswarm why](img/why.png)
 
 | Finding | What `vswarm fix` does |
 | --- | --- |
@@ -256,8 +339,8 @@ known-malicious package, vswarm's own files, a team requirement or anything crit
 Everything that changes protection (respond, unlock, baseline, gates, guard, watch, agent protect and unprotect,
 policies, uninstall) stays in the terminal, and the page shows the command to copy.
 
-The language follows `LANG`; the switch on the page is remembered (`~/.vswarm/sec/ui.json`) and `VSWARM_LANG=th|en`
-overrides both. The page stops after 30 minutes without use, or on Ctrl+C. How it keeps other sites and other users
+The language is the one `vswarm lang` sets for the terminal too ([§2](#thai-or-english-vswarm-lang)); the switch on the
+page changes that same setting (`~/.vswarm/sec/ui.json`), and `VSWARM_LANG=th|en|auto` overrides it. The page stops after 30 minutes without use, or on Ctrl+C. How it keeps other sites and other users
 out is in [SECURITY.md](../SECURITY.md#the-local-dashboard-vswarm-ui).
 
 ![vswarm ui](img/ui-en-light.png)
@@ -1129,9 +1212,11 @@ Maintainers: the release steps are in [SECURITY.md](../SECURITY.md#for-the-maint
 
 | Command | What it does |
 | --- | --- |
-| `vswarm scan [--all] [--json] [--offline]` (`check` is the same) | check everything; exit 3 on BLOCK |
-| `vswarm why` | a fresh check: each finding with the command to fix or accept it, then the policy |
-| `vswarm ok <n…>` · `vswarm fix <n>` | accept finding n of the last check · its automatic fix (shown, asked) or the steps |
+| `vswarm setup [--yes]` | one guided path: check, starting point, watch, guard, AI tool servers, production doors and keys, the WARN question; again: only what is missing; without a terminal: the plan only |
+| `vswarm lang [th\|en\|auto]` | the language of the terminal and the dashboard (one setting; `VSWARM_LANG` overrides) |
+| `vswarm scan [--all] [--details] [--json] [--offline]` (`check` is the same) | check everything; exit 3 on BLOCK |
+| `vswarm why [n]` | a fresh check: each finding (or finding n) with why it matters, every way out and the details, then the policy |
+| `vswarm ok <n…>` · `vswarm fix <n>` | mark finding n of the last check as yours · its automatic fix (shown, asked) or the steps |
 | `vswarm policy [warn allow\|refuse]` | what WARN does at every gate and in the agent (default allow) |
 | `vswarm baseline [--yes] [--accept-high]` | record the clean state (refused over HIGH/CRIT unless `--accept-high`) |
 | `vswarm diff` | what changed since the baseline |
@@ -1188,6 +1273,7 @@ Everything lives in `~/.vswarm`, readable by you only:
 | `agent/agent.sock`, `agent/keys/` | the ssh agent's socket and its vault of protected keys |
 | `sec/audit.log` | every signature and refusal of `vswarm agent`, sealed and chained, with the host's name when the check before the login saw it |
 | `sec/policy.json` | the WARN policy (`vswarm policy`), sealed |
+| `sec/ui.json` | the language (`vswarm lang`, or the switch on the `vswarm ui` page); not sealed, since it changes words only |
 | `agent/hosts.json`, `agent/config.json` | which name each host key belongs to (written by `agent check`); the upstream agent and `agent on`'s flags |
 | `backups/` | copies of files vswarm changed for you (aws, kube and gcloud configs, `vswarm fix`), removed with the gate |
 | `trust/allowed_signers` | pinned release keys |
@@ -1247,7 +1333,9 @@ the keychain or keyring and check again.
 
 | Symptom | Fix |
 | --- | --- |
-| `Could not check chrome extensions … macOS privacy protection` | give your terminal Full Disk Access (System Settings → Privacy & Security) |
+| `Not checked: chrome extensions · to include them, give your terminal Full Disk Access` | System Settings → Privacy & Security → Full Disk Access, add your terminal |
+| Thai shows as `?` or boxes on Windows | Windows Terminal draws Thai; in a pipe, PowerShell 5.1 reads vswarm's output in the console's code page, so vswarm writes English there unless the code page is UTF-8 (`chcp 65001`) or `VSWARM_LANG=th` asks for Thai |
+| the words are in the wrong language | `vswarm lang` says which one and why; `vswarm lang th\|en\|auto` changes it, `VSWARM_LANG` set in your shell wins |
 | `vswarm try` on Linux: `No permissions to create new namespace` | Ubuntu 24.04: `sudo sysctl kernel.apparmor_restrict_unprivileged_userns=0`, or an AppArmor profile for bwrap |
 | `vswarm try` inside Docker | run the container with `--security-opt seccomp=unconfined --security-opt apparmor=unconfined`, and `--security-opt systempaths=unconfined` so the sandbox can have its own `/proc` (it does not run without one) |
 | `strace is not installed` | `sudo apt install strace` (try works without it, but cannot see file attempts) |

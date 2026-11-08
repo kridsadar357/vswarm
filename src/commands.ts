@@ -128,13 +128,24 @@ export async function whyCommand(opt: { offline?: boolean; n?: number }): Promis
     const n = nums.get(f.id)!;
     line("");
     const plan = fixFor(f, { n, self: [self.length === 1 ? "vswarm" : self.join(" ")] });
-    card(f, n, { details: true, todo: true, fixable: !!plan.run });
+    // Here, every way out, before the technical details: the fix (what it does), saying it is yours, or why neither.
     const pad = " ".repeat(7);
-    if (plan.run) para(plan.what, 9, c.dim, `${pad}  `);
-    // The other way out, when the card's command was the fix or a closer look.
-    if (f.rule === "malicious" || f.rule === STATE_RULE) para(t("cli.why.cannotAccept"), 9, c.dim, pad);
-    else if (f.rule === "team-require") para(t("cli.why.teamOnly"), 9, c.dim, pad);
-    else if (plan.run || groupOf(f) === "action") line(`${pad}${c.cyan("→")} ${t("cli.act.ok")} ${c.cyan(c.bold(`vswarm ok ${n}`))}`);
+    const cmd = (label: Parameters<typeof t>[0], what: string) => line(`${pad}${c.cyan("→")} ${t(label)} ${c.cyan(c.bold(what))}`);
+    card(f, n, {
+      details: true, todo: true, fixable: !!plan.run,
+      actions: () => {
+        if (plan.run) {
+          cmd("cli.act.fix", `vswarm fix ${n}`);
+          para(plan.what, 9, c.dim, `${pad}  `);
+        }
+        if (f.rule === "malicious") cmd("cli.act.respond", "vswarm respond");
+        if (f.rule === "malicious" || f.rule === STATE_RULE) para(t("cli.why.cannotAccept"), 9, c.dim, pad);
+        else if (f.rule === "team-require") {
+          cmd("cli.act.team", "vswarm team status");
+          para(t("cli.why.teamOnly"), 9, c.dim, pad);
+        } else cmd("cli.act.ok", `vswarm ok ${n}`);
+      },
+    });
   }
   const low = opt.n === undefined ? r.findings.length - shown.length : 0;
   if (low) para(t("cli.why.low", { n: low }), 4, c.dim, "\n  ");

@@ -174,8 +174,11 @@ function usage() {
   console.log(`\n  ${c.bold(t("cli.help.byHand"))} ${c.dim(t("cli.help.byHandSub"))}`);
   console.log(c.dim("    ~/.aws/config     credential_process = vswarm preflight --quiet --then aws configure export-credentials --profile <sso profile> --format process"));
   console.log(c.dim("    kubeconfig user   exec: { command: vswarm, args: [preflight, --quiet, --then, kubelogin, get-token, …] }"));
-  if (process.platform === "win32") console.log(c.amber(`\n  ${t("cli.help.windows")}`));
-  console.log(c.dim(`\n  ${t("cli.help.privacy")}\n`));
+  // The two notes wrap at the width; the lines above are config to copy and stay whole.
+  const note = (s: string, paint: (x: string) => string) => console.log(`\n${wrap(s, (process.stdout.columns || Number(process.env.COLUMNS) || 100) - 2).map((l) => `  ${paint(l)}`).join("\n")}`);
+  if (process.platform === "win32") note(t("cli.help.windows"), c.amber);
+  note(t("cli.help.privacy"), c.dim);
+  console.log();
 }
 
 async function main() {

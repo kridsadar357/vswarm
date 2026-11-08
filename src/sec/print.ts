@@ -67,9 +67,9 @@ export function line(s = "") {
 
 // ── width
 
-/** Columns to wrap at: the terminal's, within 40…120; 0 (no wrapping) when the output is not a terminal. */
+/** Columns to wrap at: the terminal's (or COLUMNS), within 40…120; 0, no wrapping, for a file or a pipe without COLUMNS. */
 export function width(s: { isTTY?: boolean; columns?: number } = out, env: Record<string, string | undefined> = process.env): number {
-  const cols = s.isTTY ? s.columns : Number(env.COLUMNS) || undefined;
+  const cols = (s.isTTY && s.columns) || Number(env.COLUMNS) || undefined;
   return cols ? Math.max(40, Math.min(cols, 120)) : 0;
 }
 
@@ -190,7 +190,7 @@ export const say = (s: Say) => tMaybe(s.key, s.vars) ?? s.key;
  * A finding as a small card: the number, a plain title, why it matters in one sentence, one command to run, and
  * vswarm's technical title dimmed under it (or every detail, with `details`).
  */
-export function card(f: Finding, n: number | undefined, opt: { details?: boolean; fixable?: boolean; todo?: boolean; action?: boolean } = {}) {
+export function card(f: Finding, n: number | undefined, opt: { details?: boolean; fixable?: boolean; todo?: boolean; action?: boolean; actions?: () => void } = {}) {
   const p = plainOf(f);
   const g = groupOf(f);
   const num = n === undefined ? "   ·" : String(n).padStart(4);
@@ -198,9 +198,11 @@ export function card(f: Finding, n: number | undefined, opt: { details?: boolean
   para(p.title, indent, (s) => s, `${c.bold(GROUP_PAINT[g](num))}   `);
   para(p.why, indent, c.dim);
   if (opt.todo) para(p.todo, indent);
-  const a = opt.action === false ? undefined : actionOf(f, n, !!opt.fixable);
+  // `actions`: the caller's own lines for the way on (vswarm why shows every one), in the place of the one command.
+  const a = opt.action === false || opt.actions ? undefined : actionOf(f, n, !!opt.fixable);
   // vswarm's own one-line fix is technical (and English): the way on when there is no command and no plain sentence.
-  const fixShown = !a && opt.action !== false && !!f.fix && !(opt.todo && p.plain);
+  const fixShown = !a && !opt.actions && opt.action !== false && !!f.fix && !(opt.todo && p.plain);
+  opt.actions?.();
   if (a) line(`${" ".repeat(indent)}${c.cyan("→")} ${t(a.label)} ${c.cyan(c.bold(a.cmd))}`);
   else if (fixShown) para(f.fix!, indent + 2, (s) => s, `${" ".repeat(indent)}${c.cyan("→")} `);
   if (p.plain && f.title !== p.title) para(f.title, indent, c.dim);
