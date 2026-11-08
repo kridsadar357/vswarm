@@ -2,10 +2,13 @@
 // connections here go to 127.0.0.1 ports this test opens and closes; names resolve through stand-ins, never DNS.
 import { describe, expect, test } from "bun:test";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { dead, lastUsed, probeAll, probeHost, probeText, pruneHosts } from "../src/sec/probe";
 import { blocks, expandPath, globMatch, hostView, listMatch, literal, namedHosts, ownHosts, productionKeys } from "../src/sec/sshconfig";
 import { hostHealth } from "../src/setup";
+
+/** A path as this system resolves it (D:\h\.ssh\db for /h/.ssh/db on Windows). */
+const P = (p: string) => resolve(p);
 
 const CFG = `# >>> vswarm agent >>>
 Match originalhost prod-*,db1 !exec "/v/vswarm agent check --host %n --hostname %h --port %p"
@@ -44,25 +47,26 @@ describe("ssh config, read without running it", () => {
 
   test("a host's view: first value wins, IdentityFile adds up, vswarm's own blocks left out on request, Match with other criteria skipped", () => {
     const home = "/h";
-    expect(hostView(CFG, "db1", { home, withoutOwn: true })).toEqual({ identityFiles: ["/h/.ssh/db"], hostname: "192.0.2.10", port: 2222, skipped: 1 });
-    expect(hostView(CFG, "db1", { home }).identityFiles).toEqual(["/h/.ssh/everything", "/h/.ssh/db"]);
-    expect(hostView(CFG, "prod-api", { home, withoutOwn: true })).toMatchObject({ identityFiles: ["/h/.ssh/prod"], user: "deploy" });
+    // A home of /h is D:\h on Windows: paths are compared as the system writes them.
+    expect(hostView(CFG, "db1", { home, withoutOwn: true })).toEqual({ identityFiles: [P("/h/.ssh/db")], hostname: "192.0.2.10", port: 2222, skipped: 1 });
+    expect(hostView(CFG, "db1", { home }).identityFiles).toEqual([P("/h/.ssh/everything"), P("/h/.ssh/db")]);
+    expect(hostView(CFG, "prod-api", { home, withoutOwn: true })).toMatchObject({ identityFiles: [P("/h/.ssh/prod")], user: "deploy" });
     expect(namedHosts(CFG)).toEqual(["db1", "prod-web", "prod-api"]);
     expect(ownHosts(CFG)).toEqual({ agent: ["prod-*", "db1"], gate: ["prod-*", "db1", "10.0.0.7"] });
     expect(blocks("Host a\n  IdentityFile \"/p q/k\"\n")[1].options).toEqual([{ key: "identityfile", value: "/p q/k" }]);
-    expect(expandPath("~/.ssh/k", "/h")).toBe("/h/.ssh/k");
-    expect(expandPath("k", "/h")).toBe("/h/.ssh/k");
-    expect(expandPath("%d/x", "/h")).toBe("/h/x");
+    expect(expandPath("~/.ssh/k", "/h")).toBe(P("/h/.ssh/k"));
+    expect(expandPath("k", "/h")).toBe(P("/h/.ssh/k"));
+    expect(expandPath("%d/x", "/h")).toBe(P("/h/x"));
   });
 
   test("production keys: those the gated hosts name, and ssh's defaults for a gated host that names none", () => {
     const keys = productionKeys(CFG, "/h");
-    expect(keys.has("/h/.ssh/db")).toBe(true);
-    expect(keys.has("/h/.ssh/prod")).toBe(true);
+    expect(keys.has(P("/h/.ssh/db"))).toBe(true);
+    expect(keys.has(P("/h/.ssh/prod"))).toBe(true);
     // 10.0.0.7 has no Host block: it logs in with the default keys.
-    expect(keys.has("/h/.ssh/id_ed25519")).toBe(true);
-    expect(keys.has("/h/.ssh/root")).toBe(false);
-    expect(keys.has("/h/.ssh/everything")).toBe(false);
+    expect(keys.has(P("/h/.ssh/id_ed25519"))).toBe(true);
+    expect(keys.has(P("/h/.ssh/root"))).toBe(false);
+    expect(keys.has(P("/h/.ssh/everything"))).toBe(false);
     expect(productionKeys("Host db1\n  IdentityFile ~/.ssh/db\n", "/h").size).toBe(0);
   });
 });

@@ -71,6 +71,9 @@ async function runTty(cmd: string[]): Promise<number> {
   return Bun.spawn(cmd, { stdin: "inherit", stdout: "inherit", stderr: "inherit" }).exited;
 }
 
+/** A command as you would paste it: POSIX quoting, or on Windows double quotes only where a word has a space. */
+const pasteable = (cmd: string[], platform: NodeJS.Platform) => cmd.map((w) => (platform === "win32" ? (/[\s"']/.test(w) ? `"${w.replace(/"/g, '\\"')}"` : w) : shq(w))).join(" ");
+
 /** The fix for one finding. `self` is how to start this vswarm (for agent protect). */
 export function fixFor(f: Finding, opt: { n: number; self: string[]; home?: string; platform?: NodeJS.Platform }): FixPlan {
   const home = opt.home ?? homedir();
@@ -80,13 +83,13 @@ export function fixFor(f: Finding, opt: { n: number; self: string[]; home?: stri
   if (f.id.startsWith("secret:ssh:") && file) {
     const keygen: FixPlan = {
       what: `add a passphrase to ${short(file, home)} (ssh-keygen asks for it; logins then ask for it, or your agent does)`,
-      exact: [["ssh-keygen", "-p", "-f", file].map(shq).join(" ")],
+      exact: [pasteable(["ssh-keygen", "-p", "-f", file], platform)],
       run: async () => ((await runTty(["ssh-keygen", "-p", "-f", file])) === 0 ? `${short(file, home)} has a passphrase now` : "ssh-keygen did not change it"),
     };
     if (f.meta?.production && platform !== "win32")
       return {
         what: `keep ${short(file, home)} only in vswarm agent: it is tried on the hosts that use it, then moved off the disk, and signs only while this machine passes`,
-        exact: [[...opt.self, "agent", "protect", file].map(shq).join(" ")],
+        exact: [pasteable([...opt.self, "agent", "protect", file], platform)],
         run: async () => ((await runTty([...opt.self, "agent", "protect", file])) === 0 ? "done" : "agent protect stopped; the key is where it was unless it said otherwise"),
         instead: keygen,
       };

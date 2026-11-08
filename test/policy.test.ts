@@ -152,6 +152,10 @@ describe("findings by number", () => {
     expect(p.exact).toEqual([`vswarm agent protect ${join(home, ".ssh/prod")}`]);
     expect(p.instead?.exact).toEqual([`ssh-keygen -p -f ${join(home, ".ssh/prod")}`]);
     expect(fixFor(prod, { n: 1, self: ["vswarm"], home, platform: "win32" }).exact[0]).toContain("ssh-keygen -p");
+    // On Windows the command is shown as PowerShell takes it: a backslash path as it is, double quotes around a space.
+    const winKey: Finding = { ...prod, meta: { file: "C:\\Users\\a b\\.ssh\\k", production: false } };
+    expect(fixFor(winKey, { n: 1, self: ["vswarm"], platform: "win32" }).exact).toEqual(['ssh-keygen -p -f "C:\\Users\\a b\\.ssh\\k"']);
+    expect(fixFor({ ...winKey, meta: { file: "C:\\k\\id", production: false } }, { n: 1, self: ["vswarm"], platform: "win32" }).exact).toEqual(["ssh-keygen -p -f C:\\k\\id"]);
     expect(fixFor({ ...prod, meta: { file: join(home, ".ssh/me"), production: false } }, { n: 1, self: ["vswarm"], home }).exact[0]).toBe(`ssh-keygen -p -f ${join(home, ".ssh/me")}`);
     const npmrc = join(home, ".npmrc");
     writeFileSync(npmrc, "registry=http://198.51.100.7/npm/\nsave-exact=true\n");

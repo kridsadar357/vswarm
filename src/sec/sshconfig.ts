@@ -163,7 +163,7 @@ export function productionKeys(text: string, home = homedir()): Set<string> {
   for (const h of [...hosts, ...bare.map((p) => p.replace(/[*?]/g, "x"))]) {
     const v = hostView(text, h, { home, withoutOwn: true });
     if (v.identityFiles.length) for (const f of v.identityFiles) keys.add(f.replace(/\.pub$/, ""));
-    else for (const d of DEFAULT_KEYS) keys.add(join(home, ".ssh", d));
+    else for (const d of DEFAULT_KEYS) keys.add(expandPath(join("~", ".ssh", d), home));
   }
   return keys;
 }

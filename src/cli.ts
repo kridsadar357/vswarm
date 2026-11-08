@@ -240,7 +240,7 @@ async function main() {
       const list = await agents(realCtx());
       if (doInspect) {
         // No sandbox on Windows yet: --inspect starts the servers only when you say they may run as you (--no-sandbox).
-        if (process.platform === "win32" && inspectOpt.sandbox) throw new Error("vswarm agents --inspect needs the sandbox, which Windows does not have yet: use it inside WSL, or --inspect --no-sandbox to start each server as your agent would, with your access");
+        if (process.platform === "win32" && inspectOpt.sandbox) throw new Error("vswarm agents --inspect with the sandbox is not on Windows yet; use it inside WSL, or --inspect --no-sandbox to start each server as your agent would, with your access");
         const { inspectAll } = await import("./sec/mcp");
         process.exitCode = await inspectAll(list.filter((i) => i.kind === "mcp"), inspectOpt);
         return;
