@@ -187,6 +187,17 @@ export function plan(tool: string, args: string[], cwd = process.cwd()): Plan {
     return wants.length ? { wants, skip: false, from: `${tool} ${specs.join(" ")}` } : none;
   }
   if (["npm", "pnpm", "yarn", "bun"].includes(tool)) {
+    // yarn with options before the command (or only options): the first plain word is the command; none is an
+    // install, except yarn --version and --help.
+    if (tool === "yarn" && sub?.startsWith("-")) {
+      if (args.some((a) => /^(--version|-v|--help|-h)$/.test(a))) return none;
+      const at = args.findIndex((a, k) => !a.startsWith("-") && !(k > 0 && VALUE_OPTS.has(args[k - 1])));
+      if (at < 0) {
+        const wants = npmProject(cwd);
+        return { wants, skip: !wants.length, from: `${wants.length} packages in this project` };
+      }
+      return plan(tool, [args[at], ...args.slice(0, at), ...args.slice(at + 1)], cwd);
+    }
     if (sub && NPM_RUN_PKG.has(sub)) {
       const specs = execSpecs(args.slice(1));
       const wants = npmWants(specs);
@@ -655,7 +666,15 @@ export function scriptsHint(tool: string, names: string[]): string {
  * there is something to say (one dim line on a terminal otherwise) and returns the exit code: 3 stops the install.
  * With --run (guard on --ignore-scripts or --sandbox), vswarm then runs the install itself, the way those settings say.
  */
-export async function pkgCommand(tool: string, args: string[], opt: { offline: boolean; strict?: boolean; run?: boolean; deep?: boolean; get?: Fetcher; ask: (q: string, def?: boolean) => Promise<boolean> }): Promise<number> {
+export async function pkgCommand(tool: string, args: string[], opt: { offline: boolean; strict?: boolean; run?: boolean; deep?: boolean; get?: Fetcher; ask: (q: string, def?: boolean) => Promise<boolean>; canSandbox?: () => boolean }): Promise<number> {
+  // guard on --sandbox promised the install a sandbox: where there is none (no bubblewrap, Windows), it does not run
+  // at all, rather than run outside one without a word.
+  const missing = sandboxMissing(tool, args, loadGuardConfig(), opt.canSandbox ?? (await import("./try/spawn")).canSandbox);
+  if (missing) {
+    line(`${c.red("✖")} vswarm: the install guard runs ${tool} installs in the sandbox, and ${missing}. Nothing was installed.`);
+    line(c.dim(`  ${process.platform === "linux" ? "install bubblewrap (sudo apt install bubblewrap), or " : ""}turn the sandbox off: vswarm guard on${loadGuardConfig().ignoreScripts ? " --ignore-scripts" : ""} · skip vswarm once: ${skipOnce(tool)}`));
+    return 3;
+  }
   let checked: { code: number; scripted: string[] };
   try {
     checked = await pkgCheck(tool, args, opt);
@@ -666,8 +685,24 @@ export async function pkgCommand(tool: string, args: string[], opt: { offline: b
     return 4;
   }
   if (!opt.run || checked.code !== 0) return checked.code;
+  // yarn --version and --help (a bare yarn with options reaches here too): nothing to install, run as it is.
+  if (tool === "yarn" && args.some((a) => /^(--version|-v|--help|-h)$/.test(a))) {
+    const real = Bun.which(tool);
+    if (!real) return 127;
+    return Bun.spawn([real, ...args], { stdin: "inherit", stdout: "inherit", stderr: "inherit" }).exited;
+  }
   return runInstall(tool, args, checked.scripted);
 }
+
+/** Why an install the guard would sandbox cannot be (the sandbox is not there), or undefined. */
+export function sandboxMissing(tool: string, args: string[], g: GuardConfig, canSandbox: () => boolean, platform = process.platform): string | undefined {
+  if (!g.sandbox || !RUN_TOOLS.includes(tool) || isGlobal(tool, args) || EXEC_SUBS.includes(args[0] ?? "") || plan(tool, args).skip) return;
+  if (platform === "win32") return "there is no sandbox on Windows yet";
+  if (!canSandbox()) return platform === "linux" ? "bubblewrap (bwrap) is not installed" : "sandbox-exec is not available";
+}
+
+/** Hosts Socket Firewall itself asks about each download, let through the sandbox when sfw runs inside it. */
+export const SFW_HOSTS = ["socket.dev"];
 
 /** The install itself, as the guard settings say: scripts off, in the sandbox, through Socket Firewall when it is there. */
 async function runInstall(tool: string, args: string[], scripted: string[]): Promise<number> {
@@ -685,9 +720,12 @@ async function runInstall(tool: string, args: string[], scripted: string[]): Pro
   const argv = sfw ? [sfw, tool, ...cmd.args] : [real, ...cmd.args];
   let code: number;
   const { canSandbox, sandboxRun } = await import("./try/spawn");
-  if (g.sandbox && RUN_TOOLS.includes(tool) && !isGlobal(tool, args) && canSandbox()) {
-    line(c.dim(`vswarm: ${tool} runs in the sandbox (this folder writable, the rest of your home hidden, package registries only)`));
-    const r = await sandboxRun([tool, ...cmd.args], { cwd: process.cwd(), env: cmd.env });
+  if (g.sandbox && RUN_TOOLS.includes(tool) && !isGlobal(tool, args)) {
+    // pkgCommand refused already when there is no sandbox; this is the same promise kept at the last step.
+    if (!canSandbox()) throw new Error("the sandbox is not available; not installed");
+    line(c.dim(`vswarm: ${tool} runs in the sandbox (this folder writable, the rest of your home hidden, package registries only${sfw ? ", through Socket Firewall" : ""})`));
+    // Socket Firewall goes inside the sandbox with the install, so every download is still checked by it.
+    const r = await sandboxRun(sfw ? [sfw, tool, ...cmd.args] : [tool, ...cmd.args], { cwd: process.cwd(), env: cmd.env, ...(sfw ? { extraRead: [dirname(sfw)], extraHosts: SFW_HOSTS } : {}) });
     code = r.code;
     if (r.refused.length) line(c.amber(`vswarm: the install tried to reach ${r.refused.slice(0, 5).join(", ")}, which the sandbox refused (only package registries are open). A private registry: install with ${skipOnce(tool)}`));
   } else {
@@ -726,7 +764,8 @@ async function pkgCheck(tool: string, args: string[], opt: { offline: boolean; s
   const stopSuspicious = suspicious && strictOn;
   if (r.verdict !== "block" && !strict && !stopSuspicious) {
     if (suspicious) {
-      if (await opt.ask(`${c.amber("Suspicious contents above.")} Install anyway?`, true)) {
+      // No by default, and no without a terminal to ask on: suspicious contents are a reason to stop, not to shrug.
+      if (await opt.ask(`${c.amber("Suspicious contents above.")} Install anyway?`, false)) {
         line(c.dim("  going ahead"));
         return done(0);
       }
@@ -786,7 +825,8 @@ export const GUARD_END = "# <<< vswarm guard <<<";
 const INSTALLS: Record<string, string> = {
   npm: "install|i|in|ins|inst|insta|instal|isntall|add|ci|update|up|upgrade|exec|x",
   pnpm: "install|i|add|update|up|upgrade|dlx|exec",
-  yarn: '""|install|add|upgrade|up|dlx|global',
+  // A bare `yarn`, also with options only (yarn --frozen-lockfile, yarn --immutable), installs the project.
+  yarn: '""|-*|install|add|upgrade|up|dlx|global',
   bun: "install|i|add|a|update|x",
   pip: "install", pip3: "install", uv: "pip|add|tool", pipx: "install|inject|run",
   brew: "install|reinstall|upgrade|tap",
@@ -848,7 +888,7 @@ export function psGuardBlock(bun: string, cli: string, opt: { ignoreScripts?: bo
     ]
     : [];
   const fn = (tool: string, subs?: string) =>
-    `function ${tool} { __vswarm_go ${tool} ${subs === undefined ? "'.*'" : q(`^(${subs.replace(/""/g, "")})$`)} $args }`;
+    `function ${tool} { __vswarm_go ${tool} ${subs === undefined ? "'.*'" : q(`^(${subs.replace(/""/g, "").replace(/-\*/g, "-.*")})$`)} $args }`;
   return [
     GUARD_START,
     "# Package installs are checked by vswarm first. Skip once: npm.cmd ...   Turn off: vswarm guard off",

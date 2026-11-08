@@ -123,6 +123,18 @@ function writeLauncher() {
   }
 }
 
+/**
+ * The launcher, written from this checkout when it is missing, so `watch on`, `guard on` and `agent on` work straight
+ * from a clone (bun src/cli.ts …, or .\\vswarm.cmd on Windows) without `vswarm install` first. PATH is not touched.
+ */
+export function ensureLauncher(say: (t: string) => void = (t) => console.error(t)): string {
+  if (existsSync(launcherPath())) return launcherPath();
+  ensureHome();
+  writeLauncher();
+  say(`  ${c.lime("✔")} launcher written ${c.dim(`${launcherPath()} · runs ${CLI} · not on your PATH (vswarm install --path adds it)`)}`);
+  return launcherPath();
+}
+
 const BLOCK_START = "# >>> vswarm >>>";
 const BLOCK_END = "# <<< vswarm <<<";
 
@@ -501,8 +513,8 @@ function windowsDocs(): Promise<string | undefined> {
 }
 
 /** Where the guard goes: ~/.zshrc and ~/.bashrc, or on Windows the profile.ps1 of Windows PowerShell and of PowerShell 7. */
-export async function guardFiles(adding = false): Promise<string[]> {
-  if (!WIN) return rcFiles().map((r) => r.file).filter((f) => /\.(zsh|bash)rc$/.test(f));
+export async function guardFiles(adding = false, home = homedir()): Promise<string[]> {
+  if (!WIN) return rcFiles(home).map((r) => r.file).filter((f) => /\.(zsh|bash)rc$/.test(f));
   const docs = await windowsDocs();
   if (!docs) throw new Error("could not find your Documents folder, where PowerShell profiles live");
   const ps7 = join(docs, "PowerShell", "profile.ps1");
@@ -510,8 +522,14 @@ export async function guardFiles(adding = false): Promise<string[]> {
   return [join(docs, "WindowsPowerShell", "profile.ps1"), ...(!adding || Bun.which("pwsh") || existsSync(dirname(ps7)) ? [ps7] : [])];
 }
 
-export async function guardOn(): Promise<boolean> {
-  return (await guardFiles()).some((f) => (readKept(f)?.text ?? "").includes(GUARD_START));
+export async function guardOn(home = homedir()): Promise<boolean> {
+  return (await guardFiles(false, home)).some((f) => (readKept(f)?.text ?? "").includes(GUARD_START));
+}
+
+/** Why `guard on --sandbox` cannot be had here, or undefined: the sandbox is promised only where there is one. */
+export function sandboxRefusal(platform: NodeJS.Platform, canSandbox: boolean): string | undefined {
+  if (platform === "win32") return "--sandbox is not on Windows yet: installs would run outside any sandbox. Use guard on without it (--ignore-scripts works), or WSL";
+  if (!canSandbox) return platform === "linux" ? "--sandbox needs bubblewrap, which is not installed: sudo apt install bubblewrap (dnf/pacman: bubblewrap), then guard on --sandbox again" : "--sandbox needs sandbox-exec, which this system does not have";
 }
 
 /** PowerShell runs no profile under the Restricted and AllSigned policies (Restricted is the Windows default). */
@@ -530,7 +548,7 @@ export function guardBody(launcher: string, g: GuardConfig, win = WIN): string {
 /** What the guard settings mean, one line each. */
 function guardSettings(g: GuardConfig) {
   if (g.ignoreScripts) console.log(`  ${c.dim("· npm, pnpm, yarn and bun installs run with --ignore-scripts; run a package's scripts deliberately with npm rebuild <package>")}`);
-  if (g.sandbox) console.log(`  ${c.dim(WIN ? "· --sandbox is not on Windows yet; installs run as usual" : "· those installs run in the sandbox: this folder writable (not .git), the rest of your home hidden, package registries only")}`);
+  if (g.sandbox) console.log(`  ${c.dim(WIN ? "· --sandbox is set, and Windows has no sandbox yet: npm, pnpm, yarn and bun installs are refused until guard on without --sandbox" : "· those installs run in the sandbox: this folder writable (not .git), the rest of your home hidden, package registries only; where the sandbox is missing they are refused")}`);
   if (g.strict) console.log(`  ${c.dim("· strict: an install is stopped when a registry or OSV does not answer")}`);
 }
 
@@ -544,8 +562,11 @@ export async function guard(args: string[]) {
     return;
   }
   if (action !== "on" && action !== "off") throw new Error("usage: vswarm guard on [--ignore-scripts] [--sandbox] [--strict] | off | status");
-  const launcher = existsSync(launcherPath()) ? launcherPath() : undefined;
-  if (action === "on" && !launcher) throw new Error("install the launcher first: vswarm install (or vswarm install --no-path to keep it inside VSWARM_HOME)");
+  const launcher = action === "on" ? ensureLauncher() : existsSync(launcherPath()) ? launcherPath() : undefined;
+  if (action === "on" && want.sandbox) {
+    const why = sandboxRefusal(process.platform, (await import("./sec/try/spawn")).canSandbox());
+    if (why) throw new Error(`not changed: ${why}`);
+  }
   if (action === "on") saveGuardConfig(want);
   const body = action === "off" ? null : guardBody(launcher!, want);
   for (const f of await guardFiles(action === "on")) {
@@ -587,6 +608,17 @@ export function adoptManagedBlocks() {
   for (const block of known) if (texts.some((t) => t.includes(block.trimEnd()))) recordManaged(block);
 }
 
+/**
+ * Whether install changes PATH. Elsewhere it does unless --no-path; on Windows only with --path or a yes on the
+ * terminal (no terminal: no), since there it is a registry value every new program inherits.
+ */
+export async function pathWanted(args: string[], win: boolean, tty: boolean, ask: (q: string, def?: boolean) => Promise<boolean>): Promise<boolean> {
+  if (args.includes("--no-path")) return false;
+  if (args.includes("--path") || !win) return true;
+  if (!tty || args.includes("--yes") || args.includes("-y")) return false;
+  return ask(`Add ${paths.bin()} to your PATH (your user's, in the registry)?`, true);
+}
+
 // ── Commands
 export async function install(args: string[]) {
   const auto = args.includes("--yes") || args.includes("-y") || !canAsk();
@@ -602,8 +634,11 @@ export async function install(args: string[]) {
   ok("completions", paths.completions());
   if (!args.includes("--no-path")) {
     if (WIN) {
-      await windowsPath(true);
-      ok("PATH updated for your user", paths.bin());
+      // Your PATH in the registry is changed only when you say so: --path, or yes to the question.
+      if (await pathWanted(args, WIN, canAsk(), yes)) {
+        await windowsPath(true);
+        ok("PATH updated for your user", paths.bin());
+      } else console.log(`  ${c.dim(`· PATH not changed · run vswarm as ${launcherPath()}, or add it later: vswarm install --path`)}`);
     } else {
       for (const { file, body } of rcFiles()) ok(setBlock(file, body) ? `PATH added in ${file}` : `PATH already in ${file}`);
     }

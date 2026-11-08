@@ -13,6 +13,12 @@ export const VERSION: string = pkg.version;
 
 export const HOME = process.env.VSWARM_HOME ?? join(homedir(), ".vswarm");
 
+/**
+ * With VSWARM_HOME set, vswarm's own files live there, but some things stay the user's, whatever folder vswarm uses:
+ * ~/.ssh/config, the LaunchAgents and systemd user units, the shell rc files. Status lines about them say so.
+ */
+export const GLOBAL_TAG = () => (process.env.VSWARM_HOME ? " (system-wide, not in VSWARM_HOME)" : "");
+
 export function ensureHome(): string {
   if (!existsSync(HOME)) mkdirSync(HOME, { recursive: true, mode: 0o700 });
   return HOME;

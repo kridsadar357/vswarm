@@ -17,8 +17,9 @@
 
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { basename, dirname, join, sep } from "node:path";
 import { HOME } from "../home";
+import { backupCopy, backupDir } from "./fix";
 import { readJson, readText } from "./ctx";
 import { addCmdGate, gcloudDir, honest, iniGet, loadCmdGates, realGateFiles, removeCmdGate, type GateFiles } from "./cmdgate";
 import { c } from "./print";
@@ -35,6 +36,8 @@ export interface GcloudHook {
   cred: string;
   /** The credential it was made from. */
   source: string;
+  /** A copy of the configuration file from before, in ~/.vswarm/backups (removed with the hook). */
+  backup?: string;
   at: number;
 }
 
@@ -53,6 +56,17 @@ export const loadCloudGates = (): CloudGates => {
   return { gcloud: map(s?.gcloud), aws: map(s?.aws), kube: map(s?.kube) };
 };
 export const saveCloudGates = (s: CloudGates) => writePrivate(stateFile(), s);
+
+/**
+ * Removes a backup vswarm made for a hook that is gone, once no other hook still names it: one in ~/.vswarm/backups,
+ * or one an older vswarm wrote beside the file (`<file>.bak-vswarm-<time>`). Anything else is left alone.
+ */
+export function pruneBackup(backup: string | undefined, file: string, state: CloudGates = loadCloudGates()) {
+  if (!backup) return;
+  const ours = backup.startsWith(backupDir() + sep) || backup === `${file}.bak-vswarm-${/\.bak-vswarm-(\d+)$/.exec(backup)?.[1]}`;
+  const named = [...Object.values(state.aws), ...Object.values(state.kube), ...Object.values(state.gcloud)].some((h) => h.backup === backup);
+  if (ours && !named) rmSync(backup, { force: true });
+}
 
 /** Where vswarm keeps gated credentials. */
 export const gateDir = () => process.env.VSWARM_GATE_DIR ?? join(HOME, "gate");
@@ -184,10 +198,10 @@ export function gcloudHookOn(name: string, credFile: string | undefined, e: Clou
   mkdirSync(gateDir(), { recursive: true, mode: 0o700 });
   const out = join(gateDir(), `gcloud-${name}.json`);
   writeFileSync(out, JSON.stringify(gated, null, 2) + "\n", { mode: 0o600 });
-  const backup = `${file}.bak-vswarm-${Date.now()}`;
-  writeFileSync(backup, readFileSync(file), { mode: 0o600 });
+  // The copy goes to ~/.vswarm/backups: gcloud reads every config_<name> file in configurations/, a backup there too.
+  const backup = ours?.backup && existsSync(ours.backup) ? ours.backup : backupCopy(file, "gcloud");
   writeFileSync(file, iniSet(text, "auth", "credential_file_override", out));
-  const hook: GcloudHook = { file, previous: own(current) ? ours?.previous : current, cred: out, source, at: Date.now() };
+  const hook: GcloudHook = { file, previous: own(current) ? ours?.previous : current, cred: out, source, backup, at: Date.now() };
   state.gcloud[name] = hook;
   saveCloudGates(state);
   return { hook, droppedCache, adopted: !credFile };
@@ -208,6 +222,11 @@ export function gcloudHookOff(name: string): { done: boolean; note?: string } {
   rmSync(h.cred, { force: true });
   delete state.gcloud[name];
   saveCloudGates(state);
+  pruneBackup(h.backup, h.file, state);
+  // Copies older vswarm versions left in configurations/, where gcloud took each for a configuration of its own.
+  try {
+    for (const f of readdirSync(dirname(h.file))) if (new RegExp(`^${basename(h.file).replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\.bak-vswarm-\\d+$`).test(f)) rmSync(join(dirname(h.file), f), { force: true });
+  } catch {}
   return { done: true, note };
 }
 
@@ -315,9 +334,13 @@ export async function gateAz(args: string[], where?: GateFiles) {
     else note("az is not gated");
     return;
   }
-  if (args.length === 1 && args[0] === "status") {
+  // No arguments is status, as for every other gate; `gate az --all` wraps every run.
+  const allAt = args.indexOf("--all");
+  const every = allAt >= 0;
+  if (every) args.splice(allAt, 1);
+  if ((!args.length && !every) || (args.length === 1 && args[0] === "status")) {
     const g = loadCmdGates().tools.az;
-    return g ? ok("az wrapper", `${g.patterns.join(", ") || "every run"} · a reminder you can bypass`) : note('az is not gated · vswarm gate az ["<subscription name or id>" …]');
+    return g ? ok("az wrapper", `${g.patterns.join(", ") || "every run"} · a reminder you can bypass`) : note('az is not gated · vswarm gate az "<subscription name or id>" … (or --all for every run)');
   }
   const w = where ?? (await realGateFiles(true));
   const changed = await addCmdGate("az", args, w);

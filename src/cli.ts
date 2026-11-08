@@ -150,13 +150,22 @@ async function main() {
 
     case "baseline": {
       const auto = has(args, "--yes", "-y");
+      const acceptHigh = has(args, "--accept-high");
       noMoreOptions(cmd, args);
       const r = await check(realCtx(), { offline });
       summary(r, { title: "baseline check" });
       // During an incident this is the step that records the cleaned machine; vswarm unlock needs it.
       if (r.lock) line(c.amber(`\n  Incident ${r.lock.incident} is open. Record a baseline only once the machine is clean (best: reinstalled) and credentials are rotated.`));
       const serious = r.findings.filter((f) => RANK[f.severity] >= RANK.high);
-      if (serious.length) line(c.red(`\n  ${serious.length} serious finding${serious.length > 1 ? "s" : ""} above. A baseline taken now treats them as normal.`));
+      // A baseline over HIGH or CRIT findings makes them normal from now on: never by default, never silently.
+      if (serious.length && !acceptHigh) {
+        line(c.red(`\n  ${serious.length} serious finding${serious.length > 1 ? "s" : ""}: a baseline taken now would treat ${serious.length > 1 ? "them" : "it"} as normal. Not recorded.`));
+        for (const f of serious) line(`    ${c.red(f.severity === "critical" ? "CRIT" : "HIGH")}  ${f.title}`);
+        line(c.dim("  Deal with them first (vswarm why; vswarm respond if you do not know them). If you know every one is yours: vswarm baseline --accept-high"));
+        process.exitCode = 3;
+        return;
+      }
+      if (serious.length) line(c.amber(`\n  ${serious.length} serious finding${serious.length > 1 ? "s" : ""} above will be treated as normal (--accept-high).`));
       const count = r.scan.items.filter((i) => i.kind !== "proc" && i.kind !== "conn").length;
       if (!auto) line("");
       const ok = auto || (await yes(`Record this machine (${count} items) as the clean baseline?`, !serious.length));
@@ -177,7 +186,8 @@ async function main() {
       noMoreOptions(cmd, args);
       const list = await agents(realCtx());
       if (doInspect) {
-        if (process.platform === "win32") throw new Error("vswarm agents --inspect is not on Windows yet (it needs the sandbox); use it inside WSL");
+        // No sandbox on Windows yet: --inspect starts the servers only when you say they may run as you (--no-sandbox).
+        if (process.platform === "win32" && inspectOpt.sandbox) throw new Error("vswarm agents --inspect needs the sandbox, which Windows does not have yet: use it inside WSL, or --inspect --no-sandbox to start each server as your agent would, with your access");
         const { inspectAll } = await import("./sec/mcp");
         process.exitCode = await inspectAll(list.filter((i) => i.kind === "mcp"), inspectOpt);
         return;
@@ -327,7 +337,7 @@ async function main() {
     }
 
     case "gate":
-      noMoreOptions(cmd, args, ["--cert", "--team", "--off", "--list", "--cred-file", "--wrapper"]);
+      noMoreOptions(cmd, args, ["--cert", "--team", "--off", "--list", "--cred-file", "--wrapper", "--prune", "--all"]);
       return gate(args);
 
     case "cmdgate": {
@@ -497,7 +507,7 @@ async function main() {
       if (!(await doctor())) process.exitCode = 1;
       return;
     case "install":
-      noMoreOptions(cmd, args, ["--yes", "-y", "--no-path"]);
+      noMoreOptions(cmd, args, ["--yes", "-y", "--no-path", "--path"]);
       return install(args);
     case "uninstall":
       noMoreOptions(cmd, args, ["--purge"]);

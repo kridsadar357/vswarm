@@ -104,7 +104,7 @@ export function behindGate(program: string, launchers = ownLaunchers()): string 
 }
 
 /** How this vswarm is started from other tools: its launcher, or bun and the CLI. */
-const ownLaunchers = (): string[][] => [
+export const ownLaunchers = (): string[][] => [
   [join(HOME, "bin", process.platform === "win32" ? "vswarm.cmd" : "vswarm")],
   [process.execPath, resolve(import.meta.dir, "../../cli.ts")],
 ];

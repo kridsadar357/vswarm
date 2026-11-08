@@ -495,7 +495,8 @@ describe("windows: ssh gate and install guard", () => {
     expect(b.startsWith(GUARD_START) && b.endsWith(GUARD_END)).toBe(true);
     expect(b).toContain("& 'C:\\Users\\a b\\.bun\\bin\\bun.exe' 'C:\\Users\\o''x\\.vswarm\\app\\src\\cli.ts' pkg $tool '--' @a");
     expect(b).toContain("function npm { __vswarm_go npm '^(install|i|");
-    expect(b).toContain("function yarn { __vswarm_go yarn '^(|install|");
+    // A bare yarn, and yarn with options only (yarn --frozen-lockfile), install the project: both are checked.
+    expect(b).toContain("function yarn { __vswarm_go yarn '^(|-.*|install|");
     expect(b).toContain("function npx { __vswarm_go npx '.*' $args }");
     expect(b).not.toContain("function brew");
   });

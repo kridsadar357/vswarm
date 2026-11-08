@@ -53,6 +53,11 @@ export interface Finding {
   /** What to do about it, in one line. */
   fix?: string;
   item?: Item;
+  /**
+   * Facts the fix needs, as data rather than display text: the exact lines a startup or config file gained (`lines`),
+   * the key file a credential finding is about (`file`), whether production hosts use it (`production`).
+   */
+  meta?: { lines?: string[]; file?: string; production?: boolean };
 }
 
 export type Verdict = "pass" | "warn" | "block";

@@ -163,7 +163,8 @@ cat > /etc/ssh/sshd_config.d/50-vswarm-ca.conf <<'CONF'
 TrustedUserCAKeys /etc/ssh/vswarm_user_ca.pub
 AuthorizedPrincipalsFile /etc/ssh/auth_principals/%u
 CONF
-sshd -t && systemctl reload ssh 2>/dev/null || systemctl reload sshd
+# reload only when the new config tests clean: an sshd that cannot read its config would lock everyone out
+if sshd -t; then systemctl reload ssh 2>/dev/null || systemctl reload sshd; else echo "sshd -t failed: not reloaded; fix the config above first" >&2; exit 1; fi
 # 4. keep this session open, log in again from another terminal with a certificate, and only then remove the old
 #    keys from ~${account}/.ssh/authorized_keys, so a stolen key file stops working.`;
 }

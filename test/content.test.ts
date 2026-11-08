@@ -675,6 +675,10 @@ describe("the guard reads contents", () => {
       expect(asked[0]).toContain("Suspicious contents");
       expect(await pkgCommand("npm", ["install", "vs-fixture-env@1.0.0"], { offline: false, get: reg.get, ask: async () => false })).toBe(3);
       expect(await pkgCommand("npm", ["install", "vs-fixture-env@1.0.0"], { offline: false, strict: true, get: reg.get, ask: async () => false })).toBe(3);
+      // The answer when you only press Enter, or when there is no terminal to ask on: no.
+      const defaults: (boolean | undefined)[] = [];
+      expect(await pkgCommand("npm", ["install", "vs-fixture-env@1.0.0"], { offline: false, get: reg.get, ask: async (_q, def) => (defaults.push(def), def ?? false) })).toBe(3);
+      expect(defaults).toEqual([false]);
     } finally {
       if (prev === undefined) delete process.env.VSWARM_SEC_DIR;
       else process.env.VSWARM_SEC_DIR = prev;

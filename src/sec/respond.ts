@@ -12,6 +12,7 @@ import { commandExe, winContainment } from "./collect/windows";
 import type { Check } from "./engine";
 import { writeReport } from "./report";
 import { files, setLock, writePrivate } from "./store";
+import { removeLines } from "./fix";
 import type { Finding } from "./types";
 import { RANK } from "./types";
 import { c, finding as printFinding, line } from "./print";
@@ -175,18 +176,18 @@ function containment(f: Finding, ctx: Ctx, inc: Incident): { what: string; act?:
       ];
     case "rc":
     case "ssh":
-    case "cron": {
-      const added = f.detail.filter((d) => d.startsWith("+ ")).map((d) => d.slice(2));
+    case "cron":
+    case "shell-d":
+    case "tool-config": {
+      // The lines as the check recorded them, whole (the finding's detail is cut short and carries the reason).
+      const added = f.meta?.lines ?? [];
       if (!added.length || !i.path) return [];
       return [{
         what: `remove the ${added.length} added line${added.length > 1 ? "s" : ""} from ${i.path} (a copy is kept in the evidence)`,
         act: async () => {
-          const text = readFileSync(i.path!, "utf8");
-          copyFileSync(i.path!, join(inc.dir, "evidence", `${basename(i.path!)}.before-cleanup`));
-          // The finding shows the first 160 characters of each line; a long loader line is matched the same way.
-          const kept = text.split("\n").filter((l) => !added.includes(l.trim().slice(0, 160))).join("\n");
-          writeFileSync(i.path!, kept);
-          return `removed ${added.length} line(s) from ${i.path}`;
+          const r = removeLines(i.path!, added, join(inc.dir, "evidence", `${basename(i.path!)}.before-cleanup`));
+          if (!r.removed) throw new Error(`${i.path} no longer has ${added.length > 1 ? "those lines" : "that line"}; nothing removed`);
+          return `removed ${r.removed} line${r.removed > 1 ? "s" : ""} from ${i.path}${r.missing.length ? ` (${r.missing.length} not found: changed since the check)` : ""}`;
         },
       }];
     }
