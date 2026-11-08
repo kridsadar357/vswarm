@@ -148,7 +148,8 @@ describe("findings by number", () => {
   test("fix plans: the production key goes to agent protect (or ssh-keygen -p), another key to ssh-keygen -p, an unsafe source loses its lines", async () => {
     const home = tmp("home");
     const prod: Finding = { id: "secret:ssh:prod", rule: "secret", severity: "medium", title: "k", detail: [], meta: { file: join(home, ".ssh/prod"), production: true } };
-    const p = fixFor(prod, { n: 1, self: ["vswarm"], home, platform: "darwin" });
+    // A temp home is a Windows path on Windows, so it is judged with that system's quoting.
+    const p = fixFor(prod, { n: 1, self: ["vswarm"], home, platform: process.platform === "win32" ? "win32" : "darwin" });
     expect(p.exact).toEqual([`vswarm agent protect ${join(home, ".ssh/prod")}`]);
     expect(p.instead?.exact).toEqual([`ssh-keygen -p -f ${join(home, ".ssh/prod")}`]);
     expect(fixFor(prod, { n: 1, self: ["vswarm"], home, platform: "win32" }).exact[0]).toContain("ssh-keygen -p");
