@@ -9,7 +9,7 @@ import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync }
 import { join } from "node:path";
 import { HOME } from "../home";
 import { exec, readJson, whoami } from "./ctx";
-import { verdictNow } from "./gate";
+import { gateVerdict } from "./gate";
 import { c, line } from "./print";
 
 export const CA_DIR = () => process.env.VSWARM_CA_DIR ?? join(HOME, "ca");
@@ -135,10 +135,10 @@ export async function caCommand(action: string, args: string[], opt: { sk: boole
 
 /** `vswarm cert`: a certificate, but only for a machine that passes preflight. Returns the exit code. */
 export async function certCommand(opt: { quiet: boolean; fresh: boolean; offline: boolean; host?: string }): Promise<number> {
-  const verdict = await verdictNow({ fresh: opt.fresh, quiet: opt.quiet, offline: opt.offline });
-  if (verdict === "block") {
-    line(c.red("vswarm: no certificate for a machine that does not pass preflight"));
-    return 3;
+  const g = await gateVerdict({ fresh: opt.fresh, quiet: opt.quiet, offline: opt.offline });
+  if (!g.allowed) {
+    line(c.red(`vswarm: no certificate for a machine that does not pass preflight${g.verdict === "warn" ? " (WARN, refused by the policy)" : ""}`));
+    return g.code;
   }
   const r = await issue({ host: opt.host });
   if (!opt.quiet || !r.reused) line(`${c.green("✔")} ${r.reused ? "certificate still valid" : "certificate issued"} for ${Math.floor((r.info.left ?? 0) / 60)} min · ${c.dim(r.info.principals.join(","))}`);

@@ -22,6 +22,7 @@ import { fileStore, type KeyStore } from "../src/sec/seal";
 import { backupDir } from "../src/sec/fix";
 import { pathWanted, sandboxRefusal } from "../src/setup";
 import { stdioArgv } from "../src/sec/mcp";
+import { notOnWindows } from "../src/cli";
 
 const WIN = process.platform === "win32";
 const CLI = join(import.meta.dir, "../src/cli.ts");
@@ -316,6 +317,10 @@ describe("state that cannot be checked", () => {
 });
 
 describe("Windows branches, on every system", () => {
+  test("the not-yet message has no stray space", () => {
+    expect(notOnWindows("agent")).toBe("vswarm agent is not on Windows yet; use it inside WSL");
+  });
+
   test("install changes the Windows PATH only with --path or a yes; elsewhere unless --no-path", async () => {
     const yes = async () => true, no = async () => false;
     expect(await pathWanted([], true, true, yes)).toBe(true);

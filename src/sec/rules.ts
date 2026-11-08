@@ -361,7 +361,8 @@ export async function evaluate(input: RuleInput): Promise<Finding[]> {
       const bad = (scan.texts[i.id] ?? "").split(/\r?\n/).map((l) => l.trim()).filter((l) => l && !/^[#;]/.test(l)).map((l) => [l, configRisk(l, home)] as const).filter(([, why]) => why?.startsWith("the package source"));
       if (bad.length)
         add({ id: `pkg-source:${i.id}:${i.hash?.slice(0, 12)}`, rule: "pkg-source", severity: "medium", title: `~/${i.id} takes packages from an unsafe source`,
-          detail: bad.slice(0, 4).map(([l, why]) => `${redact(l.slice(0, 160))} · ${why}`), fix: "Point it back at the official registry or your company's https mirror, unless you set this up on purpose", item: i });
+          detail: bad.slice(0, 4).map(([l, why]) => `${redact(l.slice(0, 160))} · ${why}`), fix: "Point it back at the official registry or your company's https mirror, unless you set this up on purpose (vswarm fix removes the lines)", item: i,
+          meta: { lines: bad.map(([l]) => l) } });
     }
   }
 

@@ -481,7 +481,7 @@ describe("windows: ssh gate and install guard", () => {
   test("the gate runs through cmd.exe: spaces escaped with ^, no host name, % and quotes refused, no certificates", () => {
     const g = sshGate(["prod-*"], ["C:\\Users\\a b\\.vswarm\\bin\\vswarm.cmd"], { win: true });
     expect(g).toContain('Match originalhost prod-* !exec "C:\\Users\\a^ b\\.vswarm\\bin\\vswarm.cmd preflight --quiet"');
-    expect(g).toContain('ProxyCommand cmd.exe /d /c "echo vswarm: this machine did not pass preflight; run: vswarm preflight 1>&2 & exit 1"');
+    expect(g).toContain('ProxyCommand cmd.exe /d /c "echo vswarm: not connecting: this machine did not pass preflight; run: vswarm why 1>&2 & exit 1"');
     expect(g).not.toContain("%h");
     expect(cmdWord("C:\\a&b (x)\\v^.cmd")).toBe("C:\\a^&b^ ^(x^)\\v^^.cmd");
     expect(() => cmdWord("C:\\%TEMP%\\v.cmd")).toThrow("%");

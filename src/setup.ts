@@ -5,11 +5,12 @@ import { chmodSync, existsSync, mkdirSync, openSync, readFileSync, rmSync, write
 import { ReadStream } from "node:tty";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
-import { ensureHome, HOME, paths, VERSION } from "./home";
+import { ensureHome, GLOBAL_TAG, HOME, paths, VERSION } from "./home";
 import { dq, exec, shq } from "./sec/ctx";
 import { blockRegex, files, forgetKey, loadBaseline, lockState, readBaseline, recordManaged, removeBlock, stateKey } from "./sec/store";
 import { GUARD_END, GUARD_START, guardBlock, loadGuardConfig, psGuardBlock, saveGuardConfig, type GuardConfig } from "./sec/pkg";
 import { fingerprints, PIN, secureUpdate } from "./sec/update";
+import { GATE_END, GATE_START } from "./sec/sshblocks";
 
 export const CLI = resolve(import.meta.dir, "cli.ts");
 
@@ -59,7 +60,7 @@ export function canAsk(): boolean {
 export async function ask(question: string, { secret = false } = {}): Promise<string> {
   const k = keyboard();
   if (!k) return "";
-  process.stdout.write(`  ${c.cyan("?")} ${question} `);
+  process.stderr.write(`  ${c.cyan("?")} ${question} `);
   k.setRawMode(true);
   k.resume();
   let value = "";
@@ -76,24 +77,24 @@ export async function ask(question: string, { secret = false } = {}): Promise<st
       for (const ch of text) {
         if (ch === "\r" || ch === "\n") {
           close();
-          process.stdout.write("\n");
+          process.stderr.write("\n");
           return done(value.trim());
         }
         if (ch === "\x03") {
           close();
-          process.stdout.write("\n");
+          process.stderr.write("\n");
           process.exit(130);
         }
         if (ch === "\x7f" || ch === "\b") {
           if (value) {
             value = [...value].slice(0, -1).join("");
-            process.stdout.write("\b \b");
+            process.stderr.write("\b \b");
           }
           continue;
         }
         if (ch < " ") continue;
         value += ch;
-        process.stdout.write(secret ? "•" : ch);
+        process.stderr.write(secret ? "•" : ch);
       }
     };
     k.on("data", onData);
@@ -212,13 +213,17 @@ async function windowsPath(add: boolean) {
 
 // ── Completions
 export const COMMANDS: [string, string][] = [
-  ["scan", "check this machine now"],
+  ["scan", "check this machine now (check is the same)"],
   ["baseline", "remember this machine as clean"],
   ["diff", "what changed since the baseline"],
   ["watch", "check in the background and notify"],
   ["secrets", "long-lived credentials on this machine"],
   ["agents", "MCP servers, hooks and permissions of AI agents"],
   ["preflight", "gate before production access (ssh/aws/kubectl)"],
+  ["why", "each finding with the command to fix or accept it"],
+  ["ok", "accept finding n of the last check"],
+  ["fix", "fix finding n of the last check (shows it, asks first)"],
+  ["policy", "what WARN does at every gate and in the agent"],
   ["accept", "accept reviewed findings"],
   ["respond", "lock, collect evidence, rotate, quarantine, report"],
   ["report", "write the incident report again"],
@@ -250,12 +255,17 @@ _vswarm() {
   local cur="\${COMP_WORDS[COMP_CWORD]}" prev="\${COMP_WORDS[1]}"
   if [ "$COMP_CWORD" -eq 1 ]; then COMPREPLY=( $(compgen -W "${names}" -- "$cur") ); return; fi
   case "$prev" in
-    scan|diff) COMPREPLY=( $(compgen -W "--all --json --offline" -- "$cur") ) ;;
+    scan|diff|check) COMPREPLY=( $(compgen -W "--all --json --offline" -- "$cur") ) ;;
     preflight) COMPREPLY=( $(compgen -W "--quiet --strict --fresh --then --json --offline" -- "$cur") ) ;;
-    accept) COMPREPLY=( $(compgen -W "--all --list --remove" -- "$cur") ) ;;
-    gate) COMPREPLY=( $(compgen -W "ssh status remove cmd aws kube gcloud az" -- "$cur") ) ;;
-    guard) COMPREPLY=( $(compgen -W "on off status" -- "$cur") ) ;;
-    agent) COMPREPLY=( $(compgen -W "on off status protect policy unprotect restore add log run" -- "$cur") ) ;;
+    accept|ok) COMPREPLY=( $(compgen -W "--all --list --remove" -- "$cur") ) ;;
+    policy) COMPREPLY=( $(compgen -W "warn allow refuse" -- "$cur") ) ;;
+    baseline) COMPREPLY=( $(compgen -W "--yes --accept-high --offline" -- "$cur") ) ;;
+    gate) COMPREPLY=( $(compgen -W "ssh status remove cmd aws kube gcloud az --prune --off" -- "$cur") ) ;;
+    guard) COMPREPLY=( $(compgen -W "on off status --ignore-scripts --sandbox --strict" -- "$cur") ) ;;
+    agent) COMPREPLY=( $(compgen -W "on off status protect policy unprotect restore add prune log run" -- "$cur") ) ;;
+    watch) COMPREPLY=( $(compgen -W "on off status --every" -- "$cur") ) ;;
+    team) COMPREPLY=( $(compgen -W "join sync status leave sign --fingerprint --key" -- "$cur") ) ;;
+    try) COMPREPLY=( $(compgen -f -W "--net --localhost --list --clean --yes --" -- "$cur") ) ;;
   esac
 }
 complete -F _vswarm vswarm
@@ -271,12 +281,17 @@ ${lines}
   )
   if (( CURRENT == 2 )); then _describe 'command' cmds; return; fi
   case "\${words[2]}" in
-    scan|diff) _arguments '--all[show low and info findings]' '--json[machine-readable output]' '--offline[no OSV lookup]' ;;
-    preflight) _arguments '--quiet[print only on problems]' '--strict[WARN also blocks]' '--fresh[ignore the cached verdict]' '--then[run a command when allowed]:command:_command_names' ;;
-    accept) _arguments '--all[accept every current finding]' '--list[show accepted]' '--remove[un-accept]:id:' ;;
+    scan|diff|check) _arguments '--all[show low and info findings]' '--json[machine-readable output]' '--offline[no OSV lookup]' ;;
+    preflight) _arguments '--quiet[print only on problems]' '--strict[WARN also blocks]' '--fresh[ignore the cached verdict]' '--json[the verdict as JSON]' '--then[run a command when allowed]:command:_command_names' ;;
+    accept|ok) _arguments '--all[accept every current finding]' '--list[show accepted]' '--remove[un-accept]:id:' ;;
+    policy) _values 'setting' warn allow refuse ;;
+    baseline) _arguments '--yes[do not ask]' '--accept-high[record even over HIGH and CRIT findings]' ;;
     gate) _values 'action' ssh status remove cmd aws kube gcloud az ;;
     guard) _values 'action' on off status ;;
-    agent) _values 'action' on off status protect policy unprotect restore add log run ;;
+    agent) _values 'action' on off status protect policy unprotect restore add prune log run ;;
+    watch) _values 'action' on off status ;;
+    team) _values 'action' join sync status leave sign ;;
+    try) _arguments '--net[network]:mode:(none registries all)' '--localhost[reach your localhost services]' '--list[earlier tries]' '--clean[remove tries]' '--yes[do not ask]' '*:source:_files' ;;
   esac
 }
 _vswarm "$@"
@@ -375,14 +390,18 @@ export async function doctor(): Promise<boolean> {
   if (lock) bad(`incident ${lock.incident} is open`, `${why ? `${why} · ` : ""}preflight blocks until vswarm unlock`);
   const { watchState } = await import("./sec/schedule");
   const w = watchState();
-  if (w.on) ok("background watch on", w.state?.at ? `last check ${new Date(w.state.at).toLocaleString()}` : "no check yet");
-  else console.log(`  ${c.dim("·")} background watch off  ${c.dim("vswarm watch on")}`);
+  if (w.on) ok("background watch on", `${w.state?.at ? `last check ${new Date(w.state.at).toLocaleString()}` : "no check yet"}${w.note ? ` · ${w.note}` : ""}`);
+  else console.log(`  ${c.dim("·")} background watch off  ${c.dim(`vswarm watch on${w.note ? ` · ${w.note}` : ""}`)}`);
   if (w.on && w.realtime) ok("real-time watch on", w.state?.quick ? `last real-time check ${new Date(w.state.quick.at).toLocaleString()}` : "no change seen yet");
   else if (w.on && !WIN) warn("real-time watch off", "only the hourly check runs · vswarm watch on again adds it");
   const sshCfgPath = join(homedir(), ".ssh/config");
   const sshCfg = existsSync(sshCfgPath) ? readFileSync(sshCfgPath, "utf8") : "";
-  if (sshCfg.includes(GATE_START)) ok("ssh gate installed", "~/.ssh/config");
+  if (sshCfg.includes(GATE_START)) ok("ssh gate installed", `~/.ssh/config${GLOBAL_TAG()}`);
   else console.log(`  ${c.dim("·")} ssh gate not installed  ${c.dim('vswarm gate ssh "prod-*"')}`);
+  for (const l of await hostHealth(sshCfg)) console.log(l);
+  const { readPolicy, policyLine } = await import("./sec/policy");
+  const pol = await readPolicy();
+  (pol.untrusted ? bad : ok)(pol.warn === "allow" ? "WARN is let through" : "WARN is refused", policyLine(pol).replace(/^policy: [^,]+, /, ""));
   const { agentDoctor } = await import("./sec/agent");
   for (const a of await agentDoctor()) {
     if (a.level === "bad") good = false;
@@ -401,8 +420,7 @@ export async function doctor(): Promise<boolean> {
 }
 
 // ── ssh gate
-export const GATE_START = "# >>> vswarm gate >>>";
-const GATE_END = "# <<< vswarm gate <<<";
+export { GATE_START };
 
 /** The ~/.ssh/config block: hosts matching the patterns connect only when preflight passes. */
 /**
@@ -432,8 +450,8 @@ export function sshGate(patterns: string[], launcher: string[], opt: { cert?: { 
     // originalhost is the name you typed (ssh vrfix-prod), before any HostName substitution.
     `Match originalhost ${patterns.join(",")} !exec "${q} ${opt.cert ? "cert" : "preflight"} --quiet${tail}"`,
     win
-      ? `    ProxyCommand cmd.exe /d /c "echo vswarm: this machine did not pass preflight; run: vswarm preflight 1>&2 & exit 1"`
-      : `    ProxyCommand /bin/sh -c 'echo "vswarm: this machine did not pass preflight; run: vswarm preflight" >&2; exit 1'`,
+      ? `    ProxyCommand cmd.exe /d /c "echo vswarm: not connecting: this machine did not pass preflight; run: vswarm why 1>&2 & exit 1"`
+      : `    ProxyCommand /bin/sh -c 'echo "vswarm: not connecting: this machine did not pass preflight (the reason is above) · vswarm why" >&2; exit 1'`,
     // With certificates: log in with the fresh session key and its certificate first.
     ...(opt.cert ? [`Match originalhost ${patterns.join(",")}`, `    IdentityFile ${opt.cert.key}`, `    CertificateFile ${opt.cert.cert}`] : []),
     GATE_END,
@@ -458,6 +476,8 @@ export async function gate(args: string[], home = homedir()) {
   if (action === "status") {
     const block = old.match(blockRegex(GATE_START, GATE_END))?.[0];
     console.log(block ? block.trim() : "no vswarm gate in ~/.ssh/config · add one: vswarm gate ssh \"prod-*\" \"*.internal\"");
+    // Hosts named one by one, in the gate and the agent block: still there? (DNS and the ssh port, 2 s, in parallel)
+    for (const l of await hostHealth(old)) console.log(l);
     const { loadCmdGates } = await import("./sec/cmdgate");
     const { loadCloudGates } = await import("./sec/cloudgate");
     const cmds = Object.keys(loadCmdGates().tools).sort();
@@ -483,6 +503,19 @@ export async function gate(args: string[], home = homedir()) {
     if (!hosts.length) throw new Error("the team policy names no ssh hosts (gate.ssh), or this machine follows none: vswarm team status");
     for (const h of hosts) if (!args.includes(h)) args.push(h);
   }
+  // --prune: the gate's hosts that no longer answer, offered one by one; the rest stay as they are.
+  const pruneAt = args.indexOf("--prune");
+  if (pruneAt >= 0) {
+    args.splice(pruneAt, 1);
+    if (action !== "ssh" || args.length) throw new Error("usage: vswarm gate ssh --prune   (offers the gated hosts that no longer answer, one by one)");
+    const current = gatedHostsOf(old);
+    const was = /Match originalhost \S+ !exec "[^"]* (preflight|cert) --quiet/.exec(old)?.[1];
+    const { pruneHosts } = await import("./sec/probe");
+    const keep = await pruneHosts(current, { cfgText: old, ask: (q, d) => yes(q, d), what: "gate" });
+    if (!keep) return;
+    if (!keep.length) return gate(["remove"], home);
+    return gate(["ssh", ...keep, ...(was === "cert" ? ["--cert"] : [])], home);
+  }
   if (action === "ssh" && !args.length) throw new Error('name the hosts to guard, e.g. vswarm gate ssh "prod-*" "*.wallet.internal"');
   if (withCert && !existsSync(join(HOME, "ca", "ca_key"))) throw new Error("no CA yet: vswarm ca init");
   const cert = withCert ? { key: join(HOME, "ca", "session"), cert: join(HOME, "ca", "session-cert.pub") } : undefined;
@@ -499,6 +532,35 @@ export async function gate(args: string[], home = homedir()) {
   ok(action === "ssh" ? `ssh gate added for ${args.join(", ")}` : "ssh gate removed", cfgPath);
   if (old) console.log(`  ${c.dim(`backup ${backup}`)}`);
   if (action === "ssh") console.log(`  ${c.dim(`test it: ssh -G <a matching host> | ${WIN ? "findstr /i" : "grep -i"} proxycommand  (empty while preflight passes)`)}`);
+}
+
+/** Host patterns of the ssh gate block, when there is one. */
+const gatedHostsOf = (cfg: string) => /Match originalhost (\S+) !exec "[^"]* (?:preflight|cert) --quiet/.exec(cfg)?.[1].split(",") ?? [];
+
+/**
+ * For doctor and gate status: each host the gate and agent blocks name one by one, probed (DNS, then its ssh port;
+ * 2 s; all at once), and when the agent last signed a login to it. Only these two commands ask; preflight never does.
+ */
+export async function hostHealth(cfg: string, deps?: import("./sec/probe").ProbeDeps): Promise<string[]> {
+  const { probeAll, dead, probeText, lastUsed } = await import("./sec/probe");
+  const { agentHosts } = await import("./sec/agent");
+  const { literal } = await import("./sec/sshconfig");
+  const hosts = [...new Set([...gatedHostsOf(cfg), ...agentHosts(cfg)])].filter(literal);
+  if (!hosts.length) return [];
+  const probes = await probeAll(hosts, cfg, deps);
+  let days: Record<string, number | undefined> = {};
+  try {
+    const { readAudit } = await import("./sec/store");
+    days = lastUsed(hosts, (await readAudit()).entries);
+  } catch {}
+  const out: string[] = [];
+  for (const p of probes) {
+    const d = days[p.host];
+    const used = d === undefined ? "" : d === 0 ? " · agent login today" : ` · not used for ${d} day${d === 1 ? "" : "s"}`;
+    out.push(`  ${dead(p) ? c.amber("!") : c.lime("✔")} ${p.host}  ${c.dim(probeText(p) + used)}`);
+  }
+  if (probes.some(dead)) out.push(`  ${c.dim("hosts that do not answer: vswarm gate ssh --prune · vswarm agent prune (asks for each)")}`);
+  return out;
 }
 
 // ── Install guard: npm, pip, brew … ask vswarm before they install

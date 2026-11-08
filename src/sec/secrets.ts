@@ -7,6 +7,7 @@ import { isDir, ls, mtime, readJson, readText, type Ctx } from "./ctx";
 import type { Finding, Severity } from "./types";
 import { canaryKeyIds, canaryWhere } from "./canary";
 import { plaintext } from "./plaintext";
+import { productionKeys } from "./sshconfig";
 
 const day = 86_400_000;
 const statSize = (p: string) => {
@@ -119,11 +120,20 @@ export async function secrets(ctx: Ctx): Promise<Finding[]> {
     const t = readText(p, 64_000);
     if (t && /PRIVATE KEY-----/.test(t) && keyEncrypted(t) === false) bare.push(f);
   }
+  // One finding per key. A key that hosts behind vswarm's gate or agent use (production) is MED; any other key is LOW,
+  // so a machine with personal keys only can pass, and `--all` or `vswarm secrets` still lists them.
   if (bare.length) {
-    bare.sort();
-    out.push(finding(`ssh:${bare.join(",")}`, "medium", `${bare.length} SSH private key${bare.length > 1 ? "s" : ""} without a passphrase`,
-      [...bare.map((f) => `~/.ssh/${f} · ${age(join(h, ".ssh", f))}`), "Anyone who copies these files can log in wherever they are trusted."],
-      `Add a passphrase (ssh-keygen -p -f ~/.ssh/<key>), keep a production key only in vswarm agent (vswarm agent protect ~/.ssh/<key>), or move production access to a hardware key or short-lived SSH certificates.`));
+    const prod = productionKeys(readText(join(h, ".ssh", "config")) ?? "", h);
+    for (const f of bare.sort()) {
+      const p = join(h, ".ssh", f);
+      const used = prod.has(p);
+      const x = finding(`ssh:${f}`, used ? "medium" : "low", `SSH private key without a passphrase: ~/.ssh/${f}${used ? " (used for production hosts)" : ""}`,
+        [age(p), used ? "Hosts behind vswarm's gate or agent log in with it; anyone who copies the file can too, from anywhere." : "Anyone who copies the file can log in wherever it is trusted."],
+        used ? `Keep it only in vswarm agent (vswarm agent protect ~/.ssh/${f}), or add a passphrase (ssh-keygen -p -f ~/.ssh/${f}); vswarm fix offers both`
+          : `Add a passphrase: ssh-keygen -p -f ~/.ssh/${f} (vswarm fix runs it)`);
+      x.meta = { file: p, production: used };
+      out.push(x);
+    }
   }
 
   // AWS long-term access keys

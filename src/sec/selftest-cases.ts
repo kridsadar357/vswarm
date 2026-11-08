@@ -800,10 +800,14 @@ export const CASES: Case[] = [
     min: "medium",
   },
   {
-    name: "SSH private key without a passphrase",
+    name: "SSH private key without a passphrase, used for production hosts",
     like: "Keys copied off laptops to reach servers",
     technique: "T1552.004 Private keys",
-    plant: (h) => write(join(h, ".ssh/id_ed25519"), BARE_KEY, 0o600),
+    // The hosts behind vswarm's gate log in with it: a production key (a personal key on its own is LOW).
+    plant: (h) => {
+      write(join(h, ".ssh/id_ed25519"), BARE_KEY, 0o600);
+      write(join(h, ".ssh/config"), `# >>> vswarm gate >>>\nMatch originalhost prod-* !exec "/x/vswarm preflight --quiet --host %h"\n    ProxyCommand /bin/sh -c 'exit 1'\n# <<< vswarm gate <<<\n\nHost prod-db\n    HostName 10.0.0.5\n    IdentityFile ~/.ssh/id_ed25519\n`, 0o600);
+    },
     expect: secret("SSH private key"),
     min: "medium",
   },
