@@ -1116,3 +1116,15 @@ export async function agentCommand(action: string, args: string[], opt: AgentCom
 
   throw new Error("usage: vswarm agent on [host patterns…] [--global] [--upstream path|none] [--upstream-timeout s] | off | status | protect <key> [--confirm] [--allow-warn] | policy <key> --allow-warn|--strict | unprotect <key> | restore <backup> | add <key> [--confirm] [--life s] | log | run");
 }
+
+/** For vswarm ui: each protected key's signing policy by fingerprint, read as agent status reads it; empty when the vault cannot be opened. */
+export async function keyPolicies(): Promise<Record<string, { allowWarn: boolean; confirm: boolean }>> {
+  const out: Record<string, { allowWarn: boolean; confirm: boolean }> = {};
+  const vaults = listVaults();
+  const wk = vaults.length ? await wrapKey().catch(() => undefined) : undefined;
+  for (const { v } of wk ? vaults : []) {
+    const inside = await openVault(v, wk).catch(() => undefined);
+    if (inside) out[v.fp] = { allowWarn: inside.allowWarn === true, confirm: !!inside.confirm };
+  }
+  return out;
+}

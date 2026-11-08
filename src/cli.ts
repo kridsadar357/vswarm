@@ -281,9 +281,16 @@ async function main() {
     }
 
     case "report": {
+      const html = has(args, "--html");
       const out = flag(args, "--out");
       const key = flag(args, "--sign");
       noMoreOptions(cmd, args);
+      if (html) {
+        // A static snapshot of the dashboard for a team: no server, no actions, credentials masked (src/ui/report.ts).
+        if (json || key) throw new Error("--html makes a page of its own; leave out --json and --sign");
+        line(`${c.green("✔")} ${await (await import("./ui/report")).htmlReport({ out, offline })}`);
+        return;
+      }
       if (json || out || key) {
         // This machine's state for a server that decides (docs/server-side.md); a fresh check, never the cached one.
         const { posture, signReport, writePosture } = await import("./sec/report");
@@ -489,6 +496,13 @@ async function main() {
       noMoreOptions(cmd, args);
       console.log(await shot(target, out, opt));
       return;
+    }
+
+    case "ui": {
+      // A local page in plain words: 127.0.0.1 only, a one-time key per run (src/ui/server.ts).
+      const open = !has(args, "--no-open");
+      noMoreOptions(cmd, args);
+      return (await import("./ui/server")).uiCommand({ open, offline });
     }
 
     case "doctor":

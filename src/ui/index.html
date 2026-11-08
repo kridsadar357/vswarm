@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="referrer" content="no-referrer">
+<meta name="color-scheme" content="light dark">
+<title>vswarm</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Cpath d='M16 2 4 7v8c0 7.5 5.1 13.4 12 15 6.9-1.6 12-7.5 12-15V7z' fill='%234f46e5'/%3E%3Cpath d='m10.5 16 4 4 7-8' fill='none' stroke='white' stroke-width='3' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="app.css">
+</head>
+<body>
+<a class="skip" href="#main" data-i18n="sec.findings">Things to look at</a>
+<header class="top">
+  <div class="top__in">
+    <div class="brand">
+      <span class="brand__mark" id="brand-mark" aria-hidden="true"></span>
+      <span class="brand__name">vswarm</span>
+      <span class="brand__host" id="host"></span>
+    </div>
+    <div class="controls">
+      <div class="seg" role="group" id="lang" aria-label="Language / ภาษา">
+        <button type="button" data-lang="th" lang="th">ไทย</button>
+        <button type="button" data-lang="en" lang="en">EN</button>
+      </div>
+      <button type="button" class="iconbtn" id="theme" aria-label="Theme"></button>
+    </div>
+  </div>
+</header>
+<div class="banner" id="banner" hidden></div>
+<main id="main" class="wrap">
+  <section class="hero" id="hero" aria-live="polite">
+    <p class="hero__loading" data-i18n="app.loading">Reading this machine's state…</p>
+  </section>
+  <section class="block" id="findings" aria-labelledby="h-findings"></section>
+  <div class="cols">
+    <section class="block" id="tiles" aria-labelledby="h-tiles"></section>
+    <section class="block" id="timeline" aria-labelledby="h-timeline"></section>
+  </div>
+  <section class="block" id="terminal" aria-labelledby="h-terminal"></section>
+  <section class="block" id="about" aria-labelledby="h-about"></section>
+</main>
+<footer class="foot wrap" id="foot"></footer>
+<dialog class="dlg" id="dlg" aria-labelledby="dlg-title">
+  <div class="dlg__in">
+    <h2 id="dlg-title"></h2>
+    <p id="dlg-body"></p>
+    <div class="dlg__btns">
+      <button type="button" class="btn btn--ghost" id="dlg-no"></button>
+      <button type="button" class="btn btn--primary" id="dlg-yes"></button>
+    </div>
+  </div>
+</dialog>
+<div class="toast" id="toast" role="status" aria-live="polite"></div>
+<script src="app.js" defer></script>
+</body>
+</html>
