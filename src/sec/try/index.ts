@@ -7,7 +7,7 @@ import { homedir } from "node:os";
 import { basename, join, resolve } from "node:path";
 import { HOME } from "../../home";
 import { readJson, run } from "../ctx";
-import { c, finding as printFinding, line } from "../print";
+import { c, finding as printFinding, line, verdictMark } from "../print";
 import { RANK, verdictOf, type Finding, type Verdict } from "../types";
 import { allowedBy, startProxy } from "./proxy";
 import { bwrapArgs, FORWARDER, freshProc, inner, INNER_PORT, NO_FRESH_PROC, traceDenials } from "./linux";
@@ -163,7 +163,8 @@ export async function tryIt(source: string, command: string[], opt: { net: Net; 
   const verdict = verdictOf(all);
   const result: TryResult = { box, source: what, command: cmd, exit, staticFindings, runFindings, verdict, leftovers: left.map((l) => `${l.pid} ${l.command}`), logRead: o.logRead };
   writeTryReport(result);
-  const label = verdict === "block" ? c.red(c.bold("DANGEROUS")) : verdict === "warn" ? c.amber(c.bold("SUSPICIOUS")) : failed ? c.amber(c.bold("INCONCLUSIVE")) : c.green(c.bold("NOTHING SEEN"));
+  // The one vocabulary (Safe, Check this, Stop) with try's own word as the tag; a run that failed early is Check this.
+  const label = verdictMark(failed && verdict === "pass" ? "warn" : verdict, verdict === "block" ? "DANGEROUS" : verdict === "warn" ? "SUSPICIOUS" : failed ? "INCONCLUSIVE" : "NOTHING SEEN");
   line(`\n${label} ${c.dim(verdict === "block" ? "· do not run this outside the sandbox; report it (see report.md)" : verdict === "warn" ? "· read the findings before running it for real" : "· in this run, under these conditions; it is not a guarantee")}`);
   line(c.dim(`  report ${join(dir, "report.md")} · copy ${box.work} · remove: vswarm try --clean`));
   return result;

@@ -18,7 +18,8 @@ import { exec, ls, powershell, readJson, readText, realCtx, run, type Ctx } from
 import { RC_FILES } from "./collect/system";
 import { TOOL_CONFIGS } from "./collect/tools";
 import { check, type Check } from "./engine";
-import { c, line, VERDICT } from "./print";
+import { c, dateOf, line, VERDICT } from "./print";
+import { t } from "../i18n";
 import { ensureSec, recordManagedFile, SEC, writePrivate } from "./store";
 import { RANK, type Finding, type Verdict } from "./types";
 
@@ -251,7 +252,7 @@ export async function watchOn(launcher: string, everyMinutes = 60): Promise<{ do
     done.push(path);
   }
   // Said once, the first time: macOS announces a new LaunchAgent, and people take it for something foreign.
-  if (first) info.push('macOS will show "Background Items Added: vswarm" (or a notice naming bun): that is this LaunchAgent, and it is expected · System Settings → General → Login Items & Extensions lists it');
+  if (first) info.push(t("cli.bg.mac"));
   if (process.env.VSWARM_HOME && !win()) info.push(`the job files are your user's${GLOBAL_TAG()}`);
   markSeen();
   if (win()) {
@@ -474,8 +475,8 @@ export async function watchQuick(opt: { ctx?: Ctx; debounceMs?: number; notify?:
 export async function watchCommand(action: string, opt: { every: number }) {
   if (action === "run" || action === "quick") {
     const r = action === "run" ? { ran: true, ...(await watchRun()) } : await watchQuick();
-    if (!r.ran) return line(c.dim("another check is running; it covers this change"));
-    line(`${"verdict" in r ? `${VERDICT[r.verdict as Verdict]} ` : ""}${c.dim(r.fresh.length ? `${r.fresh.length} new finding${r.fresh.length > 1 ? "s" : ""}, notified` : "nothing new")}`);
+    if (!r.ran) return line(c.dim(t("cli.watch.busy")));
+    line(`${"verdict" in r ? `${VERDICT[r.verdict as Verdict]} ` : ""}${c.dim(r.fresh.length ? t("cli.watch.fresh", { n: r.fresh.length }) : t("cli.watch.nothing"))}`);
     return;
   }
   if (action === "on") {
@@ -487,20 +488,20 @@ export async function watchCommand(action: string, opt: { every: number }) {
     for (const n of r.notes) line(`  ${c.amber("!")} ${n}`);
     for (const n of r.info) line(c.dim(`  · ${n}`));
     const realtime = realtimeInstalled();
-    line(`  ${c.dim(`checks every ${every} minutes${realtime ? `, and within seconds when one of ${watchPaths(homedir()).length} watched paths changes` : ""}; notifies you about anything new · vswarm watch off to stop`)}`);
+    line(`  ${c.dim(realtime ? t("cli.watch.onRealtime", { every, n: watchPaths(homedir()).length }) : t("cli.watch.on", { every }))}`);
     await notify("vswarm watch is on", realtime ? `Checked every ${every} minutes, and when a login job, shell file, ssh or agent config changes.` : `This machine is checked every ${every} minutes.`);
     return;
   }
   if (action === "off") {
-    for (const f of await watchOff()) line(`${c.green("✔")} removed ${f.replace(homedir(), "~")}`);
+    for (const f of await watchOff()) line(`${c.green("✔")} ${t("cli.watch.removed", { file: f.replace(homedir(), "~") })}`);
     return;
   }
   if (action === "status") {
     const s = watchState();
     if (s.note) line(c.dim(`  ${s.note}`));
-    line(s.on ? `${c.green("●")} watch is on${s.realtime ? " · real-time" : win() ? " · on the schedule (Windows)" : ` · ${c.amber("real-time off")} (vswarm watch on adds it)`}` : `${c.dim("○")} watch is off · vswarm watch on`);
-    if (s.state?.at) line(`  ${c.dim(`last check ${new Date(s.state.at).toLocaleString()} · ${s.state.verdict.toUpperCase()}${s.state.last ? ` · last notified: ${s.state.last}` : ""}`)}`);
-    if (s.state?.quick) line(`  ${c.dim(`last real-time check ${new Date(s.state.quick.at).toLocaleString()} · ${s.state.quick.parts.join(", ")} · ${s.state.quick.ms} ms`)}`);
+    line(s.on ? `${c.green("●")} ${t("cli.watch.isOn")}${s.realtime ? ` · ${t("cli.watch.realtime")}` : win() ? ` · ${t("cli.watch.schedule")}` : ` · ${c.amber(t("cli.watch.realtimeOff"))}`}` : `${c.dim("○")} ${t("cli.watch.isOff")}`);
+    if (s.state?.at) line(`  ${c.dim(`${t("cli.watch.last", { at: dateOf(s.state.at) })} · ${s.state.verdict.toUpperCase()}${s.state.last ? ` · ${t("cli.watch.lastNotified", { title: s.state.last })}` : ""}`)}`);
+    if (s.state?.quick) line(`  ${c.dim(`${t("cli.watch.lastQuick", { at: dateOf(s.state.quick.at) })} · ${s.state.quick.parts.join(", ")} · ${s.state.quick.ms} ms`)}`);
     return;
   }
   throw new Error("usage: vswarm watch on [--every minutes] | off | status | run");

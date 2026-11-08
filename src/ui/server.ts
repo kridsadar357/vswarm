@@ -23,6 +23,7 @@ import { realCtx } from "../sec/ctx";
 import { check } from "../sec/engine";
 import { c, line } from "../sec/print";
 import { loadAccepted, saveAccepted } from "../sec/store";
+import { t, uiCatalog } from "../i18n";
 import { acceptable, dashboard, findingOf, langNow, setLang, type Lang } from "./state";
 
 export const IDLE_MS = 30 * 60_000;
@@ -45,8 +46,6 @@ const STATIC: Record<string, [string, string]> = {
   "/index.html": ["index.html", "text/html; charset=utf-8"],
   "/app.js": ["app.js", "text/javascript; charset=utf-8"],
   "/app.css": ["app.css", "text/css; charset=utf-8"],
-  "/i18n/en.json": ["i18n/en.json", "application/json; charset=utf-8"],
-  "/i18n/th.json": ["i18n/th.json", "application/json; charset=utf-8"],
 };
 
 export interface UiOpt {
@@ -79,7 +78,9 @@ export function startUi(opt: UiOpt = {}): Ui {
   const say = opt.log ?? ((t: string) => line(t));
   const home = opt.home ?? homedir();
   const idleMs = opt.idleMs ?? IDLE_MS;
-  const files = new Map(Object.entries(STATIC).map(([p, [f, type]]) => [p, { body: readFileSync(join(DIR, f)), type }]));
+  const files = new Map<string, { body: Buffer<ArrayBuffer> | string; type: string }>(Object.entries(STATIC).map(([p, [f, type]]) => [p, { body: readFileSync(join(DIR, f)), type }]));
+  // The dashboard's words, from the catalog the terminal uses too (src/i18n), without the terminal's own.
+  for (const l of ["en", "th"] as const) files.set(`/i18n/${l}.json`, { body: JSON.stringify(uiCatalog(l)), type: "application/json; charset=utf-8" });
   let lastUse = Date.now();
   let checking: Promise<unknown> | undefined;
   let notes: string[] | undefined;
@@ -212,17 +213,17 @@ export async function openBrowser(url: string): Promise<boolean> {
 /** `vswarm ui [--no-open]`. */
 export async function uiCommand(opt: { open: boolean; offline?: boolean }) {
   const ui = startUi({ offline: opt.offline });
-  line(`${c.violet("▼ vswarm ui")} ${c.dim("· this machine only (127.0.0.1) · stops after 30 minutes unused, or Ctrl+C")}`);
+  line(`${c.violet("▼ vswarm ui")} ${c.dim(`· ${t("cli.ui.sub")}`)}`);
   line(`  ${c.bold(ui.url)}`);
-  line(c.dim(`  The link holds a one-time key for this run; keep it to yourself. Language: ${langNow() === "th" ? "ไทย" : "English"} (switch on the page, or VSWARM_LANG=th|en).`));
-  if (opt.open && !(await openBrowser(ui.url))) line(c.dim("  no browser could be opened from here: open the link above"));
+  line(c.dim(`  ${t("cli.ui.link", { name: langNow() === "th" ? "ไทย" : "English" })}`));
+  if (opt.open && !(await openBrowser(ui.url))) line(c.dim(`  ${t("cli.ui.noBrowser")}`));
   const stop = () => {
     ui.stop();
-    line(c.dim("\n  vswarm ui stopped"));
+    line(c.dim(`\n  ${t("cli.ui.stopped")}`));
     process.exit(0);
   };
   process.on("SIGINT", stop);
   process.on("SIGTERM", stop);
   const why = await ui.done;
-  line(c.dim(why === "idle" ? "  vswarm ui stopped after 30 minutes unused · vswarm ui to open it again" : "  vswarm ui stopped"));
+  line(c.dim(`  ${t(why === "idle" ? "cli.ui.idle" : "cli.ui.stopped")}`));
 }

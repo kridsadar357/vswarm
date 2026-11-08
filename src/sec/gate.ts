@@ -4,6 +4,7 @@
 import { realCtx, type Ctx } from "./ctx";
 import { check } from "./engine";
 import { readPolicy, type PolicyState } from "./policy";
+import { t } from "../i18n";
 import { c, line, summary, VERDICT } from "./print";
 import { decisionsSince, lockState, readLast } from "./store";
 import { RANK, type Verdict } from "./types";
@@ -22,16 +23,16 @@ export async function verdictNow(opt: { fresh?: boolean; quiet?: boolean; offlin
   // A verdict from before you accepted findings or took a baseline would answer for decisions it never saw, and one
   // whose seal does not match was not written by vswarm: both mean a fresh check, never a reused "pass".
   const reuse = !opt.fresh && !lock && last.value && !last.untrusted && Date.now() - last.value.at < maxAge && !decisionsSince(last.value.at);
-  const warned = (n: number) => opt.silent || line(`${VERDICT.warn} ${c.dim(`vswarm preflight · ${n} finding${n === 1 ? "" : "s"} · ${policy.warn === "refuse" ? "refused by policy · " : ""}details: vswarm why`)}`);
+  const warned = (n: number) => opt.silent || line(`${VERDICT.warn}  ${c.dim(t("cli.pre.warn", { n, refused: policy.warn === "refuse" ? t("cli.pre.refusedTag") : "" }))}`);
   if (reuse) {
     verdict = last.value!.verdict;
     if (verdict === "warn") warned(last.value!.findings.filter((f) => RANK[f.severity] >= RANK.medium).length);
     else if (verdict === "block" && !opt.silent) {
       const n = last.value!.findings.filter((f) => RANK[f.severity] >= RANK.medium).length;
-      line(`${VERDICT.block} ${c.dim(`vswarm preflight · ${n} finding${n === 1 ? "" : "s"} · details: vswarm why`)}`);
+      line(`${VERDICT.block}  ${c.dim(t("cli.pre.block", { n }))}`);
     }
   } else {
-    if (last.untrusted && !last.nokey && !opt.silent) line(c.amber(`vswarm: the last check ${last.untrusted}; checking again`));
+    if (last.untrusted && !last.nokey && !opt.silent) line(c.amber(t("cli.pre.untrusted", { why: last.untrusted })));
     // In a quiet gate the known-malicious lookup asks only about packages it never saw, with a short wait.
     const r = await check(opt.ctx ?? realCtx(), { offline: opt.offline, osvNewOnly: opt.quiet && !opt.offline });
     verdict = r.verdict;
@@ -41,7 +42,7 @@ export async function verdictNow(opt: { fresh?: boolean; quiet?: boolean; offlin
     else if (verdict === "warn") warned(r.findings.filter((f) => RANK[f.severity] >= RANK.medium).length);
     // Said even when quiet: a package installed since the last full check went unchecked.
     if (opt.quiet && !opt.silent && verdict !== "block" && r.osvUnchecked && !opt.offline)
-      line(c.dim(`vswarm preflight · ${r.osvUnchecked} new package version${r.osvUnchecked === 1 ? "" : "s"} not checked against known-malicious records (OSV did not answer) · vswarm scan when online`));
+      line(c.dim(t("cli.pre.osv", { n: r.osvUnchecked })));
   }
   return lock ? "block" : verdict;
 }
@@ -64,7 +65,7 @@ export async function gateVerdict(opt: Parameters<typeof verdictNow>[0] & { stri
   const verdict = await verdictNow({ ...opt, policy });
   if (verdict === "block") return { verdict, allowed: false, code: 3, policy };
   if (verdict === "warn" && (opt.strict || policy.warn === "refuse")) {
-    line(c.amber(`vswarm: WARN refused by ${opt.strict ? "--strict" : "policy"}`) + c.dim(` · see why: vswarm why${opt.strict ? "" : " · let WARN through again: vswarm policy warn allow"}`));
+    line(c.amber(t("cli.pre.refused", { by: opt.strict ? "--strict" : t("cli.pre.policyWord") })) + c.dim(`${t("cli.pre.refusedHow")}${opt.strict ? "" : t("cli.pre.allowAgain")}`));
     return { verdict, allowed: false, code: 2, policy };
   }
   return { verdict, allowed: true, code: 0, policy };

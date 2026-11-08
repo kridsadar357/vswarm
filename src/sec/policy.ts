@@ -8,6 +8,7 @@
 // 2.7 and older keep the setting they were protected with. A policy file whose seal does not match counts as refuse
 // (and the check reports it): an edit by hand can only make vswarm stricter, never let WARN through.
 
+import { lang, t, type Lang } from "../i18n";
 import { files, readSealed, writeSealed } from "./store";
 
 export type WarnPolicy = "allow" | "refuse";
@@ -46,8 +47,8 @@ export const savePolicy = (warn: WarnPolicy) => writeSealed(files.policy(), { wa
 export const effective = (key: KeyPolicy | undefined, global: WarnPolicy): WarnPolicy => (key === "allow" || key === "refuse" ? key : global);
 
 /** One line for the end of `vswarm why` and for `vswarm policy`. */
-export function policyLine(p: PolicyState): string {
-  const how = p.warn === "allow" ? "WARN is allowed" : "WARN is refused";
-  const src = p.untrusted ? ` (policy.json ${p.untrusted}; set it again: vswarm policy warn allow|refuse)` : p.set ? "" : " (the default)";
-  return `policy: ${how}${src}, BLOCK is always refused, by every gate and by vswarm agent · change it: vswarm policy warn ${p.warn === "allow" ? "refuse" : "allow"}`;
+export function policyLine(p: PolicyState, l: Lang = lang()): string {
+  const how = t(p.warn === "allow" ? "cli.policy.allowed" : "cli.policy.refused", {}, l);
+  const src = p.untrusted ? t("cli.policy.untrusted", { why: p.untrusted }, l) : p.set ? "" : t("cli.policy.default", {}, l);
+  return t("cli.policy.line", { how, src, other: p.warn === "allow" ? "refuse" : "allow" }, l);
 }

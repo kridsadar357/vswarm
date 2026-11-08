@@ -12,6 +12,8 @@ import { homedir } from "node:os";
 import { basename, join } from "node:path";
 import { HOME } from "../home";
 import { shq } from "./ctx";
+import { t } from "../i18n";
+import { plainOf } from "../i18n/findings";
 import { c, line } from "./print";
 import type { Finding } from "./types";
 
@@ -78,19 +80,19 @@ const pasteable = (cmd: string[], platform: NodeJS.Platform) => cmd.map((w) => (
 export function fixFor(f: Finding, opt: { n: number; self: string[]; home?: string; platform?: NodeJS.Platform }): FixPlan {
   const home = opt.home ?? homedir();
   const platform = opt.platform ?? process.platform;
-  const accept = `or, if it is expected: vswarm ok ${opt.n}`;
+  const accept = t("cli.fix.orOk", { n: opt.n });
   const file = f.meta?.file;
   if (f.id.startsWith("secret:ssh:") && file) {
     const keygen: FixPlan = {
-      what: `add a passphrase to ${short(file, home)} (ssh-keygen asks for it; logins then ask for it, or your agent does)`,
+      what: t("cli.fix.passphrase", { key: short(file, home) }),
       exact: [pasteable(["ssh-keygen", "-p", "-f", file], platform)],
-      run: async () => ((await runTty(["ssh-keygen", "-p", "-f", file])) === 0 ? `${short(file, home)} has a passphrase now` : "ssh-keygen did not change it"),
+      run: async () => ((await runTty(["ssh-keygen", "-p", "-f", file])) === 0 ? t("cli.fix.passphraseDone", { key: short(file, home) }) : t("cli.fix.passphraseNot")),
     };
     if (f.meta?.production && platform !== "win32")
       return {
-        what: `keep ${short(file, home)} only in vswarm agent: it is tried on the hosts that use it, then moved off the disk, and signs only while this machine passes`,
+        what: t("cli.fix.vault", { key: short(file, home) }),
         exact: [pasteable([...opt.self, "agent", "protect", file], platform)],
-        run: async () => ((await runTty([...opt.self, "agent", "protect", file])) === 0 ? "done" : "agent protect stopped; the key is where it was unless it said otherwise"),
+        run: async () => ((await runTty([...opt.self, "agent", "protect", file])) === 0 ? t("cli.fix.done") : t("cli.fix.vaultStopped")),
         instead: keygen,
       };
     return keygen;
@@ -99,35 +101,37 @@ export function fixFor(f: Finding, opt: { n: number; self: string[]; home?: stri
   const path = f.item?.path;
   if ((f.rule === "pkg-source" || f.rule === "startup-file") && lines.length && path && existsSync(path) && !f.id.includes("authorized_keys")) {
     return {
-      what: `remove ${lines.length} line${lines.length > 1 ? "s" : ""} from ${short(path, home)} (a copy of the file goes to ${short(backupDir(), home)})`,
+      what: t("cli.fix.lines", { n: lines.length, file: short(path, home), dir: short(backupDir(), home) }),
       exact: lines.map((l) => `- ${l}`),
       run: async () => {
         const copy = join(backupDir(), `${basename(path).replace(/^\./, "")}.before-fix-${Date.now()}`);
         mkdirSync(backupDir(), { recursive: true, mode: 0o700 });
         const r = removeLines(path, lines, copy);
         return r.removed
-          ? `removed ${r.removed} line${r.removed > 1 ? "s" : ""} from ${short(path, home)} · copy ${short(copy, home)}${r.missing.length ? ` · ${r.missing.length} not found (changed since the check)` : ""}`
-          : `nothing removed: ${short(path, home)} no longer has those lines`;
+          ? t("cli.fix.linesDone", { n: r.removed, file: short(path, home), copy: short(copy, home), missing: r.missing.length ? t("cli.fix.linesMissing", { n: r.missing.length }) : "" })
+          : t("cli.fix.linesGone", { file: short(path, home) });
       },
     };
   }
-  return { what: "no automatic fix for this one", exact: [], manual: [f.fix ?? "look at it, and remove it unless you set it up", accept] };
+  return { what: t("cli.fix.none"), exact: [], manual: [f.fix ?? t("cli.fix.lookAt"), accept] };
 }
 
 /** Shows the plan, asks, runs. Returns the exit code. */
 export async function fixCommand(f: Finding, n: number, opt: { self: string[]; yes: (q: string, def?: boolean) => Promise<boolean> }): Promise<number> {
   const plan = fixFor(f, { n, self: opt.self });
-  line(`${c.bold(String(n))}  ${f.title}`);
+  const p = plainOf(f);
+  line(`${c.bold(String(n))}  ${p.title}`);
+  if (p.plain && p.title !== f.title) line(`   ${c.dim(f.title)}`);
   const offer = async (p: FixPlan): Promise<number | undefined> => {
     line(`  ${c.cyan("→")} ${p.what}`);
     for (const e of p.exact) line(`      ${c.dim(e)}`);
     if (!p.run) return;
-    if (!(await opt.yes("Do this now?", false))) return;
+    if (!(await opt.yes(t("cli.fix.ask"), false))) return;
     line(`  ${c.green("✔")} ${await p.run()}`);
     return 0;
   };
   if (plan.manual) {
-    line(`  ${c.dim("no automatic fix; what to do:")}`);
+    line(`  ${c.dim(t("cli.fix.manual"))}`);
     for (const m of plan.manual) line(`  ${c.cyan("→")} ${m}`);
     return 0;
   }
@@ -137,6 +141,6 @@ export async function fixCommand(f: Finding, n: number, opt: { self: string[]; y
     const second = await offer(plan.instead);
     if (second !== undefined) return second;
   }
-  line(c.dim(`  nothing changed · accept it instead, if it is expected: vswarm ok ${n}`));
+  line(c.dim(`  ${t("cli.fix.nothing", { n })}`));
   return 0;
 }

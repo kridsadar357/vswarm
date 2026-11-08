@@ -125,8 +125,8 @@ describe("findings by number", () => {
     } finally {
       process.env.VSWARM_SEC_DIR = prev;
     }
-    expect((await vswarm({ sec }, "ok", "2")).err).toContain("accepted: second");
-    expect((await vswarm({ sec }, "accept", "tool-exec:x:1")).err).toContain("accepted: first");
+    expect((await vswarm({ sec }, "ok", "2")).err).toContain("marked as yours: second");
+    expect((await vswarm({ sec }, "accept", "tool-exec:x:1")).err).toContain("marked as yours: first");
     expect((await vswarm({ sec }, "ok", "3")).err).toContain("cannot be accepted");
     const bad = await vswarm({ sec }, "ok", "9");
     expect(bad.code).toBe(4);
@@ -256,7 +256,7 @@ describe("output where it belongs", () => {
     expect(s.err).toBe("");
     const w = await vswarm({ sec, home }, "why", "--offline");
     expect(w.out).toContain("▼ vswarm why");
-    expect(w.out).toMatch(/accept\s+vswarm ok \d+/);
+    expect(w.out).toMatch(/vswarm ok \d+/);
     expect(w.out).toContain("policy: WARN is allowed (the default)");
   }, 120_000);
 

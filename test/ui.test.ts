@@ -239,8 +239,8 @@ describe("vswarm ui: the few actions", () => {
 });
 
 describe("vswarm ui: words and the report", () => {
-  const en = JSON.parse(readFileSync(join(import.meta.dir, "../src/ui/i18n/en.json"), "utf8"));
-  const th = JSON.parse(readFileSync(join(import.meta.dir, "../src/ui/i18n/th.json"), "utf8"));
+  const en = JSON.parse(readFileSync(join(import.meta.dir, "../src/i18n/en.json"), "utf8"));
+  const th = JSON.parse(readFileSync(join(import.meta.dir, "../src/i18n/th.json"), "utf8"));
 
   test("English and Thai have the same strings, with the same placeholders", () => {
     expect(Object.keys(th).sort()).toEqual(Object.keys(en).sort());

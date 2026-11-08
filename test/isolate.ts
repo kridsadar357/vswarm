@@ -7,6 +7,9 @@ import { join } from "node:path";
 
 const VARS = [["VSWARM_SEC_DIR", "sec"], ["VSWARM_AGENT_DIR", "agent"], ["VSWARM_BACKUP_DIR", "backups"], ["VSWARM_TRY_DIR", "try"], ["VSWARM_CA_DIR", "ca"], ["VSWARM_GATE_DIR", "gate"]] as const;
 
+// Words in English, whatever this machine's language or saved choice: tests that need Thai ask for it.
+process.env.VSWARM_LANG = "en";
+
 if (!process.env.VSWARM_ISOLATED_ROOT) {
   const root = mkdtempSync(join(tmpdir(), "vs-test-run-"));
   process.env.VSWARM_ISOLATED_ROOT = root;

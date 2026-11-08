@@ -11,32 +11,33 @@ import { blockRegex, files, forgetKey, loadBaseline, lockState, readBaseline, re
 import { GUARD_END, GUARD_START, guardBlock, loadGuardConfig, psGuardBlock, saveGuardConfig, type GuardConfig } from "./sec/pkg";
 import { fingerprints, PIN, secureUpdate } from "./sec/update";
 import { GATE_END, GATE_START } from "./sec/sshblocks";
+import { cells, colorDepth, dateOf, palette, verdictMark, wrap } from "./sec/print";
+import { t, type Key } from "./i18n";
 
 export const CLI = resolve(import.meta.dir, "cli.ts");
 
 export const ROOT = resolve(dirname(CLI), "..");
 const WIN = process.platform === "win32";
 
-// ── Printing
-const tty = (process.stdout.isTTY || !!process.env.FORCE_COLOR) && !process.env.NO_COLOR;
-const paint = (code: string) => (t: string) => (tty ? `\x1b[${code}m${t}\x1b[0m` : t);
-export const c = {
-  bold: paint("1"), dim: paint("2"), violet: paint("38;2;180;140;255"), cyan: paint("38;2;79;216;232"),
-  lime: paint("38;2;155;227;106"), amber: paint("38;2;245;180;83"), rose: paint("38;2;255;107;139"),
-};
+// ── Printing: what these commands print goes to stdout (console.log), coloured as stdout allows (print.ts).
+const depth = () => colorDepth(process.stdout);
+const p = palette(depth);
+export const c = { ...p, lime: p.green, rose: p.red };
 export function banner(sub = "") {
   const logo = "V-SWARM";
+  const truecolor = depth() === 24;
   const grad = [...logo].map((ch, i) => {
-    const t = i / (logo.length - 1);
-    const rgb = [79 + (180 - 79) * t, 216 + (140 - 216) * t, 232 + (255 - 232) * t].map(Math.round).join(";");
-    return tty ? `\x1b[1;38;2;${rgb}m${ch}` : ch;
+    const k = i / (logo.length - 1);
+    const rgb = [79 + (180 - 79) * k, 216 + (140 - 216) * k, 232 + (255 - 232) * k].map(Math.round).join(";");
+    return truecolor ? `\x1b[1;38;2;${rgb}m${ch}` : ch;
   }).join("");
-  console.log(`\n  ${c.violet("▼")} ${grad}${tty ? "\x1b[0m" : ""}  ${c.dim("v" + VERSION)}${sub ? "  " + c.dim(sub) : ""}\n`);
+  const name = truecolor ? `${grad}\x1b[0m` : c.violet(c.bold(grad));
+  console.log(`\n  ${c.violet("▼")} ${name}  ${c.dim("v" + VERSION)}${sub ? "  " + c.dim(sub) : ""}\n`);
 }
-const ok = (t: string, d = "") => console.log(`  ${c.lime("✔")} ${t}${d ? "  " + c.dim(d) : ""}`);
-const warn = (t: string, d = "") => console.log(`  ${c.amber("!")} ${t}${d ? "  " + c.dim(d) : ""}`);
-const bad = (t: string, d = "") => console.log(`  ${c.rose("✖")} ${t}${d ? "  " + c.dim(d) : ""}`);
-const step = (t: string) => console.log(`\n  ${c.bold(t)}`);
+const ok = (s: string, d = "") => console.log(`  ${c.lime("✔")} ${s}${d ? "  " + c.dim(d) : ""}`);
+const warn = (s: string, d = "") => console.log(`  ${c.amber("!")} ${s}${d ? "  " + c.dim(d) : ""}`);
+const bad = (s: string, d = "") => console.log(`  ${c.rose("✖")} ${s}${d ? "  " + c.dim(d) : ""}`);
+const step = (s: string) => console.log(`\n  ${c.bold(s)}`);
 
 // ── Questions on the terminal
 // Keys are read from /dev/tty, not stdin: under `curl … | sh` stdin is the script, and Bun gets no keys
@@ -213,6 +214,7 @@ async function windowsPath(add: boolean) {
 
 // ── Completions
 export const COMMANDS: [string, string][] = [
+  ["setup", "set everything up, one question at a time"],
   ["scan", "check this machine now (check is the same)"],
   ["baseline", "remember this machine as clean"],
   ["diff", "what changed since the baseline"],
@@ -245,6 +247,7 @@ export const COMMANDS: [string, string][] = [
   ["trust", "release keys updates must be signed with"],
   ["team", "follow a signed team policy"],
   ["uninstall", "remove launcher and PATH"],
+  ["lang", "the language of the terminal and the dashboard"],
   ["help", "show help"],
 ];
 
@@ -260,6 +263,8 @@ _vswarm() {
     preflight) COMPREPLY=( $(compgen -W "--quiet --strict --fresh --then --json --offline" -- "$cur") ) ;;
     accept|ok) COMPREPLY=( $(compgen -W "--all --list --remove" -- "$cur") ) ;;
     policy) COMPREPLY=( $(compgen -W "warn allow refuse" -- "$cur") ) ;;
+    lang) COMPREPLY=( $(compgen -W "th en auto" -- "$cur") ) ;;
+    setup) COMPREPLY=( $(compgen -W "--yes --offline" -- "$cur") ) ;;
     baseline) COMPREPLY=( $(compgen -W "--yes --accept-high --offline" -- "$cur") ) ;;
     gate) COMPREPLY=( $(compgen -W "ssh status remove cmd aws kube gcloud az --prune --off" -- "$cur") ) ;;
     guard) COMPREPLY=( $(compgen -W "on off status --ignore-scripts --sandbox --strict" -- "$cur") ) ;;
@@ -286,6 +291,8 @@ ${lines}
     preflight) _arguments '--quiet[print only on problems]' '--strict[WARN also blocks]' '--fresh[ignore the cached verdict]' '--json[the verdict as JSON]' '--then[run a command when allowed]:command:_command_names' ;;
     accept|ok) _arguments '--all[accept every current finding]' '--list[show accepted]' '--remove[un-accept]:id:' ;;
     policy) _values 'setting' warn allow refuse ;;
+    lang) _values 'language' th en auto ;;
+    setup) _arguments '--yes[take the recommended answers]' '--offline[no OSV lookup]' ;;
     baseline) _arguments '--yes[do not ask]' '--accept-high[record even over HIGH and CRIT findings]' ;;
     gate) _values 'action' ssh status remove cmd aws kube gcloud az ;;
     guard) _values 'action' on off status ;;
@@ -316,106 +323,145 @@ async function version(cmd: string[]): Promise<string | undefined> {
   }
 }
 
+type Level = "ok" | "warn" | "bad" | "off";
+interface DocLine {
+  level: Level;
+  text: string;
+  detail?: string;
+}
+
 /** Windows: PowerShell answers, and which parts of the snapshot it could not read. */
-async function windowsDoctor(): Promise<boolean> {
+async function windowsDoctor(add: (l: DocLine) => void): Promise<boolean> {
   const { winSnapshot, SNAPSHOT_SCRIPT } = await import("./sec/collect/windows");
   const t0 = Date.now();
   const s = await winSnapshot();
   const errors = Object.entries(s.errors ?? {});
   if (errors.some(([k]) => k === "snapshot")) {
-    bad("PowerShell snapshot failed", String(s.errors!.snapshot));
-    console.log(`  ${c.dim(`run it by hand: powershell -NoProfile -ExecutionPolicy Bypass -File "${SNAPSHOT_SCRIPT}"`)}`);
+    add({ level: "bad", text: t("cli.doc.psFailed"), detail: `${String(s.errors!.snapshot)} · ${t("cli.doc.psByHand", { cmd: `powershell -NoProfile -ExecutionPolicy Bypass -File "${SNAPSHOT_SCRIPT}"` })}` });
     return false;
   }
   const n = (x: unknown) => (Array.isArray(x) ? x.length : x ? 1 : 0);
-  ok(`PowerShell snapshot in ${Date.now() - t0} ms`, `${n(s.runKeys)} Run values · ${n(s.startup)} Startup entries · ${n(s.tasks)} tasks · ${n(s.services)} services · ${n(s.wmi?.consumers)} WMI consumers`);
-  if (s.docs) ok(`Documents ${s.docs}`, "PowerShell profiles are read from here");
-  for (const [k, v] of errors) warn(`could not read ${k}`, String(v).slice(0, 160));
+  add({ level: "ok", text: t("cli.doc.ps", { ms: Date.now() - t0 }), detail: `${n(s.runKeys)} Run values · ${n(s.startup)} Startup entries · ${n(s.tasks)} tasks · ${n(s.services)} services · ${n(s.wmi?.consumers)} WMI consumers` });
+  if (s.docs) add({ level: "ok", text: t("cli.doc.docs", { dir: s.docs }), detail: t("cli.doc.docsWhy") });
+  for (const [k, v] of errors) add({ level: "warn", text: t("cli.doc.couldNotRead", { what: k }), detail: String(v).slice(0, 160) });
   return true;
 }
 
+/**
+ * `vswarm doctor`: is vswarm set up, and does what it relies on answer. The state first, in the words of a check
+ * (Safe, Check this, Stop), then three groups: this computer, vswarm itself, the protection that is on. False when
+ * something needs fixing.
+ */
 export async function doctor(): Promise<boolean> {
   let good = true;
-  step("runtime");
+  const groups: [Key, DocLine[]][] = [["cli.doc.h.computer", []], ["cli.doc.h.vswarm", []], ["cli.doc.h.protection", []]];
+  let cur = groups[0][1];
+  const add = (l: DocLine) => cur.push(l);
+  const ok = (text: string, detail = "") => add({ level: "ok", text, detail });
+  const warn = (text: string, detail = "") => add({ level: "warn", text, detail });
+  const bad = (text: string, detail = "") => add({ level: "bad", text, detail });
+  const off = (text: string, detail = "") => add({ level: "off", text, detail });
+
   ok(`bun ${Bun.version}`, process.execPath);
-  const tools: [string, string][] = process.platform === "darwin"
-    ? [["codesign", "some checks will be skipped"], ["plutil", "some checks will be skipped"], ["lsof", "connections will not be checked"], ["ps", "processes will not be checked"]]
+  const tools: [string, Key][] = process.platform === "darwin"
+    ? [["codesign", "cli.doc.tool.skip"], ["plutil", "cli.doc.tool.skip"], ["lsof", "cli.doc.tool.lsof"], ["ps", "cli.doc.tool.ps"]]
     : WIN ? []
-    : [["ss", "connections will not be checked (iproute2)"], ["bwrap", "vswarm try needs it: sudo apt install bubblewrap"], ["strace", "vswarm try will not see file and connection attempts: sudo apt install strace"]];
+    : [["ss", "cli.doc.tool.ss"], ["bwrap", "cli.doc.tool.bwrap"], ["strace", "cli.doc.tool.strace"]];
   for (const [tool, why] of tools) {
     if (Bun.which(tool)) ok(tool);
-    else warn(`${tool} not found`, why);
+    else warn(t("cli.doc.notFound", { tool }), t(why));
   }
-  if (WIN && !(await windowsDoctor())) good = false;
+  if (WIN && !(await windowsDoctor(add))) good = false;
   const git = await version(["git", "--version"]);
   if (git) ok(git);
-  else warn("git not found", "needed for vswarm update");
+  else warn(t("cli.doc.notFound", { tool: "git" }), t("cli.doc.tool.git"));
 
-  step("vswarm");
-  ok(`app ${ROOT}`);
-  ok(`data ${HOME}`);
+  cur = groups[1][1];
+  ok(t("cli.doc.app", { dir: ROOT }));
+  ok(t("cli.doc.data", { dir: HOME }));
   // Windows folder names ignore case, and PATH entries may end in a backslash.
   const norm = (d: string) => (WIN ? d.replace(/[\\/]+$/, "").toLowerCase() : d);
   const onPath = (process.env.PATH ?? "").split(WIN ? ";" : ":").map(norm).includes(norm(paths.bin()));
-  if (existsSync(launcherPath()) && onPath) ok("vswarm on PATH", launcherPath());
-  else if (existsSync(launcherPath())) warn("launcher installed, new terminals will have it", WIN ? "open a new terminal" : `or: export PATH="${paths.bin()}:$PATH"`);
+  if (existsSync(launcherPath()) && onPath) ok(t("cli.doc.onPath"), launcherPath());
+  else if (existsSync(launcherPath())) warn(t("cli.doc.newTerminals"), WIN ? t("cli.doc.openNew") : `export PATH="${paths.bin()}:$PATH"`);
   else {
-    warn("launcher not installed", "run: vswarm install");
+    warn(t("cli.doc.noLauncher"), "vswarm install");
     good = false;
   }
   // The key that seals vswarm's own files, and where it is.
   const k = await stateKey();
   if (k.tampered) {
-    bad("sealing key moved to a file outside vswarm", `${k.tampered} · vswarm uses ${k.store.where} · treat this machine as suspect: vswarm respond`);
+    bad(t("cli.doc.keyMoved"), `${k.tampered} · ${k.store.where} · vswarm respond`);
     good = false;
   }
   if (!k.key) {
-    bad("sealing key not readable", `${k.error} · ${k.store.where}`);
+    bad(t("cli.doc.keyUnreadable"), `${k.error} · ${k.store.where}`);
     good = false;
-  } else if (k.store.kind === "file" && !process.env.VSWARM_SEC_DIR && !process.env.VSWARM_KEYSTORE)
-    warn("sealing key in a file", `${k.store.where} · no system key store (Keychain, Secret Service, DPAPI) answered; tampering with ~/.vswarm is harder to notice`);
-  else ok(`state files sealed`, k.store.where);
+  } else if (k.store.kind === "file" && !process.env.VSWARM_SEC_DIR && !process.env.VSWARM_KEYSTORE) warn(t("cli.doc.keyFile"), `${k.store.where} · ${t("cli.doc.keyFileWhy")}`);
+  else ok(t("cli.doc.sealed"), k.store.where);
   const b = await readBaseline();
   const base = b.untrusted ? undefined : b.value;
   if (base) {
     const days = Math.round((Date.now() - base.at) / 86_400_000);
-    (days > 30 ? warn : ok)(`baseline from ${new Date(base.at).toLocaleString()}`, days > 30 ? `${days} days old · refresh it with vswarm baseline once you have reviewed vswarm diff` : `${base.items.length} items`);
+    if (days > 30) warn(t("cli.doc.baselineOld", { at: dateOf(base.at), days }), t("cli.doc.baselineOldHow"));
+    else ok(t("cli.doc.baseline", { at: dateOf(base.at) }), t("cli.doc.items", { n: base.items.length }));
   } else if (b.untrusted) {
-    bad(`the baseline ${b.untrusted}`, "review vswarm diff, then vswarm baseline");
+    bad(t("cli.doc.baselineUntrusted", { why: b.untrusted }), t("cli.doc.baselineUntrustedHow"));
     good = false;
   } else {
-    warn("no baseline", "vswarm baseline on a machine you trust");
+    warn(t("cli.doc.noBaseline"), "vswarm setup · vswarm baseline");
     good = false;
   }
   const { lock, why } = await lockState();
-  if (lock) bad(`incident ${lock.incident} is open`, `${why ? `${why} · ` : ""}preflight blocks until vswarm unlock`);
+  if (lock) bad(t("cli.doc.incident", { incident: lock.incident }), `${why ? `${why} · ` : ""}vswarm unlock`);
+
+  cur = groups[2][1];
   const { watchState } = await import("./sec/schedule");
   const w = watchState();
-  if (w.on) ok("background watch on", `${w.state?.at ? `last check ${new Date(w.state.at).toLocaleString()}` : "no check yet"}${w.note ? ` · ${w.note}` : ""}`);
-  else console.log(`  ${c.dim("·")} background watch off  ${c.dim(`vswarm watch on${w.note ? ` · ${w.note}` : ""}`)}`);
-  if (w.on && w.realtime) ok("real-time watch on", w.state?.quick ? `last real-time check ${new Date(w.state.quick.at).toLocaleString()}` : "no change seen yet");
-  else if (w.on && !WIN) warn("real-time watch off", "only the hourly check runs · vswarm watch on again adds it");
+  if (w.on) ok(t("cli.doc.watch"), `${w.state?.at ? t("cli.watch.last", { at: dateOf(w.state.at) }) : t("cli.doc.noCheckYet")}${w.note ? ` · ${w.note}` : ""}`);
+  else off(t("cli.doc.watchOff"), `vswarm watch on${w.note ? ` · ${w.note}` : ""}`);
+  if (w.on && w.realtime) ok(t("cli.doc.realtime"), w.state?.quick ? t("cli.watch.lastQuick", { at: dateOf(w.state.quick.at) }) : t("cli.doc.noChangeYet"));
+  else if (w.on && !WIN) warn(t("cli.doc.realtimeOff"), t("cli.doc.realtimeOffHow"));
   const sshCfgPath = join(homedir(), ".ssh/config");
   const sshCfg = existsSync(sshCfgPath) ? readFileSync(sshCfgPath, "utf8") : "";
-  if (sshCfg.includes(GATE_START)) ok("ssh gate installed", `~/.ssh/config${GLOBAL_TAG()}`);
-  else console.log(`  ${c.dim("·")} ssh gate not installed  ${c.dim('vswarm gate ssh "prod-*"')}`);
-  for (const l of await hostHealth(sshCfg)) console.log(l);
-  const { readPolicy, policyLine } = await import("./sec/policy");
+  if (sshCfg.includes(GATE_START)) ok(t("cli.doc.gate"), `~/.ssh/config${GLOBAL_TAG()}`);
+  else off(t("cli.doc.gateOff"), 'vswarm gate ssh "prod-*"');
+  const health = await hostHealth(sshCfg);
+  const { readPolicy } = await import("./sec/policy");
   const pol = await readPolicy();
-  (pol.untrusted ? bad : ok)(pol.warn === "allow" ? "WARN is let through" : "WARN is refused", policyLine(pol).replace(/^policy: [^,]+, /, ""));
+  add({ level: pol.untrusted ? "bad" : "ok", text: t(pol.warn === "allow" ? "cli.setup.st.policyAllow" : "cli.setup.st.policyRefuse"), detail: pol.untrusted ? `policy.json ${pol.untrusted} · vswarm policy warn allow|refuse` : t("cli.doc.policyChange") });
   const { agentDoctor } = await import("./sec/agent");
   for (const a of await agentDoctor()) {
     if (a.level === "bad") good = false;
-    if (a.level === "off") console.log(`  ${c.dim("·")} ${a.text}  ${c.dim(a.detail ?? "")}`);
-    else (a.level === "ok" ? ok : a.level === "warn" ? warn : bad)(a.text, a.detail);
+    add(a);
   }
   // Command gates (reminders) and gcloud credential hooks: src/sec/cloudgate.ts
-  for (const a of await (await import("./sec/cloudgate")).cloudDoctor()) {
-    if (a.level === "off") console.log(`  ${c.dim("·")} ${a.text}  ${c.dim(a.detail ?? "")}`);
-    else (a.level === "ok" ? ok : warn)(a.text, a.detail);
+  for (const a of await (await import("./sec/cloudgate")).cloudDoctor()) add(a);
+  if (await guardOn()) ok(t("cli.doc.guard"), t("cli.doc.guardWhat"));
+  else off(t("cli.doc.guardOff"), "vswarm guard on");
+
+  // The state in one line first: Stop for a problem, Check this for something to set up or look at.
+  const all = groups.flatMap(([, ls]) => ls);
+  const nBad = all.filter((l) => l.level === "bad").length;
+  const nWarn = all.filter((l) => l.level === "warn").length;
+  const v = nBad ? "block" : nWarn ? "warn" : "pass";
+  const mark = verdictMark(v);
+  console.log(`  ${mark.slice(0, mark.lastIndexOf(" "))}  ${nBad ? t("cli.doc.head.bad", { n: nBad }) : nWarn ? t("cli.doc.head.warn", { n: nWarn }) : t("cli.doc.head.ok")}`);
+  const sign: Record<Level, string> = { ok: c.lime("✔"), warn: c.amber("!"), bad: c.rose("✖"), off: c.dim("·") };
+  const w0 = (process.stdout.isTTY && process.stdout.columns) || 0;
+  for (const [head, ls] of groups) {
+    console.log(`\n  ${c.bold(t(head))}`);
+    for (const l of ls) {
+      const text = l.level === "off" ? c.dim(l.text) : l.text;
+      const row = `  ${sign[l.level]} ${text}`;
+      // The detail beside the text when it fits, under it otherwise.
+      if (!l.detail) console.log(row);
+      else if (!w0 || cells(row) + 2 + cells(l.detail) <= w0) console.log(`${row}  ${c.dim(l.detail)}`);
+      else console.log(`${row}\n${wrap(l.detail, w0 - 6).map((x) => `      ${c.dim(x)}`).join("\n")}`);
+    }
+    if (head === "cli.doc.h.protection") for (const l of health) console.log(l);
   }
-  if (await guardOn()) ok("install guard on", "npm, pip, brew … are checked before installing");
-  else console.log(`  ${c.dim("·")} install guard off  ${c.dim("vswarm guard on")}`);
+  if (all.some((l) => l.level === "off" || l.level === "warn")) console.log(`\n  ${t("cli.doc.setup")} ${c.cyan(c.bold("vswarm setup"))}`);
   console.log();
   return good;
 }
@@ -476,7 +522,7 @@ export async function gate(args: string[], home = homedir()) {
   const old = existsSync(cfgPath) ? readFileSync(cfgPath, "utf8") : "";
   if (action === "status") {
     const block = old.match(blockRegex(GATE_START, GATE_END))?.[0];
-    console.log(block ? block.trim() : "no vswarm gate in ~/.ssh/config · add one: vswarm gate ssh \"prod-*\" \"*.internal\"");
+    console.log(block ? block.trim() : t("cli.gate.none"));
     // Hosts named one by one, in the gate and the agent block: still there? (DNS and the ssh port, 2 s, in parallel)
     for (const l of await hostHealth(old)) console.log(l);
     const { loadCmdGates } = await import("./sec/cmdgate");
@@ -517,7 +563,7 @@ export async function gate(args: string[], home = homedir()) {
     if (!keep.length) return gate(["remove"], home);
     return gate(["ssh", ...keep, ...(was === "cert" ? ["--cert"] : [])], home);
   }
-  if (action === "ssh" && !args.length) throw new Error('name the hosts to guard, e.g. vswarm gate ssh "prod-*" "*.wallet.internal"');
+  if (action === "ssh" && !args.length) throw new Error(t("cli.gate.nameHosts"));
   if (withCert && !existsSync(join(HOME, "ca", "ca_key"))) throw new Error("no CA yet: vswarm ca init");
   const cert = withCert ? { key: join(HOME, "ca", "session"), cert: join(HOME, "ca", "session-cert.pub") } : undefined;
   const rest = removeBlock(old, GATE_START, GATE_END).trimEnd();
@@ -530,9 +576,9 @@ export async function gate(args: string[], home = homedir()) {
   writeFileSync(cfgPath, next, { mode: 0o600 });
   // Only the block vswarm wrote is its own; a look-alike block someone else put in the file stays visible to scans.
   if (block) recordManaged(block + "\n");
-  ok(action === "ssh" ? `ssh gate added for ${args.join(", ")}` : "ssh gate removed", cfgPath);
-  if (old) console.log(`  ${c.dim(`backup ${backup}`)}`);
-  if (action === "ssh") console.log(`  ${c.dim(`test it: ssh -G <a matching host> | ${WIN ? "findstr /i" : "grep -i"} proxycommand  (empty while preflight passes)`)}`);
+  ok(action === "ssh" ? t("cli.gate.added", { list: args.join(", ") }) : t("cli.gate.removed"), cfgPath);
+  if (old) console.log(`  ${c.dim(t("cli.gate.backup", { file: backup }))}`);
+  if (action === "ssh") console.log(`  ${c.dim(t("cli.gate.test", { find: WIN ? "findstr /i" : "grep -i" }))}`);
 }
 
 /** Host patterns of the ssh gate block, when there is one. */
@@ -684,26 +730,25 @@ export async function pathWanted(args: string[], win: boolean, tty: boolean, ask
 
 // ── Commands
 export async function install(args: string[]) {
-  const auto = args.includes("--yes") || args.includes("-y") || !canAsk();
   banner("install");
-  step("1  files");
+  step(`1  ${t("cli.install.files")}`);
   ensureHome();
-  ok("data folder", HOME);
+  ok(t("cli.install.data"), HOME);
 
-  step("2  command");
+  step(`2  ${t("cli.install.command")}`);
   writeLauncher();
-  ok("launcher", launcherPath());
+  ok(t("cli.install.launcher"), launcherPath());
   writeCompletions();
-  ok("completions", paths.completions());
+  ok(t("cli.install.completions"), paths.completions());
   if (!args.includes("--no-path")) {
     if (WIN) {
       // Your PATH in the registry is changed only when you say so: --path, or yes to the question.
       if (await pathWanted(args, WIN, canAsk(), yes)) {
         await windowsPath(true);
-        ok("PATH updated for your user", paths.bin());
-      } else console.log(`  ${c.dim(`· PATH not changed · run vswarm as ${launcherPath()}, or add it later: vswarm install --path`)}`);
+        ok(t("cli.install.pathWin"), paths.bin());
+      } else console.log(`  ${c.dim(`· ${t("cli.install.pathNot", { launcher: launcherPath() })}`)}`);
     } else {
-      for (const { file, body } of rcFiles()) ok(setBlock(file, body) ? `PATH added in ${file}` : `PATH already in ${file}`);
+      for (const { file, body } of rcFiles()) ok(t(setBlock(file, body) ? "cli.install.pathAdded" : "cli.install.pathAlready", { file }));
     }
   }
 
@@ -714,20 +759,10 @@ export async function install(args: string[]) {
 
   adoptManagedBlocks();
 
-  step("3  baseline");
-  if (await loadBaseline()) ok("baseline exists", files.baseline());
-  else if (!auto && (await yes("Is this machine clean as far as you know? Record it as the baseline now", true))) {
-    const p = Bun.spawn([process.execPath, CLI, "baseline", "--yes"], { stdout: "inherit", stderr: "inherit" });
-    await p.exited;
-  } else console.log(`  ${c.dim("· later: vswarm baseline")}`);
-
-  await doctor();
-  const rc = WIN ? "open a new terminal" : `open a new terminal, or: source ${rcFiles()[0].file}`;
-  console.log(`  ${c.bold("next")}  ${c.dim(rc)}`);
-  console.log(`        ${c.cyan("vswarm scan")}                         ${c.dim("check this machine")}`);
-  if (WIN) console.log(`        ${c.cyan("vswarm watch on")}                     ${c.dim("check every hour in the background")}`);
-  else console.log(`        ${c.cyan('vswarm gate ssh "prod-*"')}            ${c.dim("guard ssh to production hosts")}`);
-  console.log(`        ${c.cyan("vswarm help")}                         ${c.dim("aws and kubectl gates, respond, report")}\n`);
+  // The rest (a check, the starting point, the watch, the guard, production) is one guided step of its own.
+  step(t("cli.install.next"));
+  console.log(`  ${c.cyan(c.bold("vswarm setup"))}   ${c.dim(t("cli.install.setup"))}`);
+  console.log(`  ${c.dim(WIN ? t("cli.install.newTerminalWin", { launcher: launcherPath() }) : t("cli.install.newTerminal", { rc: rcFiles()[0].file, launcher: launcherPath() }))}\n`);
 }
 
 export async function uninstall(args: string[]) {

@@ -1,6 +1,8 @@
 // One check of the machine: scan, credentials, known-malicious packages, rules, then the verdict.
 
 import type { Ctx } from "./ctx";
+import { t } from "../i18n";
+import type { Say } from "./print";
 import { osvMalicious } from "./intel";
 import { evaluate, uncovered } from "./rules";
 import { forBaseline, scan as runScan } from "./scan";
@@ -17,7 +19,10 @@ export interface Check {
   accepted: number;
   verdict: Verdict;
   lock?: Lock;
+  /** What vswarm noticed besides findings, in English (as --json gives them). */
   notes: string[];
+  /** The same notes for people: catalog keys (src/i18n), shown in the language in use. */
+  said?: Say[];
   ms: number;
   /** Packages the known-malicious check could not ask about (offline, or OSV did not answer in time). */
   osvUnchecked?: number;
@@ -95,25 +100,30 @@ export async function check(ctx: Ctx, opt: { offline?: boolean; osvNewOnly?: boo
   const findings = [...own, ...all]
     .filter((f) => f.rule === "malicious" || f.rule === STATE_RULE || f.rule === "team-require" || (!acceptedIds[f.id] && !acceptedBefore(acceptedIds, f.id) && !matches(team.policy?.accept, f.id)))
     .sort((x, y) => RANK[y.severity] - RANK[x.severity]);
+  // Each note twice: in English for --json and the dashboard's details, and as words for the terminal.
   const notes: string[] = [];
-  if (!baseline) notes.push("No baseline yet: only always-wrong things are checked. Run `vswarm baseline` on a machine you trust.");
+  const said: Say[] = [];
+  const note = (text: string, s: Say) => (notes.push(text), said.push(s));
+  if (!baseline) note(t("cli.note.noBaseline", {}, "en"), { key: "cli.note.noBaseline.human" });
   const fresh = uncovered(scanned, baseline);
-  if (fresh.length) notes.push(`Your baseline is older than these checks: ${fresh.join(", ")}. Review them (vswarm agents), then vswarm baseline.`);
+  if (fresh.length) note(t("cli.note.olderBaseline", { list: fresh.join(", ") }, "en"), { key: "cli.note.olderBaseline.human", vars: { list: fresh.join(", ") } });
   if (drift.never.length) {
     const names = [...new Set(drift.never.map((i) => i.name))];
-    notes.push(`${names.length} MCP server${names.length > 1 ? "s were" : " was"} never inspected (${names.slice(0, 4).join(", ")}${names.length > 4 ? " …" : ""}): vswarm agents --inspect starts each in the sandbox and reads what the model will read.`);
+    const list = `${names.slice(0, 4).join(", ")}${names.length > 4 ? " …" : ""}`;
+    note(t("cli.note.neverInspected", { n: names.length, list }, "en"), { key: "cli.note.neverInspected.human", vars: { n: names.length, list } });
   }
-  if (osv.error) notes.push(osv.error);
-  if (opt.offline) notes.push("Offline: known-malicious check used the cache only.");
-  // Places skipped for the same reason are listed together.
+  if (osv.error) note(osv.error, { key: "cli.note.osv", vars: { why: osv.error } });
+  if (opt.offline) note(t("cli.note.offline", {}, "en"), { key: "cli.note.offline" });
+  // Places skipped for the same reason are listed together; for people, with the way to include them where there is one.
   const byWhy = new Map<string, string[]>();
   for (const [k, v] of Object.entries(scanned.gaps)) byWhy.set(v, [...(byWhy.get(v) ?? []), k]);
-  for (const [why, what] of byWhy) notes.push(`Could not check ${what.join(", ")}: ${why}`);
+  for (const [why, what] of byWhy)
+    note(t("cli.note.gap", { what: what.join(", "), why }, "en"), /Full Disk Access/.test(why) ? { key: "cli.note.gap.fda", vars: { what: what.join(", ") } } : { key: "cli.note.gap.human", vars: { what: what.join(", "), why } });
   const ls = await lockState();
   const lock = ls.lock && ls.why ? { ...ls.lock, reason: ls.why } : ls.lock;
   let verdict = verdictOf(findings);
   if (lock) verdict = "block";
-  const result: Check = { scan: scanned, baseline, findings, accepted: all.length - findings.length + own.length, verdict, lock, notes, ms: Date.now() - t0, osvUnchecked: osv.unchecked };
+  const result: Check = { scan: scanned, baseline, findings, accepted: all.length - findings.length + own.length, verdict, lock, notes, said, ms: Date.now() - t0, osvUnchecked: osv.unchecked };
   if (!partial) await saveLast({ scan: forBaseline(scanned), findings, verdict, at: Date.now() });
   return result;
 }

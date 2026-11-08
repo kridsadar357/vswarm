@@ -27,6 +27,7 @@ import { GLOBAL_TAG, HOME, paths } from "../home";
 import { exec, readJson, readText, run, shq, type Ctx } from "./ctx";
 import { verdictNow } from "./gate";
 import { c, line } from "./print";
+import { t } from "../i18n";
 import { notify as desktopNotify } from "./schedule";
 import { keyFromWire, fingerprint, parsePublicLine, publicLine, readPrivate, Reader, signedFor, signWith, Writer, type SignedFor, type SshKey } from "./sshkey";
 import { activeStore, appendAudit, blockRegex, lockState, readAudit, recordManaged, recordManagedFile, removeBlock } from "./store";
@@ -1130,14 +1131,14 @@ export async function agentDoctor(): Promise<{ level: "ok" | "warn" | "bad" | "o
   const installed = job.installed;
   const answering = existsSync(agentPaths.sock()) ? await listIdentities(agentPaths.sock(), 2000) : undefined;
   const out: { level: "ok" | "warn" | "bad" | "off"; text: string; detail?: string }[] = [];
-  if (!installed && !vaults.length) return [{ level: "off", text: "ssh agent off", detail: `vswarm agent protect <key> · vswarm agent on${job.note ? ` · ${job.note}` : ""}` }];
-  if (answering) out.push({ level: "ok", text: "ssh agent running", detail: `${agentPaths.sock()} · ${vaults.length} protected key${vaults.length === 1 ? "" : "s"}` });
-  else out.push({ level: vaults.length ? "bad" : "warn", text: "ssh agent not answering", detail: vaults.length ? `${vaults.length} protected key${vaults.length === 1 ? "" : "s"} cannot sign until it runs: vswarm agent on` : "vswarm agent on" });
+  if (!installed && !vaults.length) return [{ level: "off", text: t("cli.agentDoc.off"), detail: `vswarm agent protect <key> · vswarm agent on${job.note ? ` · ${job.note}` : ""}` }];
+  if (answering) out.push({ level: "ok", text: t("cli.agentDoc.running"), detail: `${agentPaths.sock()} · ${t("cli.agentDoc.keys", { n: vaults.length })}` });
+  else out.push({ level: vaults.length ? "bad" : "warn", text: t("cli.agentDoc.down"), detail: vaults.length ? t("cli.agentDoc.downKeys", { n: vaults.length }) : "vswarm agent on" });
   if (vaults.length) {
     try {
       await wrapKey();
     } catch (e: any) {
-      out.push({ level: "bad", text: "protected ssh keys cannot be opened", detail: String(e?.message ?? e) });
+      out.push({ level: "bad", text: t("cli.agentDoc.cannotOpen"), detail: String(e?.message ?? e) });
     }
   }
   // An IdentityFile that names a .pub: ssh reads it as the private key whenever the agent is not used.
@@ -1209,7 +1210,7 @@ const short = (p: string) => p.replace(homedir(), "~");
 
 /** Said once, the first time a LaunchAgent is installed: macOS announces it, and that is this. */
 export function backgroundItemNote(platform = process.platform): string | undefined {
-  return platform === "darwin" ? 'macOS will show "Background Items Added: vswarm" (or a notice naming bun): that is this LaunchAgent, and it is expected · System Settings → General → Login Items & Extensions lists it' : undefined;
+  return platform === "darwin" ? t("cli.bg.mac") : undefined;
 }
 
 /**
@@ -1297,23 +1298,23 @@ export async function protectFlow(file: string, opt: { confirm?: boolean; policy
   if (path.endsWith(".pub")) throw new Error(`${path} is a public key; name the private key file`);
 
   // 1 · the machine: a key that would refuse to sign right away is not worth taking off the disk.
-  say(`${c.bold("1  check")} ${c.dim("· would the agent sign with this key now?")}`);
+  say(`${c.bold(`1  ${t("cli.protect.s1")}`)} ${c.dim(`· ${t("cli.protect.s1sub")}`)}`);
   const verdict = await (deps.verdict ?? (() => verdictNow({ quiet: true, fresh: true })))();
   const global = await (deps.policy ?? (async () => (await readPolicy()).warn))();
   const keyPol = opt.policy ?? "inherit";
   const refuses = verdict === "block" || (verdict === "warn" && effective(keyPol, global) === "refuse");
   if (refuses) {
-    const why = verdict === "block" ? "this machine does not pass preflight (BLOCK)" : `preflight warns, and ${keyPol === "refuse" ? "--strict" : "the policy"} refuses WARN`;
+    const why = verdict === "block" ? t("cli.protect.whyBlock") : t("cli.protect.whyWarn", { by: keyPol === "refuse" ? "--strict" : t("cli.protect.thePolicy") });
     if (!opt.anyway) {
-      say(c.amber(`  ! ${why}: once protected, the key would refuse to sign until that changes. Nothing was changed.`));
-      say(c.dim(`  see why: vswarm why · protect it anyway (it signs once the machine passes): vswarm agent protect ${short(path)} --anyway`));
+      say(c.amber(`  ! ${t("cli.protect.wouldRefuse", { why })}`));
+      say(c.dim(`  ${t("cli.protect.anyway", { key: short(path) })}`));
       return;
     }
-    say(c.amber(`  ! ${why}; going on (--anyway): the key will not sign until that changes`));
-  } else say(`  ${c.green("✔")} ${VERDICT_WORD[verdict]}: the agent would sign`);
+    say(c.amber(`  ! ${t("cli.protect.goingOn", { why })}`));
+  } else say(`  ${c.green("✔")} ${t(verdict === "pass" ? "cli.protect.wouldSign" : "cli.protect.wouldSignWarn")}`);
 
   // 2 · the hosts that use it, as ssh itself resolves each Host.
-  say(`\n${c.bold("2  hosts")} ${c.dim(`· which hosts in ${short(cfgPath)} log in with it`)}`);
+  say(`\n${c.bold(`2  ${t("cli.protect.s2")}`)} ${c.dim(`· ${t("cli.protect.s2sub", { file: short(cfgPath) })}`)}`);
   const text = readText(cfgPath) ?? "";
   const { gate, agent } = ownHosts(text);
   const production = [...gate, ...agent].filter(literal);
@@ -1327,20 +1328,20 @@ export async function protectFlow(file: string, opt: { confirm?: boolean; policy
     const explicit = hostView(text, h, { home: deps.home, withoutOwn: true }).identityFiles;
     const named = explicit.some((f) => f === path || f === `${path}.pub`);
     if (explicit.includes(`${path}.pub`))
-      say(c.amber(`  ! ${h}: IdentityFile names ${short(path)}.pub. ssh then reads a public key as the private one when the agent is not used ("UNPROTECTED PRIVATE KEY FILE"); write IdentityFile ${short(path)} instead (ssh finds the .pub beside it)`));
+      say(c.amber(`  ! ${t("cli.protect.namesPub", { host: h, key: short(path) })}`));
     if (named || ((production.includes(h) || opt.hosts?.includes(h)) && g.identityFiles.includes(path))) hosts.push(h);
   }
   if (hosts.length) say(`  ${hosts.join(", ")}`);
-  else say(c.dim(`  none in ${short(cfgPath)} names ${short(path)}${opt.hosts?.length ? " (nor do the hosts given with --host)" : ""}`));
+  else say(c.dim(`  ${t(opt.hosts?.length ? "cli.protect.noHostsGiven" : "cli.protect.noHosts", { file: short(cfgPath), key: short(path) })}`));
 
   // 3 · try it while the file is still here.
-  say(`\n${c.bold("3  try")} ${c.dim("· a login that runs `true`, with this key only, before anything is moved")}`);
+  say(`\n${c.bold(`3  ${t("cli.protect.s3")}`)} ${c.dim(`· ${t("cli.protect.s3sub")}`)}`);
   const accepted: string[] = [];
-  if (opt.noVerify) say(c.dim("  skipped (--no-verify)"));
+  if (opt.noVerify) say(c.dim(`  ${t("cli.protect.skipped")}`));
   for (const h of opt.noVerify ? [] : hosts) {
-    let t = await testLogin(h, path, { ...deps, cfgPath });
-    if (!t.ok && t.refused) {
-      say(c.amber(`  ! ${h} refused the key: it is not in that account's authorized_keys`));
+    let tl = await testLogin(h, path, { ...deps, cfgPath });
+    if (!tl.ok && tl.refused) {
+      say(c.amber(`  ! ${t("cli.protect.refused", { host: h })}`));
       const g = await sshResolve(h, cfgPath, deps.env);
       // A key the server already takes, to put this one next to it.
       let other: string | undefined;
@@ -1350,40 +1351,83 @@ export async function protectFlow(file: string, opt: { confirm?: boolean; policy
           break;
         }
       const copy = ["ssh-copy-id", "-F", cfgPath, "-o", "IdentityAgent=none", "-o", `IdentityFile=${other ?? "<a key the server already accepts>"}`, ...(deps.sshOpts ?? []), "-i", `${path}.pub`, h];
-      if (other && (await deps.yes(`Add ${short(path)}.pub to ${h} with ${short(other)} (${copy.join(" ")})?`, false))) {
+      if (other && (await deps.yes(t("cli.protect.copyAsk", { key: short(path), host: h, other: short(other), cmd: copy.join(" ") }), false))) {
         const r = await exec(copy, { env: deps.env, tty: true, timeoutMs: 120_000 }).catch(() => ({ code: 1 }));
-        if (r.code === 0) t = await testLogin(h, path, { ...deps, cfgPath });
-      } else say(c.dim(`  to add it: ${copy.map((w) => (/\s/.test(w) ? shq(w) : w)).join(" ")}`));
+        if (r.code === 0) tl = await testLogin(h, path, { ...deps, cfgPath });
+      } else say(c.dim(`  ${t("cli.protect.toAdd", { cmd: copy.map((w) => (/\s/.test(w) ? shq(w) : w)).join(" ") })}`));
     }
-    if (t.ok) {
+    if (tl.ok) {
       accepted.push(h);
-      say(`  ${c.green("✔")} ${h} accepts it`);
-    } else if (!t.refused) say(c.amber(`  ! ${h}: ${t.why}`));
+      say(`  ${c.green("✔")} ${t("cli.protect.accepts", { host: h })}`);
+    } else if (!tl.refused) say(c.amber(`  ! ${h}: ${tl.why}`));
   }
   if (!opt.noVerify && !accepted.length) {
-    say(c.amber(`\n  ! no host accepted ${short(path)} yet, so it stays on disk: taking it off now could lock you out. Nothing was changed.`));
-    say(c.dim(`  name a host to try: vswarm agent protect ${short(path)} --host <name> · protect it without trying: --no-verify`));
+    say(c.amber(`\n  ! ${t("cli.protect.noneAccepted", { key: short(path) })}`));
+    say(c.dim(`  ${t("cli.protect.nameHost", { key: short(path) })}`));
     return;
   }
 
   // 4 · into the vault, the hosts to the agent, and the same login again through it.
-  say(`\n${c.bold("4  protect")}`);
+  say(`\n${c.bold(`4  ${t("cli.protect.s4")}`)} ${c.dim(`· ${t("cli.protect.s4sub")}`)}`);
   const r = await protect(file, { confirm: opt.confirm, policy: opt.policy, env: deps.env });
   const routed = accepted.length ? accepted : hosts;
   if (routed.length && deps.agentOn) {
     const sock = await deps.agentOn(routed);
     for (const h of accepted) {
       // The agent reads its vault folder again on each request; a moment for it to start, the first time.
-      let t = await testLogin(h, path, { ...deps, cfgPath }, sock);
-      for (let i = 0; i < 10 && !t.ok && !t.refused; i++) (await Bun.sleep(500), (t = await testLogin(h, path, { ...deps, cfgPath }, sock)));
-      if (t.ok) say(`  ${c.green("✔")} ${h} accepts it through vswarm agent`);
-      else say(c.red(`  ✖ ${h} did not log in through the agent (${t.why}). The key is in the vault; put it back if you need it now: vswarm agent unprotect ${short(path)}`));
+      let tl = await testLogin(h, path, { ...deps, cfgPath }, sock);
+      for (let i = 0; i < 10 && !tl.ok && !tl.refused; i++) (await Bun.sleep(500), (tl = await testLogin(h, path, { ...deps, cfgPath }, sock)));
+      if (tl.ok) say(`  ${c.green("✔")} ${t("cli.protect.acceptsAgent", { host: h })}`);
+      else say(c.red(`  ✖ ${t("cli.protect.agentFailed", { host: h, why: tl.why, key: short(path) })}`));
     }
   }
   return r;
 }
 
-const VERDICT_WORD: Record<Verdict, string> = { pass: "PASS", warn: "WARN, allowed by the policy", block: "BLOCK" };
+
+/**
+ * `vswarm agent protect <key>` and `vswarm setup`'s offer for each production key: protectFlow, then what came of it,
+ * with the recovery code shown once. `deps` replaces parts of the real thing (tests: a throwaway sshd and agent).
+ * True when the key is in the vault.
+ */
+export async function protectKey(file: string, opt: Parameters<typeof protectFlow>[1], deps: Partial<ProtectDeps> & Pick<ProtectDeps, "yes">): Promise<boolean> {
+  const sock = agentPaths.sock();
+  const path = resolve(file);
+  const say = deps.say ?? line;
+  const launcher = join(paths.bin(), "vswarm");
+  const r = await protectFlow(file, opt, {
+    home: homedir(),
+    agentOn: async (hosts) => {
+      (await import("../setup")).ensureLauncher((t) => say(t));
+      if (!agentInstalled() || !(await listIdentities(sock, 1500))) {
+        safeDir(agentPaths.dir());
+        await serviceOn(launcher);
+      }
+      await agentOn([...new Set([...agentHosts(readText(join(homedir(), ".ssh", "config")) ?? ""), ...hosts])], { launcher: [launcher] });
+      return sock;
+    },
+    ...deps,
+  });
+  if (!r) return false;
+  if (r.finished) {
+    say(`${c.green("✔")} ${t("cli.protect.finished", { key: short(path) })} ${c.dim(r.fp)}`);
+    return true;
+  }
+  const how = opt.policy === "allow" ? t("cli.protect.signsWarn") : opt.policy === "refuse" ? t("cli.protect.signsPass") : t("cli.protect.follows");
+  say(`${c.green("✔")} ${t("cli.protect.inVault", { key: short(path) })} ${c.dim(`${r.fp} · ${how}`)}`);
+  if (!r.left) say(`${c.green("✔")} ${t(r.pubWritten ? "cli.protect.removedPubWritten" : "cli.protect.removedPubStays", { key: short(path) })}`);
+  say(`${c.green("✔")} ${t("cli.protect.backup", { file: short(r.backup) })}`);
+  say(`\n      ${c.bold(r.code)}\n`);
+  say(c.amber(`  ${t("cli.protect.codeWhere")}`));
+  if (r.left) say(c.amber(`  ! ${t("cli.protect.left", { why: r.left, key: short(path) })}`));
+  say(c.dim(`  ${t("cli.protect.restore", { backup: short(r.backup), key: short(path) })}`));
+  const up = resolveUpstream();
+  const there = up ? await listIdentities(up, 3000) : undefined;
+  if (there?.some((i) => fingerprint(i.blob) === r.fp)) say(c.amber(`  ! ${t("cli.protect.alsoLoaded", { key: short(path) })}`));
+  if (!deps.agentOn && !(await listIdentities(sock, 2000))) say(c.dim(`  ${t("cli.protect.nextOn")}`));
+  say(c.dim(`  ${t("cli.protect.copies")}`));
+  return true;
+}
 
 export async function agentCommand(action: string, args: string[], opt: AgentCommandOpt) {
   const sock = agentPaths.sock();
@@ -1496,37 +1540,8 @@ export async function agentCommand(action: string, args: string[], opt: AgentCom
   if (action === "protect") {
     const file = args[0];
     if (!file) throw new Error("usage: vswarm agent protect <key file> [--confirm] [--allow-warn | --strict] [--host a,b] [--anyway] [--no-verify]");
-    const path = resolve(file);
     const policy: KeyPolicy | undefined = opt.allowWarn ? "allow" : opt.strict ? "refuse" : undefined;
-    const launcher = join(paths.bin(), "vswarm");
-    const r = await protectFlow(file, { confirm: opt.confirm, policy, anyway: opt.anyway, noVerify: opt.noVerify, hosts: opt.host?.split(",").filter(Boolean) }, {
-      home: homedir(), yes: opt.yes ?? (async () => false),
-      agentOn: async (hosts) => {
-        (await import("../setup")).ensureLauncher((t) => line(t));
-        if (!agentInstalled() || !(await listIdentities(sock, 1500))) {
-          safeDir(agentPaths.dir());
-          await serviceOn(launcher);
-        }
-        await agentOn([...new Set([...agentHosts(readText(join(homedir(), ".ssh", "config")) ?? ""), ...hosts])], { launcher: [launcher] });
-        return sock;
-      },
-    });
-    if (!r) {
-      process.exitCode = 1;
-      return;
-    }
-    if (r.finished) return line(`${c.green("✔")} ${short(path)} was already in the vault ${c.dim(r.fp)}; the key file left behind was overwritten and removed now`);
-    line(`${c.green("✔")} ${short(path)} is now in the vault ${c.dim(`${r.fp} · ${policy === "allow" ? "signs on PASS and WARN" : policy === "refuse" ? "signs on PASS only" : "follows the policy (vswarm policy)"}`)}`);
-    if (!r.left) line(`${c.green("✔")} the key file was overwritten and removed; ${short(path)}.pub ${r.pubWritten ? "was written" : "stays"} so ssh can name it`);
-    line(`${c.green("✔")} backup ${short(r.backup)}, encrypted with this recovery code (shown once; keep it off this machine):`);
-    line(`\n      ${c.bold(r.code)}\n`);
-    if (r.left) line(c.amber(`  ! the key file could not be removed (${r.left}); it is still at ${short(path)}. Run vswarm agent protect ${short(path)} again to finish`));
-    line(c.dim(`  restore with it: vswarm agent restore ${short(r.backup)}   ·   put the key back normally: vswarm agent unprotect ${short(path)}`));
-    const up = resolveUpstream();
-    const there = up ? await listIdentities(up, 3000) : undefined;
-    if (there?.some((i) => fingerprint(i.blob) === r.fp)) line(c.amber(`  ! this key is also loaded in your usual agent, where nothing checks the machine: ssh-add -d ${short(path)}.pub`));
-    if (!(await listIdentities(sock, 2000))) line(c.dim("  next: vswarm agent on"));
-    line(c.dim("  copies of the key elsewhere (other machines, backups, a password manager) are not covered: remove them, or rotate the key"));
+    if (!(await protectKey(file, { confirm: opt.confirm, policy, anyway: opt.anyway, noVerify: opt.noVerify, hosts: opt.host?.split(",").filter(Boolean) }, { yes: opt.yes ?? (async () => false) }))) process.exitCode = 1;
     return;
   }
 

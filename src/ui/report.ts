@@ -8,6 +8,7 @@ import { readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { realCtx, type Ctx } from "../sec/ctx";
 import { check } from "../sec/engine";
+import { uiCatalog } from "../i18n";
 import { dashboard, type Dash } from "./state";
 
 const DIR = import.meta.dir;
@@ -20,7 +21,7 @@ export const scriptJson = (v: unknown) => JSON.stringify(v).replace(/</g, "\\u00
 export function reportHtml(dash: Dash): string {
   const css = read("app.css");
   const js = read("app.js");
-  const i18n = { en: JSON.parse(read("i18n/en.json")), th: JSON.parse(read("i18n/th.json")) };
+  const i18n = { en: uiCatalog("en"), th: uiCatalog("th") };
   const csp = `default-src 'none'; script-src 'sha256-${b64sha(js)}'; style-src 'sha256-${b64sha(css)}'; img-src data:; base-uri 'none'; form-action 'none'`;
   let html = read("index.html")
     .replace('<html lang="en">', `<html lang="${dash.lang}">`)

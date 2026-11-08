@@ -23,6 +23,7 @@ import { backupCopy, backupDir } from "./fix";
 import { readJson, readText } from "./ctx";
 import { addCmdGate, gcloudDir, honest, iniGet, loadCmdGates, realGateFiles, removeCmdGate, type GateFiles } from "./cmdgate";
 import { c } from "./print";
+import { t } from "../i18n";
 import { SEC, writePrivate } from "./store";
 import type { AwsHook } from "./awsgate";
 import type { KubeHook } from "./kubegate";
@@ -358,10 +359,10 @@ export async function cloudDoctor(e?: CloudEnv): Promise<{ level: "ok" | "warn" 
   const { kubeStatus } = await import("./kubegate");
   const aws = awsStatus(e ?? (await realEnv()));
   for (const h of aws) out.push({ level: h.ok ? "ok" : "warn", text: `aws gate on profile ${h.name}`, detail: h.detail });
-  if (!aws.length) out.push({ level: "off", text: "no aws gate", detail: "vswarm gate aws <profile>" });
+  if (!aws.length) out.push({ level: "off", text: t("cli.cloudDoc.noAws"), detail: "vswarm gate aws <profile>" });
   const kube = kubeStatus();
   for (const h of kube) out.push({ level: h.ok ? "ok" : "warn", text: `kubectl gate on user ${h.name}`, detail: h.detail });
-  if (!kube.length) out.push({ level: "off", text: "no kubectl gate", detail: "vswarm gate kube <context>" });
+  if (!kube.length) out.push({ level: "off", text: t("cli.cloudDoc.noKube"), detail: "vswarm gate kube <context>" });
   for (const h of gcloudHookStatus()) out.push({ level: h.ok ? "ok" : "warn", text: `gcloud gate on configuration ${h.name}`, detail: h.detail });
   const tools = Object.keys(loadCmdGates().tools).sort();
   if (tools.length) {
@@ -369,7 +370,7 @@ export async function cloudDoctor(e?: CloudEnv): Promise<{ level: "ok" | "warn" 
     const w = await realGateFiles(false).catch(() => undefined);
     const present = w ? w.files.some((f) => (readKept(f)?.text ?? "").includes("# >>> vswarm cmdgate >>>")) : false;
     out.push(present ? { level: "ok", text: `command gates: ${tools.join(", ")}`, detail: "reminders you can bypass, not controls" } : { level: "warn", text: `command gates listed (${tools.join(", ")}) but not in your shell files`, detail: "vswarm gate cmd <name> writes them again" });
-  } else out.push({ level: "off", text: "no command gates", detail: "vswarm gate cmd psql \"*.prod.internal\"" });
+  } else out.push({ level: "off", text: t("cli.cloudDoc.noCmd"), detail: "vswarm gate cmd psql \"*.prod.internal\"" });
   return out;
 }
 

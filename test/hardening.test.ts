@@ -198,7 +198,8 @@ describe.skipIf(WIN)("baseline over serious findings", () => {
     const r = await run("baseline", "--yes", "--offline");
     expect(r.code).toBe(3);
     expect(r.err).toContain("Not recorded");
-    expect(r.err).toMatch(/HIGH {2}MCP server evil/);
+    expect(r.err).toContain("MCP server evil");
+    expect(r.err).toMatch(/● .+  HIGH/);
     expect(r.err).toContain("--accept-high");
     expect(existsSync(join(sec, "baseline.json"))).toBe(false);
     const ok = await run("baseline", "--yes", "--offline", "--accept-high");

@@ -8,12 +8,14 @@ import { existsSync, readdirSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, join } from "node:path";
 import { VERSION } from "../home";
+import { lang, saveLang, type Lang } from "../i18n";
+import { AGENT_NAMES, groupOf as termGroup, paramsOf, UI_GROUP } from "../i18n/findings";
 import { readJson, readText, redact } from "../sec/ctx";
 import { STATE_RULE } from "../sec/engine";
-import { files, SEC, loadAccepted, readAudit, readBaseline, readLast, readLog, lockState, stateKey, writePrivate, type LogEntry } from "../sec/store";
+import { files, loadAccepted, readAudit, readBaseline, readLast, readLog, lockState, stateKey, type LogEntry } from "../sec/store";
 import { RANK, verdictOf, type Finding, type Severity, type Verdict } from "../sec/types";
 
-export type Lang = "en" | "th";
+export type { Lang };
 export type Level = "safe" | "check" | "stop";
 export type Group = "action" | "yours" | "info";
 type Tone = "good" | "warn" | "bad" | "off" | "info";
@@ -103,40 +105,23 @@ export function scrubAll<T>(v: T, home: string): T {
 const SALT = crypto.getRandomValues(new Uint8Array(16));
 export const refOf = (id: string) => createHash("sha256").update(SALT).update(id).digest("base64url").slice(0, 16);
 
-// ── language
+// ── language: one setting for the terminal and this page (src/i18n)
 
-// Beside the rest of vswarm's state, so a scratch VSWARM_SEC_DIR keeps it too.
-const uiConfig = () => join(SEC(), "ui.json");
-const asLang = (s?: string): Lang | undefined => (s && /^th/i.test(s) ? "th" : s && /^en/i.test(s) ? "en" : undefined);
+/** VSWARM_LANG, then the choice saved here or with `vswarm lang`, then the system's language; English otherwise. */
+export const langNow = (env: Record<string, string | undefined> = process.env): Lang => lang(env);
 
-/** VSWARM_LANG, then the choice saved from the page, then LANG; English otherwise. */
-export function langNow(env = process.env): Lang {
-  return asLang(env.VSWARM_LANG) ?? asLang(readJson<{ lang?: string }>(uiConfig())?.lang) ?? asLang(env.LC_ALL || env.LC_MESSAGES || env.LANG) ?? "en";
-}
-
-export function setLang(lang: Lang) {
-  writePrivate(uiConfig(), { ...(readJson<Record<string, unknown>>(uiConfig()) ?? {}), lang });
-}
+export const setLang = (l: Lang) => saveLang(l);
 
 // ── findings as cards
 
-export function groupOf(f: Pick<Finding, "rule" | "severity">): Group {
-  if (f.rule === STATE_RULE || RANK[f.severity] >= RANK.high) return "action";
-  return f.severity === "medium" ? "yours" : "info";
-}
+/** The terminal's groups (src/i18n/findings.ts), under the dashboard's names. */
+export const groupOf = (f: Pick<Finding, "rule" | "severity">): Group => UI_GROUP[termGroup(f)];
 
 /** What `vswarm accept` takes: never a known-malicious package, vswarm's own files or a team requirement; a critical one neither, from the page. */
 export const acceptable = (f: Finding) => !["malicious", "pkg-malicious", STATE_RULE, "team-require"].includes(f.rule) && f.severity !== "critical";
 
-const AGENT_NAMES: Record<string, string> = { "claude-code": "Claude Code", "claude-desktop": "Claude Desktop", cursor: "Cursor", windsurf: "Windsurf", vscode: "VS Code", gemini: "Gemini CLI", codex: "Codex" };
-
 function cardOf(f: Finding): Card {
-  const i = f.item;
-  const source = String(i?.source ?? "");
-  const p: Record<string, string> = {};
-  if (i?.name) p.name = i.kind === "mcp" ? i.name : basename(String(i.name));
-  if (source) p.source = AGENT_NAMES[source] ?? source;
-  return { ref: refOf(f.id), group: groupOf(f), rule: f.rule, severity: f.severity, title: f.title, detail: f.detail.filter(Boolean).slice(0, 6), fix: f.fix, p, canAccept: acceptable(f) };
+  return { ref: refOf(f.id), group: groupOf(f), rule: f.rule, severity: f.severity, title: f.title, detail: f.detail.filter(Boolean).slice(0, 6), fix: f.fix, p: paramsOf(f), canAccept: acceptable(f) };
 }
 
 // ── the timeline
