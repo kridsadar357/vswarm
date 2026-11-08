@@ -1295,7 +1295,7 @@ describe("hardening: sandbox, MCP, updates", () => {
     let allClosed = () => {};
     const done = new Promise<void>((r) => (allClosed = r));
     const upstream = Bun.listen({ hostname: "127.0.0.1", port: 0, socket: { open() { opened++; }, close() { if (++closed === 5) allClosed(); }, data() {}, error() {} } });
-    const proxy = startProxy(() => true);
+    const proxy = startProxy(() => true, { localhost: true });
     try {
       for (let i = 0; i < 5; i++) {
         await new Promise<void>((left) => {

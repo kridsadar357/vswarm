@@ -10,7 +10,7 @@ import { readJson, run } from "../ctx";
 import { c, finding as printFinding, line } from "../print";
 import { RANK, verdictOf, type Finding, type Verdict } from "../types";
 import { allowedBy, startProxy } from "./proxy";
-import { bwrapArgs, FORWARDER, freshProc, inner, INNER_PORT, traceDenials } from "./linux";
+import { bwrapArgs, FORWARDER, freshProc, inner, INNER_PORT, NO_FRESH_PROC, traceDenials } from "./linux";
 import { cleanEnv, listeningPorts, profile, toolchains, type Box } from "./sandbox";
 import { staticCheck } from "./static";
 import { behaviour, denials, network, plantedFiles } from "./watch";
@@ -135,7 +135,7 @@ export async function tryIt(source: string, command: string[], opt: { net: Net; 
   const sh = [process.env.SHELL, "/bin/zsh", "/bin/bash", "/bin/sh"].find((x) => x && existsSync(x))!;
   const cmd = shell ? [sh, "-i"] : command;
   const serious = staticFindings.some((f) => RANK[f.severity] >= RANK.high);
-  line(`\n${c.bold("2  run in the sandbox")} ${c.dim(`· network: ${opt.net === "none" ? "blocked (attempts recorded)" : opt.net === "registries" ? "package registries only" : "open, every host recorded"}${opt.localhost ? (linux ? " · --localhost changes nothing on Linux (the sandbox has its own network)" : " · your localhost services reachable (--localhost)") : ""} · no access to your home, keychain or clipboard`)}`);
+  line(`\n${c.bold("2  run in the sandbox")} ${c.dim(`· network: ${opt.net === "none" ? "blocked (attempts recorded)" : opt.net === "registries" ? "package registries only" : "open, every host recorded"}${opt.localhost ? (linux ? " · your localhost reachable through the proxy only, HTTP and HTTPS (--localhost; the sandbox has its own network)" : " · your localhost services reachable (--localhost)") : ""} · no access to your home, keychain or clipboard`)}`);
   if (serious && !opt.yes && !(await opt.ask(`  ${c.red("This code has red flags above.")} Run it in the sandbox to see what it does?`))) {
     line(c.dim("  not run · the copy stays in " + box.work));
     return { box, source: what, command: cmd, exit: null, staticFindings, runFindings: [], verdict: verdictOf(staticFindings), leftovers: [], logRead: false };
@@ -207,13 +207,15 @@ export async function observe(box: Box, cmd: string[], opt: {
     mkdirSync(join(box.home, rel, ".."), { recursive: true, mode: 0o700 });
     writeFileSync(join(box.home, rel), DECOYS[rel], { mode: 0o600 });
   }
-  const proxy = startProxy(allowedBy(opt.net), linux ? { unix: join(box.tmp, "proxy.sock") } : {});
+  const proxy = startProxy(allowedBy(opt.net), { ...(linux ? { unix: join(box.tmp, "proxy.sock") } : {}), localhost: opt.localhost });
   let argv: string[];
   if (linux) {
     writeFileSync(join(box.tmp, "forwarder.js"), FORWARDER);
-    const hostProc = !(await freshProc(bwrap!));
-    if (hostProc) opt.say?.(c.dim("  · this system does not allow a private /proc (a container?); the sandbox sees the host's /proc read-only"));
-    argv = [bwrap!, ...bwrapArgs(homedir(), box, { tools: toolchains(homedir()), bun: process.execPath, interactive: !!opt.interactive, hostProc }), "--", ...inner(box, process.execPath, cmd, strace)];
+    if (!(await freshProc(bwrap!))) {
+      proxy.stop();
+      throw new Error(`the sandbox did not start: ${NO_FRESH_PROC}`);
+    }
+    argv = [bwrap!, ...bwrapArgs(homedir(), box, { tools: toolchains(homedir()), bun: process.execPath, interactive: !!opt.interactive }), "--", ...inner(box, process.execPath, cmd, strace)];
     writeFileSync(join(box.dir, "sandbox.json"), JSON.stringify(argv, null, 1) + "\n");
   } else {
     // Services already listening on this machine (databases, the Docker API, dev servers) are denied one by one;

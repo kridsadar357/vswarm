@@ -31,16 +31,24 @@ require("fs").writeFileSync(ready, "1");
 `;
 
 /**
- * Whether bwrap can mount a fresh /proc. Inside Docker it usually cannot (Docker masks parts of /proc); the
- * sandbox then shows the host's /proc read-only, which still keeps its pid namespace.
+ * Whether bwrap can mount a fresh /proc for the sandbox's own pid namespace. Inside Docker it usually cannot (Docker
+ * masks parts of /proc). The sandbox does not run without one: the host's /proc, even read-only, shows every process of
+ * the same user, and /proc/<pid>/root of any of them is your real home.
  */
 export async function freshProc(bwrap: string): Promise<boolean> {
   return (await exec([bwrap, "--unshare-pid", "--unshare-net", "--ro-bind", "/", "/", "--dev", "/dev", "--proc", "/proc", "true"])).code === 0;
 }
 
-export function bwrapArgs(realHome: string, box: Box, opt: { tools: string[]; bun: string; interactive: boolean; hostProc?: boolean; project?: { dir: string; readOnly: string[] } }): string[] {
+/** Why the sandbox will not start where no fresh /proc can be mounted, and what to do instead. */
+export const NO_FRESH_PROC =
+  "this system does not let the sandbox mount a /proc of its own (a container with a masked /proc?). Without one, code in the sandbox " +
+  "could read other processes of yours through the host's /proc, /proc/<pid>/root among them, which is your real home; vswarm does not " +
+  "run it with that hole. Run it on the host, or start the container with --security-opt systempaths=unconfined (or --privileged)";
+
+export function bwrapArgs(realHome: string, box: Box, opt: { tools: string[]; bun: string; interactive: boolean; project?: { dir: string; readOnly: string[] } }): string[] {
+  // Always a fresh /proc for the sandbox's own pid namespace (freshProc checks it can be had; without it, no sandbox).
   const a = ["--die-with-parent", "--unshare-pid", "--unshare-ipc", "--unshare-uts", "--unshare-cgroup-try", "--unshare-net", "--hostname", "vswarm-try",
-    "--ro-bind", "/", "/", "--dev", "/dev", ...(opt.hostProc ? ["--ro-bind", "/proc", "/proc"] : ["--proc", "/proc"]), "--tmpfs", "/tmp", "--tmpfs", "/var/tmp"];
+    "--ro-bind", "/", "/", "--dev", "/dev", "--proc", "/proc", "--tmpfs", "/tmp", "--tmpfs", "/var/tmp"];
   // Every home folder, then the real one in case it lives elsewhere.
   for (const h of ["/home", "/root", "/Users", "/run", "/mnt", "/media"]) if (existsSync(h)) a.push("--tmpfs", h);
   if (![ "/home", "/root"].some((h) => realHome.startsWith(h + "/") || realHome === h)) a.push("--tmpfs", realHome);
