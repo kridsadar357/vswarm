@@ -1,6 +1,7 @@
 // Edge cases and hostile input: odd command lines, malformed configs, garbage from MCP servers, strace formats,
 // tampered blocks, broken registries. Nothing here touches the real home: every test gets a folder of its own.
 import { describe, expect, test } from "bun:test";
+import { reset } from "./isolate";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, sep } from "node:path";
@@ -1444,7 +1445,7 @@ describe("vswarm's own changes and the cached verdict", () => {
       writeFileSync(join(home, ".ssh", "config"), block + "\nHost evil\n  ProxyCommand nc evil 22\n");
       expect((await startupFiles(ctx)).items.filter((i) => i.id === ".ssh/config").length).toBe(1);
     } finally {
-      delete process.env.VSWARM_SEC_DIR;
+      reset("VSWARM_SEC_DIR");
     }
   });
 
@@ -1458,7 +1459,7 @@ describe("vswarm's own changes and the cached verdict", () => {
       expect(decisionsSince(at)).toBe(true);
       expect(decisionsSince(Date.now() + 1000)).toBe(false);
     } finally {
-      delete process.env.VSWARM_SEC_DIR;
+      reset("VSWARM_SEC_DIR");
     }
   });
 });

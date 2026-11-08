@@ -2,6 +2,7 @@
 // windows-snapshot.ps1 prints on a real Windows 11 PC (OneDrive-redirected Documents, Run values, Startup shortcuts,
 // vendor tasks and services, the stock SCM WMI subscription). Nothing here runs PowerShell or touches the real home.
 import { describe, expect, test } from "bun:test";
+import { reset } from "./isolate";
 import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -467,7 +468,7 @@ describe("windows: background watch as a scheduled task", () => {
       const items = windowsItems({ tasks: [{ path: "\\vswarm\\", name: "watch", state: "Ready", actions: [action] }] }, tmp("home")).items;
       expect(items.filter((i) => !ownWatchTask(i))).toEqual([]);
     } finally {
-      delete process.env.VSWARM_SEC_DIR;
+      reset("VSWARM_SEC_DIR");
     }
   });
 });
@@ -542,7 +543,7 @@ describe("windows: ssh gate and install guard", () => {
       setBlock(plain, block, GUARD_START, GUARD_END);
       expect(readKept(plain).enc).toBe("utf8bom");
     } finally {
-      delete process.env.VSWARM_SEC_DIR;
+      reset("VSWARM_SEC_DIR");
     }
   });
 
@@ -554,7 +555,7 @@ describe("windows: ssh gate and install guard", () => {
       expect(stripManaged("Set-Alias ll ls\r\n" + block.replace(/\n/g, "\r\n"))).toBe("Set-Alias ll ls\r\n");
       expect(stripManaged(block.replace("pkg $tool", "pkg $tool; iex $x"))).toContain("iex");
     } finally {
-      delete process.env.VSWARM_SEC_DIR;
+      reset("VSWARM_SEC_DIR");
     }
   });
 });
