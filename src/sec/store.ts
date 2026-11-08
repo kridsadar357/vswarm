@@ -7,6 +7,7 @@
 //   audit.log       every signature `vswarm agent` made or refused, sealed and chained the same way
 //   incidents/<id>/ evidence, quarantine and reports of one incident
 //   osv-cache.json  answers from the known-malicious database
+//   policy.json     whether WARN is let through (vswarm policy), for every gate and the agent alike
 //   *.seal          the seal of the file of the same name (see seal.ts); keystore.json says where the key is, and is
 //                   checked against the system's own store (chooseStore)
 //
@@ -37,6 +38,7 @@ export const files = {
   osv: () => join(SEC(), "osv-cache.json"),
   managed: () => join(SEC(), "managed.json"),
   keystore: () => join(SEC(), "keystore.json"),
+  policy: () => join(SEC(), "policy.json"),
 };
 
 export function ensureSec(): string {

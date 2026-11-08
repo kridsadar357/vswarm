@@ -68,8 +68,11 @@ export function profile(realHome: string, box: Box, proxyPort: number, extraRead
 (allow ipc-posix-shm ipc-posix-sem)
 (allow mach-lookup)
 ; secrets and other apps: keychain, clipboard, scripting other apps, privacy database, launching apps (open https://…),
-; the screen
+; the screen, background downloads by the system on the code's behalf (nsurlsessiond, around the proxy), and Spotlight's
+; index of your files (mds: names and contents of files the sandbox does not let it read)
 (deny mach-lookup
+  (global-name "com.apple.nsurlsessiond")
+  (global-name "com.apple.metadata.mds")
   (global-name "com.apple.SecurityServer")
   (global-name "com.apple.securityd.xpc")
   (global-name "com.apple.security.agent")

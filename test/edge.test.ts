@@ -1,6 +1,7 @@
 // Edge cases and hostile input: odd command lines, malformed configs, garbage from MCP servers, strace formats,
 // tampered blocks, broken registries. Nothing here touches the real home: every test gets a folder of its own.
 import { describe, expect, test } from "bun:test";
+import { reset } from "./isolate";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, sep } from "node:path";
@@ -767,12 +768,12 @@ describe("command line: exit codes and argument parsing", () => {
     expect((await vswarm({}, "ca", "bogus")).code).toBe(4);
     expect((await vswarm({}, "ca")).out + (await vswarm({}, "ca")).err).toContain("no CA yet");
     expect((await vswarm({}, "canary", "remove")).code).toBe(4);
-    expect((await vswarm({}, "canary")).err).toContain("no canaries yet");
-    expect((await vswarm({}, "accept", "--list")).err).toContain("nothing accepted");
+    expect((await vswarm({}, "canary")).out).toContain("no canaries yet");
+    expect((await vswarm({}, "accept", "--list")).out).toContain("nothing accepted");
     expect((await vswarm({}, "accept", "x")).code).toBe(4);
     expect((await vswarm({}, "report")).code).toBe(4);
     expect((await vswarm({}, "unlock")).err).toContain("no incident");
-    expect((await vswarm({}, "try", "--list")).err).toContain("no tries yet");
+    expect((await vswarm({}, "try", "--list")).out).toContain("no tries yet");
   }, 60_000);
 
   test.skipIf(WIN)("pkg: a known-malicious version stops with exit 3 offline; a clean name goes ahead quietly", async () => {
@@ -824,7 +825,7 @@ describe("command line: exit codes and argument parsing", () => {
     expect(report.command).toEqual(["sh", "-c", "true", "-y", "--net"]);
     expect(report.exit).toBe(0);
     expect(readFileSync(join(tryDir, id, "work/README.md"), "utf8")).toBe("hi\n");
-    expect((await vswarm({ tryDir }, "try", "--list")).err).toContain(id);
+    expect((await vswarm({ tryDir }, "try", "--list")).out).toContain(id);
     expect((await vswarm({ tryDir }, "try", "--clean", id)).err).toContain("removed 1 try");
   }, 120_000);
 });
@@ -836,7 +837,7 @@ describe("parsing, CLI and collectors", () => {
     const sec = tmp("sec");
     writeFileSync(join(sec, "last.json"), JSON.stringify({ verdict: "pass", findings: [], at: Date.now(), scan: {} }));
     expect((await vswarm({ sec }, "preflight", "--quiet", "--max-age=30")).code).toBe(0);
-    expect((await vswarm({}, "try", "--net=registries", "--list")).err).toContain("no tries yet");
+    expect((await vswarm({}, "try", "--net=registries", "--list")).out).toContain("no tries yet");
     // Documented options still reach their commands, spaced or with =.
     expect((await vswarm({ sec }, "preflight", "-q", "--strict", "--max-age", "30", "--host=prod-1", "--offline")).err).not.toContain("unknown option");
     expect((await vswarm({}, "try", "--clean=nope")).err).toContain("no try nope");
@@ -844,7 +845,7 @@ describe("parsing, CLI and collectors", () => {
     expect((await vswarm({}, "watch", "status", "--every=5")).code).toBe(0);
     expect((await vswarm({}, "watch", "status", "--every=0")).err).toContain("--every takes a whole number");
     expect((await vswarm({}, "ca", "status", "--principal=a,b", "--ttl=15m", "--sk", "--no-passphrase")).err).not.toContain("unknown option");
-    expect((await vswarm({}, "canary", "list", "--profile=p", "--alias=a")).err).toContain("no canaries yet");
+    expect((await vswarm({}, "canary", "list", "--profile=p", "--alias=a")).out).toContain("no canaries yet");
     expect((await vswarm({}, "selftest", "--bogus")).code).toBe(4);
     const bad = await vswarm({ sec }, "preflight", "--quiet", "--bogus");
     expect(bad.code).toBe(4);
@@ -1294,7 +1295,7 @@ describe("hardening: sandbox, MCP, updates", () => {
     let allClosed = () => {};
     const done = new Promise<void>((r) => (allClosed = r));
     const upstream = Bun.listen({ hostname: "127.0.0.1", port: 0, socket: { open() { opened++; }, close() { if (++closed === 5) allClosed(); }, data() {}, error() {} } });
-    const proxy = startProxy(() => true);
+    const proxy = startProxy(() => true, { localhost: true });
     try {
       for (let i = 0; i < 5; i++) {
         await new Promise<void>((left) => {
@@ -1444,7 +1445,7 @@ describe("vswarm's own changes and the cached verdict", () => {
       writeFileSync(join(home, ".ssh", "config"), block + "\nHost evil\n  ProxyCommand nc evil 22\n");
       expect((await startupFiles(ctx)).items.filter((i) => i.id === ".ssh/config").length).toBe(1);
     } finally {
-      delete process.env.VSWARM_SEC_DIR;
+      reset("VSWARM_SEC_DIR");
     }
   });
 
@@ -1458,7 +1459,7 @@ describe("vswarm's own changes and the cached verdict", () => {
       expect(decisionsSince(at)).toBe(true);
       expect(decisionsSince(Date.now() + 1000)).toBe(false);
     } finally {
-      delete process.env.VSWARM_SEC_DIR;
+      reset("VSWARM_SEC_DIR");
     }
   });
 });

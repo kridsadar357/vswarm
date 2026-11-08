@@ -9,7 +9,7 @@ import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync }
 import { join } from "node:path";
 import { HOME } from "../home";
 import { exec, readJson, whoami } from "./ctx";
-import { verdictNow } from "./gate";
+import { gateVerdict } from "./gate";
 import { c, line } from "./print";
 
 export const CA_DIR = () => process.env.VSWARM_CA_DIR ?? join(HOME, "ca");
@@ -135,10 +135,10 @@ export async function caCommand(action: string, args: string[], opt: { sk: boole
 
 /** `vswarm cert`: a certificate, but only for a machine that passes preflight. Returns the exit code. */
 export async function certCommand(opt: { quiet: boolean; fresh: boolean; offline: boolean; host?: string }): Promise<number> {
-  const verdict = await verdictNow({ fresh: opt.fresh, quiet: opt.quiet, offline: opt.offline });
-  if (verdict === "block") {
-    line(c.red("vswarm: no certificate for a machine that does not pass preflight"));
-    return 3;
+  const g = await gateVerdict({ fresh: opt.fresh, quiet: opt.quiet, offline: opt.offline });
+  if (!g.allowed) {
+    line(c.red(`vswarm: no certificate for a machine that does not pass preflight${g.verdict === "warn" ? " (WARN, refused by the policy)" : ""}`));
+    return g.code;
   }
   const r = await issue({ host: opt.host });
   if (!opt.quiet || !r.reused) line(`${c.green("✔")} ${r.reused ? "certificate still valid" : "certificate issued"} for ${Math.floor((r.info.left ?? 0) / 60)} min · ${c.dim(r.info.principals.join(","))}`);
@@ -163,7 +163,8 @@ cat > /etc/ssh/sshd_config.d/50-vswarm-ca.conf <<'CONF'
 TrustedUserCAKeys /etc/ssh/vswarm_user_ca.pub
 AuthorizedPrincipalsFile /etc/ssh/auth_principals/%u
 CONF
-sshd -t && systemctl reload ssh 2>/dev/null || systemctl reload sshd
+# reload only when the new config tests clean: an sshd that cannot read its config would lock everyone out
+if sshd -t; then systemctl reload ssh 2>/dev/null || systemctl reload sshd; else echo "sshd -t failed: not reloaded; fix the config above first" >&2; exit 1; fi
 # 4. keep this session open, log in again from another terminal with a certificate, and only then remove the old
 #    keys from ~${account}/.ssh/authorized_keys, so a stolen key file stops working.`;
 }

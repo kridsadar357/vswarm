@@ -1,5 +1,13 @@
 // A small HTTP(S) proxy on localhost. Sandboxed code may only reach the network through it, so every host it tries
 // to contact is recorded, and only the allowed ones get through (none by default).
+//
+// Even an allowed name must not lead back into this machine or its cloud: a name is resolved first, every address it
+// resolves to is checked, and the connection goes to the address that was checked (a second lookup could answer
+// differently: DNS rebinding). Loopback is refused unless `try --localhost`; link-local and the cloud metadata
+// addresses (169.254.169.254, fd00:ec2::254, 100.100.100.200) always.
+
+import { lookup } from "node:dns/promises";
+import { isIP } from "node:net";
 
 export interface ProxyHit {
   at: number;
@@ -20,12 +28,31 @@ export const REGISTRIES = [
   "crates.io", "index.crates.io", "static.crates.io", "proxy.golang.org", "sum.golang.org", "jsr.io", "deno.land",
 ];
 
+/** Why an address must not be reached from the sandbox, or undefined. `localhost` lets loopback through. */
+export function forbiddenAddress(ip: string, localhost = false): string | undefined {
+  const a = ip.toLowerCase().replace(/^\[|\]$/g, "");
+  const v4 = /^(?:::ffff:)?(\d+)\.(\d+)\.(\d+)\.(\d+)$/.exec(a);
+  if (v4) {
+    const [o1, o2] = [Number(v4[1]), Number(v4[2])];
+    if (a.endsWith("169.254.169.254") || a.endsWith("100.100.100.200")) return "a cloud metadata address";
+    if (o1 === 169 && o2 === 254) return "a link-local address";
+    if (o1 === 127 || o1 === 0) return localhost ? undefined : "this machine (loopback)";
+    return;
+  }
+  if (a === "fd00:ec2::254") return "a cloud metadata address";
+  if (/^fe[89ab][0-9a-f]:/.test(a)) return "a link-local address";
+  if (a === "::1" || a === "::") return localhost ? undefined : "this machine (loopback)";
+}
+
+export type Resolve = (host: string) => Promise<string[]>;
+const realResolve: Resolve = async (host) => (await lookup(host, { all: true, verbatim: true })).map((x) => x.address);
+
 export function allowedBy(mode: "none" | "registries" | "all") {
   return (host: string) => mode === "all" || (mode === "registries" && REGISTRIES.some((r) => host === r || host.endsWith("." + r)));
 }
 
 /** Listens on 127.0.0.1, or on a unix socket (Linux: the sandbox has its own network and reaches it through a file). */
-export function startProxy(allow: (host: string) => boolean, opt: { unix?: string } = {}): Proxy {
+export function startProxy(allow: (host: string) => boolean, opt: { unix?: string; localhost?: boolean; resolve?: Resolve } = {}): Proxy {
   const hits: ProxyHit[] = [];
   type State = { buf: Buffer; up?: any; open: boolean; closed: boolean; pending: Buffer[] };
   const handlers = {
@@ -67,14 +94,25 @@ export function startProxy(allow: (host: string) => boolean, opt: { unix?: strin
           }
         }
         const ok = allow(host);
-        hits.push({ at: Date.now(), host, port, allowed: ok });
+        const hit: ProxyHit = { at: Date.now(), host, port, allowed: ok };
+        hits.push(hit);
         if (!ok) {
           s.end(`HTTP/1.1 403 Forbidden\r\nContent-Type: text/plain\r\nConnection: close\r\n\r\nblocked by vswarm try: ${host}\n`);
           return;
         }
         st.up = true;
-        Bun.connect<{ client: typeof s }>({
-          hostname: host,
+        // Resolved once, here: the address checked is the address connected to.
+        (isIP(host) ? Promise.resolve([host]) : (opt.resolve ?? realResolve)(host)).then((ips) => {
+          const why = ips.map((ip) => forbiddenAddress(ip, opt.localhost)).find(Boolean);
+          if (!ips.length || why) {
+            hit.allowed = false;
+            s.end(`HTTP/1.1 403 Forbidden\r\nContent-Type: text/plain\r\nConnection: close\r\n\r\nblocked by vswarm try: ${host} ${why ? `is ${why}` : "does not resolve"}\n`);
+            return;
+          }
+          connectTo(ips[0]);
+        }, () => s.end("HTTP/1.1 502 Bad Gateway\r\n\r\n"));
+        const connectTo = (ip: string) => Bun.connect<{ client: typeof s }>({
+          hostname: ip,
           port,
           socket: {
             open(up) {

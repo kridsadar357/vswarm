@@ -330,14 +330,14 @@ export async function cmdgateRun(tool: string, patterns: string[], args: string[
   if (process.env.VSWARM_CMDGATE === "off") return 0;
   const d = decide(tool, args, patterns);
   if (!d.check) return 0;
-  const { verdictNow } = await import("./gate");
-  // The quiet preflight prints the findings on BLOCK and one line on WARN.
-  const verdict = await verdictNow({ quiet: true });
-  if (verdict !== "block") return 0;
+  const { gateVerdict } = await import("./gate");
+  // The quiet preflight prints the findings on BLOCK and one line on WARN; WARN stops it only when the policy says so.
+  const g = await gateVerdict({ quiet: true });
+  if (g.allowed) return 0;
   const to = d.host ? ` to ${mask(d.host)}` : d.pattern ? ` (matches ${d.pattern})` : "";
-  line(`${c.red("✖")} vswarm: ${tool}${to} stopped: this machine did not pass preflight`);
-  line(c.dim(`  fix or accept what is listed above (vswarm preflight --fresh) · skip once: ${skipOnce(tool)} · this gate is a reminder you can bypass, not a control`));
-  return 3;
+  line(`${c.red("✖")} vswarm: ${tool}${to} stopped: ${g.verdict === "block" ? "this machine did not pass preflight" : "preflight warns, and the policy refuses WARN"}`);
+  line(c.dim(`  fix or accept what is listed above (vswarm why) · skip once: ${skipOnce(tool)} · this gate is a reminder you can bypass, not a control`));
+  return g.code;
 }
 
 export const skipOnce = (tool: string, win = process.platform === "win32") => (win ? `${tool}.exe …` : `command ${tool} …`);
@@ -405,10 +405,9 @@ export interface GateFiles {
 
 /** Where the block goes and what it says, as `vswarm guard` does it. */
 export async function realGateFiles(adding: boolean): Promise<GateFiles> {
-  const { CLI, guardFiles, launcherPath } = await import("../setup");
+  const { CLI, ensureLauncher, guardFiles, launcherPath } = await import("../setup");
   const win = process.platform === "win32";
-  const launcher = launcherPath();
-  if (adding && !win && !existsSync(launcher)) throw new Error("install the launcher first: vswarm install (or vswarm install --no-path to keep it inside VSWARM_HOME)");
+  const launcher = adding && !win ? ensureLauncher((t) => line(t)) : launcherPath();
   return {
     files: await guardFiles(adding),
     body: (g, f) => (f.toLowerCase().endsWith(".ps1") ? psCmdGateBlock(process.execPath, CLI, g) : cmdGateBlock(launcher, g)),

@@ -361,7 +361,8 @@ export async function evaluate(input: RuleInput): Promise<Finding[]> {
       const bad = (scan.texts[i.id] ?? "").split(/\r?\n/).map((l) => l.trim()).filter((l) => l && !/^[#;]/.test(l)).map((l) => [l, configRisk(l, home)] as const).filter(([, why]) => why?.startsWith("the package source"));
       if (bad.length)
         add({ id: `pkg-source:${i.id}:${i.hash?.slice(0, 12)}`, rule: "pkg-source", severity: "medium", title: `~/${i.id} takes packages from an unsafe source`,
-          detail: bad.slice(0, 4).map(([l, why]) => `${redact(l.slice(0, 160))} · ${why}`), fix: "Point it back at the official registry or your company's https mirror, unless you set this up on purpose", item: i });
+          detail: bad.slice(0, 4).map(([l, why]) => `${redact(l.slice(0, 160))} · ${why}`), fix: "Point it back at the official registry or your company's https mirror, unless you set this up on purpose (vswarm fix removes the lines)", item: i,
+          meta: { lines: bad.map(([l]) => l) } });
     }
   }
 
@@ -462,11 +463,14 @@ export async function evaluate(input: RuleInput): Promise<Finding[]> {
           const authKeys = i.id === ".ssh/authorized_keys";
           // Only lines removed: less risky than anything added, but still a change you should recognise.
           const sev: Severity = authKeys || risky.length || i.kind === "cron" ? "high" : lines.length ? "medium" : "low";
+          const shown = risky.length ? risky : lines;
           add({ id: `file:${i.id}:${i.hash?.slice(0, 12)}`, rule: "startup-file", severity: sev,
             title: authKeys ? "~/.ssh/authorized_keys changed: someone may have added a way to log in" : `${i.id === "crontab" ? "crontab" : /^(\/|[A-Za-z]:[\\/])/.test(i.name) ? i.name : "~/" + i.name} changed`,
-            detail: (risky.length ? risky : lines).slice(0, 6).map((l) => `+ ${l.slice(0, 160)}${why.get(l) ? ` · ${why.get(l)}` : ""}`).concat(lines.length > 6 ? [`… ${lines.length - 6} more added lines`] : []),
+            detail: shown.slice(0, 6).map((l) => `+ ${l.slice(0, 160)}${why.get(l) ? ` · ${why.get(l)}` : ""}`).concat(shown.length > 6 ? [`… ${shown.length - 6} more ${risky.length ? "such " : "added "}lines`] : []),
             fix: risky.some((l) => why.get(l)) ? "These lines change what runs, or where packages come from; remove them unless you wrote them"
-              : risky.length ? "These lines download, decode or start something in the background; remove them unless you wrote them" : "Check the change is yours", item: i });
+              : risky.length ? "These lines download, decode or start something in the background; remove them unless you wrote them" : "Check the change is yours", item: i,
+            // The lines themselves, whole: what respond and vswarm fix take out (the detail above is for reading).
+            meta: { lines: shown } });
           break;
         }
         case "wmi":

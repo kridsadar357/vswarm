@@ -7,7 +7,7 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, st
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import {
-  AGENT_MAX_AGE, agentCall, agentDoctor, agentJobFiles, agentSshBlock, agentUninstall, captureKey, gatedHosts, leftOnDisk, listIdentities, listVaults, MSG, protect, restore, setAgentBlock, setKeyPolicy, startAgent,
+  AGENT_MAX_AGE, agentCall, agentCheck, agentDoctor, agentHosts, agentJob, agentJobFiles, agentSshBlock, agentUninstall, backgroundItemNote, captureKey, gatedHosts, hostNames, keyPolicyOf, knownHostKeys, leftOnDisk, listIdentities, listVaults, MSG, protect, protectFlow, restore, setAgentBlock, setKeyPolicy, startAgent,
   unprotect, UPSTREAM_SIGN_TIMEOUT, type AgentOptions,
 } from "../src/sec/agent";
 import type { Ctx } from "../src/sec/ctx";
@@ -17,6 +17,8 @@ import { fingerprint, parsePublicLine, signedFor, Writer } from "../src/sec/sshk
 import { clearLock, files, readAudit, saveBaseline, saveLast, setLock, useKeyStore } from "../src/sec/store";
 import type { Scan, Verdict } from "../src/sec/types";
 import { sshGate } from "../src/setup";
+import { savePolicy } from "../src/sec/policy";
+import { createHmac } from "node:crypto";
 
 const WIN = process.platform === "win32";
 const savedSock = process.env.SSH_AUTH_SOCK;
@@ -200,7 +202,7 @@ describe.skipIf(WIN)("vswarm agent: signing only when the machine passes", () =>
       await sealed("block");
       expect(await signVerify(a.sock, `${k}.pub`, d.home)).toBe(false);
       expect(told.at(-1)).toContain("does not pass preflight");
-      expect(told.at(-1)).toContain("vswarm preflight --fresh");
+      expect(told.at(-1)).toContain("vswarm why");
       // A passing verdict with an incident open: still refused, and the notice says why.
       await sealed("pass");
       await setLock({ incident: "t-1", at: Date.now(), reason: "test" });
@@ -371,37 +373,54 @@ describe.skipIf(WIN)("vswarm agent: the policy at its edges", () => {
     }
   }), 60_000);
 
-  test("protected keys are strict by default: WARN refuses unless protected with --allow-warn; keys from 2.6 are strict too, and agent policy changes it", () => withState(async (d) => {
+  test("one WARN policy: new keys follow it, keys from 2.6 and 2.7 keep the setting they were protected with, agent policy overrides and --inherit goes back", () => withState(async (d) => {
     let verdict: Verdict = "warn";
-    const k1 = await keygen(d.home, "strict_key"), k2 = await keygen(d.home, "lenient_key"), k3 = await keygen(d.home, "old_key");
+    let global: "allow" | "refuse" = "allow";
+    const k1 = await keygen(d.home, "new_key"), k2 = await keygen(d.home, "lenient_key"), k3 = await keygen(d.home, "old_key"), k4 = await keygen(d.home, "v27_key");
     const r1 = await protect(k1, { env: envWith() });
     await protect(k2, { env: envWith(), allowWarn: true });
     const r3 = await protect(k3, { env: envWith() });
-    // A vault as 2.6 wrote it for a key protected without --strict: { strict: false }, no allowWarn.
+    const r4 = await protect(k4, { env: envWith() });
+    // Vaults as older versions wrote them: 2.6 { strict: false }, 2.7 { allowWarn: false }; neither has a policy.
     const wk = Buffer.from(readFileSync(join(d.sec, "keys", "agent-key"), "utf8").trim(), "hex");
-    const v3 = JSON.parse(readFileSync(r3.vault, "utf8"));
-    const aad = Buffer.from(`vswarm-agent-vault-v1\0${v3.fp}\0${v3.path}`);
-    const box = Buffer.from(v3.box, "base64");
-    const de = createDecipheriv("aes-256-gcm", wk, box.subarray(0, 12)).setAAD(aad);
-    de.setAuthTag(box.subarray(12, 28));
-    const { allowWarn: _a, ...inside } = JSON.parse(Buffer.concat([de.update(box.subarray(28)), de.final()]).toString("utf8"));
-    const iv = randomBytes(12);
-    const ci = createCipheriv("aes-256-gcm", wk, iv).setAAD(aad);
-    const ct = Buffer.concat([ci.update(JSON.stringify({ ...inside, strict: false })), ci.final()]);
-    writeFileSync(r3.vault, JSON.stringify({ ...v3, box: Buffer.concat([iv, ci.getAuthTag(), ct]).toString("base64") }));
-    const { a } = await agentFor(d, { verdict: async () => verdict });
+    const rewrite = (vault: string, f: (inside: any) => any) => {
+      const v = JSON.parse(readFileSync(vault, "utf8"));
+      const aad = Buffer.from(`vswarm-agent-vault-v1\0${v.fp}\0${v.path}`);
+      const box = Buffer.from(v.box, "base64");
+      const de = createDecipheriv("aes-256-gcm", wk, box.subarray(0, 12)).setAAD(aad);
+      de.setAuthTag(box.subarray(12, 28));
+      const inside = JSON.parse(Buffer.concat([de.update(box.subarray(28)), de.final()]).toString("utf8"));
+      const iv = randomBytes(12);
+      const ci = createCipheriv("aes-256-gcm", wk, iv).setAAD(aad);
+      const ct = Buffer.concat([ci.update(JSON.stringify(f(inside))), ci.final()]);
+      writeFileSync(vault, JSON.stringify({ ...v, box: Buffer.concat([iv, ci.getAuthTag(), ct]).toString("base64") }));
+    };
+    rewrite(r3.vault, ({ allowWarn: _a, policy: _p, ...inside }) => ({ ...inside, strict: false }));
+    rewrite(r4.vault, ({ policy: _p, ...inside }) => ({ ...inside, allowWarn: false }));
+    const { a } = await agentFor(d, { verdict: async () => verdict, policy: async () => global });
     try {
-      const held = Object.fromEntries(a.held().map((h) => [h.comment, h.strict]));
-      expect(held).toEqual({ "test-strict_key": true, "test-lenient_key": false, "test-old_key": true });
-      expect(await signVerify(a.sock, `${k1}.pub`, d.home)).toBe(false);
+      const held = Object.fromEntries(a.held().map((h) => [h.comment, h.policy]));
+      expect(held).toEqual({ "test-new_key": "inherit", "test-lenient_key": "allow", "test-old_key": "refuse", "test-v27_key": "refuse" });
+      // The default policy lets WARN through: the new key signs, as the ssh gate lets the login through.
+      expect(await signVerify(a.sock, `${k1}.pub`, d.home)).toBe(true);
       expect(await signVerify(a.sock, `${k2}.pub`, d.home)).toBe(true);
       expect(await signVerify(a.sock, `${k3}.pub`, d.home)).toBe(false);
-      // The migration for a key that should keep signing on WARN: agent policy --allow-warn, picked up by the running agent.
+      expect(await signVerify(a.sock, `${k4}.pub`, d.home)).toBe(false);
+      // vswarm policy warn refuse: every key that follows it refuses; a key's own allow stays.
+      global = "refuse";
+      expect(await signVerify(a.sock, `${k1}.pub`, d.home)).toBe(false);
+      expect(await signVerify(a.sock, `${k2}.pub`, d.home)).toBe(true);
+      // agent policy: the 2.6 key signs on WARN once allowed; --inherit puts the 2.7 key back under the policy.
       await setKeyPolicy(k3, true);
       expect(await signVerify(a.sock, `${k3}.pub`, d.home)).toBe(true);
-      await setKeyPolicy(r1.fp, false);
+      await setKeyPolicy(k4, "inherit");
+      global = "allow";
+      expect(await signVerify(a.sock, `${k4}.pub`, d.home)).toBe(true);
+      await setKeyPolicy(r1.fp, "refuse");
+      expect(await signVerify(a.sock, `${k1}.pub`, d.home)).toBe(false);
       verdict = "pass";
       expect(await signVerify(a.sock, `${k1}.pub`, d.home)).toBe(true);
+      expect(Object.fromEntries(a.held().map((h) => [h.comment, h.policy]))).toEqual({ "test-new_key": "refuse", "test-lenient_key": "allow", "test-old_key": "allow", "test-v27_key": "inherit" });
     } finally {
       a.stop();
     }
@@ -480,7 +499,7 @@ describe.skipIf(WIN)("vswarm agent: protected keys", () => {
     await sealed("pass");
     const { a } = await agentFor(d);
     try {
-      expect(a.held()).toEqual([{ fp: r.fp, comment: "test-prod_key", vault: true, confirm: false, strict: true }]);
+      expect(a.held()).toEqual([{ fp: r.fp, comment: "test-prod_key", vault: true, confirm: false, policy: "inherit" }]);
       expect(await signVerify(a.sock, `${k}.pub`, d.home)).toBe(true);
       // ssh-add -D does not take a protected key away; only unprotect does.
       expect((await sh(["ssh-add", "-D"], envWith(a.sock))).code).toBe(0);
@@ -548,6 +567,67 @@ describe.skipIf(WIN)("vswarm agent: how it is wired in", () => {
     rmSync(dir, { recursive: true, force: true });
   });
 
+  test("the agent block: a check before each login, the protected keys by name, no password prompts; the flags leave them out", () => {
+    const block = agentSshBlock(["prod-*", "db1"], "/s/agent.sock", { launcher: ["/v/vswarm"], keys: ["/h/.ssh/prod"] });
+    expect(block).toContain('Match originalhost prod-*,db1 !exec "/v/vswarm agent check --host %n --hostname %h --port %p"');
+    expect(block).toContain("    ProxyCommand /bin/sh -c 'echo \"vswarm agent: not connecting (the reason is above) · vswarm why\" >&2; exit 1'");
+    // The key by its own path, not its .pub: ssh reads the .pub beside it, and never takes a public key for a private one.
+    expect(block).toContain('Match originalhost prod-*,db1\n    IdentityAgent "/s/agent.sock"\n    IdentityFile "/h/.ssh/prod"\n    IdentitiesOnly yes\n    PasswordAuthentication no\n    KbdInteractiveAuthentication no\n');
+    expect(agentHosts(block)).toEqual(["prod-*", "db1"]);
+    const open = agentSshBlock(["db1"], "/s/agent.sock", { allowPasswords: true, allKeys: true });
+    expect(open).not.toContain("PasswordAuthentication");
+    expect(open).not.toContain("IdentitiesOnly");
+    expect(open).not.toContain("exec");
+    expect(() => agentSshBlock(["db1"], "/s/a.sock", { keys: ['/h/"x'] })).toThrow("double quote");
+  });
+
+  test("a key's WARN setting: its own, or the policy's; vaults from before keep what they were protected with", () => {
+    expect(keyPolicyOf({ policy: "inherit" })).toBe("inherit");
+    expect(keyPolicyOf({ policy: "refuse", allowWarn: true })).toBe("refuse");
+    expect(keyPolicyOf({ allowWarn: true })).toBe("allow");
+    expect(keyPolicyOf({ allowWarn: false })).toBe("refuse");
+    expect(keyPolicyOf({})).toBe("refuse");
+  });
+
+  test("known_hosts: plain, hashed and [host]:port names give the host's key fingerprints", () => {
+    const blob = new Writer().str("ssh-ed25519").str(Buffer.alloc(32, 9)).out();
+    const salt = Buffer.alloc(20, 3);
+    const hashed = (n: string) => `|1|${salt.toString("base64")}|${createHmac("sha1", salt).update(n).digest("base64")}`;
+    const text = [`db1,10.0.0.9 ssh-ed25519 ${blob.toString("base64")}`, `${hashed("[127.0.0.1]:2222")} ssh-ed25519 ${blob.toString("base64")}`, "# a comment", `@revoked other ssh-ed25519 ${blob.toString("base64")}`].join("\n");
+    expect(knownHostKeys(text, "db1")).toEqual([fingerprint(blob)]);
+    expect(knownHostKeys(text, "10.0.0.9")).toEqual([fingerprint(blob)]);
+    expect(knownHostKeys(text, "127.0.0.1", 2222)).toEqual([fingerprint(blob)]);
+    expect(knownHostKeys(text, "127.0.0.1")).toEqual([]);
+    expect(knownHostKeys(text, "other")).toEqual([]);
+  });
+
+  test("with VSWARM_HOME, the LaunchAgent or unit of another vswarm is not called this one's, and what is the user's is labelled so", () => {
+    const home = tmp("jobs");
+    const prev = process.env.VSWARM_HOME;
+    try {
+      const [file, text] = Object.entries(agentJobFiles("/real/.vswarm/bin/vswarm", home))[0];
+      mkdirSync(join(file, ".."), { recursive: true });
+      writeFileSync(file, text);
+      delete process.env.VSWARM_HOME;
+      expect(agentJob(home, "/scratch/bin/vswarm")).toEqual({ installed: true });
+      process.env.VSWARM_HOME = "/scratch";
+      const other = agentJob(home, "/scratch/bin/vswarm");
+      expect(other.installed).toBe(false);
+      expect(other.note).toContain("runs another vswarm, not this VSWARM_HOME's (system-wide, not in VSWARM_HOME)");
+      const mine = agentJob(home, "/real/.vswarm/bin/vswarm");
+      expect(mine.installed).toBe(true);
+      expect(mine.note).toContain("(system-wide, not in VSWARM_HOME)");
+    } finally {
+      if (prev === undefined) delete process.env.VSWARM_HOME;
+      else process.env.VSWARM_HOME = prev;
+    }
+  });
+
+  test("macOS says once that it shows a Background Items notice for the LaunchAgent; nowhere else", () => {
+    expect(backgroundItemNote("darwin")).toContain("Background Items Added");
+    expect(backgroundItemNote("linux")).toBeUndefined();
+  });
+
   test("the LaunchAgent and the systemd user service run `vswarm agent run` and restart it", () => {
     const home = "/home/t";
     const mac = Object.entries(agentJobFiles("/home/t/.vswarm/bin/vswarm", home, "darwin"))[0];
@@ -600,5 +680,168 @@ describe.skipIf(WIN || !existsSync("/usr/sbin/sshd"))("vswarm agent: a real ssh 
         process.kill(Number(readFileSync(join(srv, "pid"), "utf8")));
       } catch {}
     }
+  }), 60_000);
+
+  test("agent check: what the agent would answer, before the login: the host's own keys, not running, BLOCK, WARN under the policy", () => withState(async (d) => {
+    const k = await keygen(d.home, "prod");
+    const other = await keygen(d.home, "personal");
+    mkdirSync(join(d.home, ".ssh"));
+    writeFileSync(join(d.home, ".ssh", "config"), `Host prod-db\n    IdentityFile ${k}\nHost mine\n    IdentityFile ${other}\n`);
+    expect((await agentCheck("prod-db", { home: d.home, answering: async () => false })).ok).toBe(true);
+    await protect(k, { env: envWith() });
+    const base = { home: d.home, answering: async () => true, verdict: async (): Promise<Verdict> => "pass", policy: async () => "allow" as const };
+    expect(await agentCheck("prod-db", base)).toMatchObject({ ok: true, keys: [k] });
+    // A host that names keys of its own, none protected: not the agent's business.
+    expect((await agentCheck("mine", { ...base, verdict: async () => "block" })).ok).toBe(true);
+    const down = await agentCheck("prod-db", { ...base, answering: async () => false });
+    expect(down.ok).toBe(false);
+    expect(down.why).toContain("not running");
+    expect(down.todo).toContain("vswarm agent on");
+    const blocked = await agentCheck("prod-db", { ...base, verdict: async () => "block" });
+    expect(blocked.why).toContain("does not pass preflight");
+    expect(blocked.todo).toContain("vswarm why");
+    expect((await agentCheck("prod-db", { ...base, verdict: async () => "warn" })).ok).toBe(true);
+    const refused = await agentCheck("prod-db", { ...base, verdict: async () => "warn", policy: async () => "refuse" });
+    expect(refused.why).toBe("preflight warns, and the policy refuses WARN");
+    expect(refused.todo).toContain("vswarm policy warn allow");
+    await setKeyPolicy(k, "refuse");
+    const strict = await agentCheck("prod-db", { ...base, verdict: async () => "warn" });
+    expect(strict.why).toContain("signs on PASS only");
+    expect(strict.todo).toContain(`vswarm agent policy ${k.replace(homedir(), "~")} --allow-warn`);
+  }), 60_000);
+
+  test("the agent block in a real login: the check stops it on the terminal with the reason, an agent refusal ends in Permission denied, never a password prompt", () => withState(async (d) => {
+    const srv = join(d.home, "sshd");
+    mkdirSync(srv);
+    await keygen(srv, "host_key");
+    const k = await keygen(d.home, "prod");
+    writeFileSync(join(srv, "authorized_keys"), readFileSync(`${k}.pub`));
+    const port = 20000 + Math.floor(Math.random() * 20000);
+    // The server offers passwords too: what a production host often does, and what a refusal must not fall back to.
+    writeFileSync(join(srv, "config"), [
+      `Port ${port}`, "ListenAddress 127.0.0.1", `HostKey ${join(srv, "host_key")}`, `PidFile ${join(srv, "pid")}`, "UsePAM no", "StrictModes no",
+      "PasswordAuthentication yes", "KbdInteractiveAuthentication yes", `AuthorizedKeysFile ${join(srv, "authorized_keys")}`,
+    ].join("\n") + "\n");
+    await protect(k, { env: envWith() });
+    const { a } = await agentFor(d);
+    expect((await sh(["/usr/sbin/sshd", "-f", join(srv, "config"), "-E", join(srv, "log")])).code).toBe(0);
+    // The config at ~/.ssh/config of this test's HOME: where the check ssh runs reads it too.
+    mkdirSync(join(d.home, ".ssh"), { recursive: true });
+    const cfg = join(d.home, ".ssh", "config");
+    const host = `Host prod-test\n    HostName 127.0.0.1\n    Port ${port}\n    UserKnownHostsFile /dev/null\n    GlobalKnownHostsFile /dev/null\n    StrictHostKeyChecking no\n`;
+    const write = (block: string) => writeFileSync(cfg, `${block}\n\n${host}`);
+    // An askpass that only leaves a mark: ssh asking for any password at all is a failure here.
+    const asked = join(d.home, "asked");
+    const askpass = join(d.home, "askpass.sh");
+    writeFileSync(askpass, `#!/bin/sh\necho asked >> ${JSON.stringify(asked)}\nexit 1\n`, { mode: 0o755 });
+    // HOME and VSWARM_HOME for the check ssh runs: this test's folders, never your own.
+    const env = envWith(undefined, { HOME: d.home, VSWARM_HOME: join(d.home, "vh"), SSH_ASKPASS: askpass, SSH_ASKPASS_REQUIRE: "force", DISPLAY: ":0", NO_COLOR: "1" });
+    const ssh = () => sh(["ssh", "-F", cfg, "prod-test", "echo OK"], env);
+    try {
+      for (let i = 0; i < 30 && !existsSync(join(srv, "pid")); i++) await Bun.sleep(100);
+      write(agentSshBlock(["prod-test"], a.sock, { launcher: [process.execPath, join(import.meta.dir, "../src/cli.ts")], keys: [k] }));
+      await sealed("pass");
+      const ok = await ssh();
+      expect(ok.out.trim()).toBe("OK");
+      // WARN, and the policy refuses it: said before connecting, with the way out.
+      await saveLast({ verdict: "warn", findings: [{ id: "x", rule: "x", severity: "medium", title: "a warning", detail: [] }], at: Date.now(), scan: {} as Scan });
+      await savePolicy("refuse");
+      const warned = await ssh();
+      expect(warned.out).toBe("");
+      expect(warned.err).toContain("vswarm agent: ssh to prod-test refused: preflight warns, and the policy refuses WARN");
+      expect(warned.err).toContain("vswarm policy warn allow");
+      expect(warned.err).toContain("not connecting");
+      // Without the check (an old block, or a client that skips Match exec): the agent refuses, ssh says Permission denied.
+      write(agentSshBlock(["prod-test"], a.sock, { keys: [k] }));
+      const denied = await ssh();
+      expect(denied.out).toBe("");
+      expect(denied.err).toContain("Permission denied");
+      expect(existsSync(asked)).toBe(false);
+      // The agent left out entirely: no "UNPROTECTED PRIVATE KEY FILE", since the block names the key, not its .pub.
+      const bypass = await sh(["ssh", "-F", cfg, "-o", "IdentityAgent=none", "-o", "BatchMode=yes", "prod-test", "echo OK"], env);
+      expect(bypass.err).not.toContain("UNPROTECTED");
+      expect(bypass.err).toContain("Permission denied");
+      // The check named the host: the audit line of the next signature says which one.
+      await savePolicy("allow");
+      write(agentSshBlock(["prod-test"], a.sock, { launcher: [process.execPath, join(import.meta.dir, "../src/cli.ts")], keys: [k] }));
+      writeFileSync(join(d.home, ".ssh", "known_hosts"), `[127.0.0.1]:${port} ${readFileSync(join(srv, "host_key.pub"), "utf8")}`);
+      expect((await ssh()).out.trim()).toBe("OK");
+      const audit = (await readAudit()).entries;
+      expect(audit.some((e) => e.event === "refuse" && e.reason?.includes("ssh to prod-test, stopped before connecting"))).toBe(true);
+      expect(audit.at(-1)?.event).toBe("sign");
+      expect(audit.at(-1)?.reason).toContain(" to prod-test · alg ssh-ed25519");
+      expect(Object.values(hostNames())).toEqual(["prod-test"]);
+    } finally {
+      a.stop();
+      try {
+        process.kill(Number(readFileSync(join(srv, "pid"), "utf8")));
+      } catch {}
+    }
+  }), 90_000);
+
+  test("protect proves the key first: stops on a machine that would refuse, keeps the file until a host accepts it, then tests through the agent", () => withState(async (d) => {
+    const srv = join(d.home, "sshd");
+    mkdirSync(srv);
+    await keygen(srv, "host_key");
+    const k = await keygen(d.home, "prod");
+    const old = await keygen(d.home, "old");
+    writeFileSync(join(srv, "authorized_keys"), readFileSync(`${old}.pub`));
+    const port = 20000 + Math.floor(Math.random() * 20000);
+    writeFileSync(join(srv, "config"), [
+      `Port ${port}`, "ListenAddress 127.0.0.1", `HostKey ${join(srv, "host_key")}`, `PidFile ${join(srv, "pid")}`, "UsePAM no", "StrictModes no",
+      "PasswordAuthentication no", "KbdInteractiveAuthentication no", `AuthorizedKeysFile ${join(srv, "authorized_keys")}`,
+    ].join("\n") + "\n");
+    expect((await sh(["/usr/sbin/sshd", "-f", join(srv, "config"), "-E", join(srv, "log")])).code).toBe(0);
+    const cfg = join(d.home, "ssh_config");
+    writeFileSync(cfg, `Host prod-test\n    HostName 127.0.0.1\n    Port ${port}\n    IdentityFile ${k}\nHost github.com\n    User git\n`);
+    const said: string[] = [];
+    let agent: Awaited<ReturnType<typeof agentFor>>["a"] | undefined;
+    const deps = {
+      home: d.home, cfgPath: cfg, env: envWith(), say: (t: string) => void said.push(t), yes: async () => false,
+      sshOpts: ["-o", "UserKnownHostsFile=/dev/null", "-o", "GlobalKnownHostsFile=/dev/null", "-o", "StrictHostKeyChecking=no"],
+      verdict: async (): Promise<Verdict> => "pass", policy: async () => "allow" as const,
+      agentOn: async () => (agent ??= (await agentFor(d)).a).sock,
+    };
+    try {
+      for (let i = 0; i < 30 && !existsSync(join(srv, "pid")); i++) await Bun.sleep(100);
+      // 1: a machine that would make the key refuse: nothing happens without --anyway.
+      expect(await protectFlow(k, {}, { ...deps, verdict: async () => "block" })).toBeUndefined();
+      expect(said.join("\n")).toContain("--anyway");
+      expect(existsSync(k)).toBe(true);
+      // 3: the server does not take the key yet: the file stays, and the way to add it is shown.
+      said.length = 0;
+      expect(await protectFlow(k, {}, deps)).toBeUndefined();
+      const out = said.join("\n");
+      expect(out).toContain("prod-test refused the key");
+      expect(out).toContain(`ssh-copy-id -F ${cfg} -o IdentityAgent=none -o 'IdentityFile=<a key the server already accepts>'`);
+      expect(out).toContain("stays on disk");
+      expect(out).not.toContain("github.com");
+      expect(existsSync(k)).toBe(true);
+      expect(listVaults()).toEqual([]);
+      // Authorized: tried with the file on disk, then vaulted, then tried again through the agent.
+      writeFileSync(join(srv, "authorized_keys"), readFileSync(`${old}.pub`, "utf8") + readFileSync(`${k}.pub`, "utf8"));
+      said.length = 0;
+      const r = await protectFlow(k, {}, deps);
+      expect(r?.fp).toBeDefined();
+      const done = said.join("\n");
+      expect(done).toContain("prod-test accepts it");
+      expect(done).toContain("prod-test accepts it through vswarm agent");
+      expect(existsSync(k)).toBe(false);
+    } finally {
+      agent?.stop();
+      try {
+        process.kill(Number(readFileSync(join(srv, "pid"), "utf8")));
+      } catch {}
+    }
+  }), 90_000);
+
+  test("protect warns when ~/.ssh/config names the key's .pub as an IdentityFile", () => withState(async (d) => {
+    const k = await keygen(d.home, "prod");
+    const cfg = join(d.home, "ssh_config");
+    writeFileSync(cfg, `Host prod-test\n    HostName 127.0.0.1\n    Port 9\n    IdentityFile ${k}.pub\n`);
+    const said: string[] = [];
+    await protectFlow(k, {}, { home: d.home, cfgPath: cfg, env: envWith(), say: (t) => void said.push(t), yes: async () => false, verdict: async () => "pass", policy: async () => "allow", sshOpts: ["-o", "ConnectTimeout=2"] });
+    expect(said.join("\n")).toContain(`IdentityFile names ${k.replace(homedir(), "~")}.pub`);
+    expect(existsSync(k)).toBe(true);
   }), 60_000);
 });

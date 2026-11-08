@@ -117,10 +117,15 @@ export function pinTools(i: Item, tools: Tool[], pins: Pins): Finding[] {
   return out;
 }
 
-/** The pins, only as vswarm wrote them: a pin file edited by hand could hide a rug pull, so it counts as none. */
-export async function loadPins(): Promise<{ pins: Pins; untrusted?: string }> {
+/**
+ * The pins, only as vswarm wrote them: a pin file edited by hand could hide a rug pull, so it counts as none. The same
+ * when the sealing key cannot be read: pins that cannot be checked are not known pins (as for every sealed file), so
+ * every server counts as not inspected until the key store answers.
+ */
+export async function loadPins(): Promise<{ pins: Pins; untrusted?: string; nokey?: boolean }> {
   const r = await readSealed<Pins>(pinFile());
-  return r.untrusted && !r.nokey ? { pins: {}, untrusted: r.untrusted } : { pins: r.value ?? {} };
+  if (r.untrusted) return { pins: {}, untrusted: r.untrusted, ...(r.nokey ? { nokey: true } : {}) };
+  return { pins: r.value ?? {} };
 }
 export const savePins = (p: Pins) => writeSealed(pinFile(), p);
 
@@ -240,11 +245,27 @@ async function inspectHttp(url: string, headers: Record<string, string>): Promis
   });
 }
 
+/**
+ * How to start a stdio server's command. On Windows npx, pnpm, uvx and the like are .cmd files, which only cmd.exe
+ * runs: the command is found on PATH (PATHEXT) and a .cmd or .bat is handed to cmd.exe, each word in double quotes
+ * (where & | < > ^ are plain characters). A double quote, % or a line break in a word would still be read by cmd.exe,
+ * so such a command is not started.
+ */
+export function stdioArgv(cmd: string[], platform: NodeJS.Platform = process.platform, which: (c: string) => string | null = (c) => Bun.which(c), comspec = process.env.ComSpec ?? "cmd.exe"): { argv: string[]; verbatim: boolean } {
+  if (platform !== "win32" || !cmd.length) return { argv: cmd, verbatim: false };
+  const exe = /[\\/]/.test(cmd[0]) ? cmd[0] : which(cmd[0]) ?? cmd[0];
+  if (!/\.(cmd|bat)$/i.test(exe)) return { argv: [exe, ...cmd.slice(1)], verbatim: false };
+  const bad = [exe, ...cmd.slice(1)].find((a) => /["%\r\n]/.test(a));
+  if (bad !== undefined) throw new Error(`not started: ${JSON.stringify(bad)} would be read by cmd.exe (a double quote, % or line break), and ${exe} runs only through cmd.exe`);
+  return { argv: [comspec, "/d", "/s", "/c", `"${[exe, ...cmd.slice(1)].map((a) => `"${a}"`).join(" ")}"`], verbatim: true };
+}
+
 /** stdio: newline-delimited JSON-RPC over the process's stdin/stdout. */
 async function inspectStdio(cmd: string[], env: Record<string, string>, sandbox: boolean, timeoutMs: number, cwd?: string): Promise<{ tools: Tool[]; hosts: string[] }> {
   const sb = sandbox ? await sandboxSpawn(cmd, { net: "registries", env }) : undefined;
   // Started directly, it starts in the folder its agent would start it in, when that is known (and still there).
-  const proc = sb?.proc ?? Bun.spawn(cmd, { env: { ...process.env, ...env } as Record<string, string>, cwd: cwd && existsSync(cwd) ? cwd : undefined, stdin: "pipe", stdout: "pipe", stderr: "pipe" });
+  const direct = sb ? undefined : stdioArgv(cmd);
+  const proc = sb?.proc ?? Bun.spawn(direct!.argv, { env: { ...process.env, ...env } as Record<string, string>, cwd: cwd && existsSync(cwd) ? cwd : undefined, stdin: "pipe", stdout: "pipe", stderr: "pipe", windowsVerbatimArguments: direct!.verbatim });
   const waiting = new Map<number, (m: any) => void>();
   let ended = false;
   let stderr = "";
@@ -386,8 +407,8 @@ export async function inspectAll(servers: Item[], opt: InspectOpt & { show: bool
   }));
   const allTools = new Map<string, string>();
   for (const r of results) for (const t of r.tools ?? []) allTools.set(t.name, r.item.id);
-  const { pins, untrusted } = await loadPins();
-  if (untrusted) line(c.amber(`  the pinned tool definitions ${untrusted}; every server is compared as if inspected for the first time`));
+  const { pins, untrusted, nokey } = await loadPins();
+  if (untrusted) line(c.amber(`  the pinned tool definitions ${untrusted}; every server is compared as if inspected for the first time${nokey ? ", and the pins are not written over" : ""}`));
   const findings: Finding[] = [];
   for (const r of results) {
     const label = `${r.item.name} ${c.dim(`(${r.item.source})`)}`;
@@ -404,7 +425,8 @@ export async function inspectAll(servers: Item[], opt: InspectOpt & { show: bool
     line(`  ${fs.some((f) => RANK[f.severity] >= RANK.high) ? c.red("✖") : fs.length ? c.amber("!") : c.green("✔")} ${label}  ${c.dim(`${counts}${r.sandboxed ? " · sandboxed" : ""}${r.hosts?.length ? ` · reached ${r.hosts.join(", ")}` : ""}`)}`);
     if (show) for (const t of r.tools) line(`      ${c.cyan(t.name)}  ${c.dim((t.description ?? "").replace(/\s+/g, " ").slice(0, 300))}`);
   }
-  await savePins(pins);
+  // Without the key the old pins could not be checked, and new ones could not be sealed: the file is left as it is.
+  if (!nokey) await savePins(pins);
   const failed = results.filter((r) => !r.tools && /exited|no answer/.test(r.error ?? "")).length;
   if (sandbox && failed) line(c.dim(`  ${failed} could not start in the sandbox (they need files in your home or a local service). --no-sandbox starts them as your agent does, with your access.`));
   line("");

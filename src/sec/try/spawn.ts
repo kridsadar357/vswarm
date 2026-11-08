@@ -6,7 +6,7 @@ import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, statSync, wri
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { TRY_DIR, type Net } from "./index";
-import { bwrapArgs, FORWARDER, freshProc, inner, INNER_PORT } from "./linux";
+import { bwrapArgs, FORWARDER, freshProc, inner, INNER_PORT, NO_FRESH_PROC } from "./linux";
 import { allowedBy, startProxy, type ProxyHit } from "./proxy";
 import { cleanEnv, listeningPorts, profile, toolchains, type Box } from "./sandbox";
 
@@ -52,8 +52,12 @@ export async function sandboxSpawn(cmd: string[], opt: { net: Net; env?: Record<
   let argv: string[];
   if (linux) {
     writeFileSync(join(box.tmp, "forwarder.js"), FORWARDER);
-    const hostProc = !(await freshProc(Bun.which("bwrap")!));
-    argv = [Bun.which("bwrap")!, ...bwrapArgs(homedir(), box, { tools: [...toolchains(homedir()), ...own], bun: process.execPath, interactive: false, hostProc }), "--", ...inner(box, process.execPath, cmd)];
+    if (!(await freshProc(Bun.which("bwrap")!))) {
+      proxy.stop();
+      rmSync(dir, { recursive: true, force: true });
+      throw new Error(NO_FRESH_PROC);
+    }
+    argv = [Bun.which("bwrap")!, ...bwrapArgs(homedir(), box, { tools: [...toolchains(homedir()), ...own], bun: process.execPath, interactive: false }), "--", ...inner(box, process.execPath, cmd)];
   } else {
     const sb = join(dir, "sandbox.sb");
     // An MCP server under inspection gets no local databases or Docker API either (Linux: its own network namespace).
@@ -85,22 +89,26 @@ export function projectWalls(cwd: string): { dir: string; readOnly: string[] } {
  * `guard on --sandbox`): that folder is writable except its .git, the rest of your home is out of sight, the network
  * is the package registries only. Returns the exit code and the hosts it was refused.
  */
-export async function sandboxRun(cmd: string[], opt: { cwd: string; env?: Record<string, string> }): Promise<{ code: number; refused: string[] }> {
+export async function sandboxRun(cmd: string[], opt: { cwd: string; env?: Record<string, string>; extraRead?: string[]; extraHosts?: string[] }): Promise<{ code: number; refused: string[] }> {
   mkdirSync(TRY_DIR(), { recursive: true, mode: 0o700 });
   const dir = realpathSync(mkdtempSync(join(TRY_DIR(), "install-")));
   const box: Box = { dir, work: join(dir, "work"), home: join(dir, "home"), tmp: join(dir, "tmp"), netlog: join(dir, "tmp", "netlog.jsonl") };
   for (const d of [box.work, box.home, box.tmp]) mkdirSync(d, { recursive: true, mode: 0o700 });
   const project = projectWalls(opt.cwd);
   const linux = process.platform === "linux";
-  const proxy = startProxy(allowedBy("registries"), linux ? { unix: join(box.tmp, "proxy.sock") } : {});
+  const registries = allowedBy("registries");
+  const extra = opt.extraHosts ?? [];
+  const proxy = startProxy((h) => registries(h) || extra.some((x) => h === x || h.endsWith("." + x)), linux ? { unix: join(box.tmp, "proxy.sock") } : {});
+  const home = homedir();
+  const extraRead = (opt.extraRead ?? []).filter((d) => d.startsWith(home + "/"));
   let argv: string[];
   if (linux) {
     writeFileSync(join(box.tmp, "forwarder.js"), FORWARDER);
-    const hostProc = !(await freshProc(Bun.which("bwrap")!));
-    argv = [Bun.which("bwrap")!, ...bwrapArgs(homedir(), box, { tools: toolchains(homedir()), bun: process.execPath, interactive: true, hostProc, project }), "--", ...inner(box, process.execPath, cmd)];
+    if (!(await freshProc(Bun.which("bwrap")!))) throw new Error(NO_FRESH_PROC);
+    argv = [Bun.which("bwrap")!, ...bwrapArgs(home, box, { tools: [...toolchains(home), ...extraRead], bun: process.execPath, interactive: true, project }), "--", ...inner(box, process.execPath, cmd)];
   } else {
     const sb = join(dir, "sandbox.sb");
-    writeFileSync(sb, profile(homedir(), box, proxy.port, [], await listeningPorts(), project));
+    writeFileSync(sb, profile(home, box, proxy.port, extraRead, await listeningPorts(), project));
     argv = ["/usr/bin/sandbox-exec", "-f", sb, ...cmd];
   }
   try {

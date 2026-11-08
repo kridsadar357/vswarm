@@ -2,6 +2,7 @@
 // windows-snapshot.ps1 prints on a real Windows 11 PC (OneDrive-redirected Documents, Run values, Startup shortcuts,
 // vendor tasks and services, the stock SCM WMI subscription). Nothing here runs PowerShell or touches the real home.
 import { describe, expect, test } from "bun:test";
+import { reset } from "./isolate";
 import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -467,7 +468,7 @@ describe("windows: background watch as a scheduled task", () => {
       const items = windowsItems({ tasks: [{ path: "\\vswarm\\", name: "watch", state: "Ready", actions: [action] }] }, tmp("home")).items;
       expect(items.filter((i) => !ownWatchTask(i))).toEqual([]);
     } finally {
-      delete process.env.VSWARM_SEC_DIR;
+      reset("VSWARM_SEC_DIR");
     }
   });
 });
@@ -480,7 +481,7 @@ describe("windows: ssh gate and install guard", () => {
   test("the gate runs through cmd.exe: spaces escaped with ^, no host name, % and quotes refused, no certificates", () => {
     const g = sshGate(["prod-*"], ["C:\\Users\\a b\\.vswarm\\bin\\vswarm.cmd"], { win: true });
     expect(g).toContain('Match originalhost prod-* !exec "C:\\Users\\a^ b\\.vswarm\\bin\\vswarm.cmd preflight --quiet"');
-    expect(g).toContain('ProxyCommand cmd.exe /d /c "echo vswarm: this machine did not pass preflight; run: vswarm preflight 1>&2 & exit 1"');
+    expect(g).toContain('ProxyCommand cmd.exe /d /c "echo vswarm: not connecting: this machine did not pass preflight; run: vswarm why 1>&2 & exit 1"');
     expect(g).not.toContain("%h");
     expect(cmdWord("C:\\a&b (x)\\v^.cmd")).toBe("C:\\a^&b^ ^(x^)\\v^^.cmd");
     expect(() => cmdWord("C:\\%TEMP%\\v.cmd")).toThrow("%");
@@ -494,7 +495,8 @@ describe("windows: ssh gate and install guard", () => {
     expect(b.startsWith(GUARD_START) && b.endsWith(GUARD_END)).toBe(true);
     expect(b).toContain("& 'C:\\Users\\a b\\.bun\\bin\\bun.exe' 'C:\\Users\\o''x\\.vswarm\\app\\src\\cli.ts' pkg $tool '--' @a");
     expect(b).toContain("function npm { __vswarm_go npm '^(install|i|");
-    expect(b).toContain("function yarn { __vswarm_go yarn '^(|install|");
+    // A bare yarn, and yarn with options only (yarn --frozen-lockfile), install the project: both are checked.
+    expect(b).toContain("function yarn { __vswarm_go yarn '^(|-.*|install|");
     expect(b).toContain("function npx { __vswarm_go npx '.*' $args }");
     expect(b).not.toContain("function brew");
   });
@@ -542,7 +544,7 @@ describe("windows: ssh gate and install guard", () => {
       setBlock(plain, block, GUARD_START, GUARD_END);
       expect(readKept(plain).enc).toBe("utf8bom");
     } finally {
-      delete process.env.VSWARM_SEC_DIR;
+      reset("VSWARM_SEC_DIR");
     }
   });
 
@@ -554,7 +556,7 @@ describe("windows: ssh gate and install guard", () => {
       expect(stripManaged("Set-Alias ll ls\r\n" + block.replace(/\n/g, "\r\n"))).toBe("Set-Alias ll ls\r\n");
       expect(stripManaged(block.replace("pkg $tool", "pkg $tool; iex $x"))).toContain("iex");
     } finally {
-      delete process.env.VSWARM_SEC_DIR;
+      reset("VSWARM_SEC_DIR");
     }
   });
 });

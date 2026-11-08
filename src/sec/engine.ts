@@ -27,6 +27,16 @@ export interface Check {
 export const STATE_RULE = "vswarm-state";
 
 /**
+ * Accepted under an id vswarm no longer gives: until 2.7 every SSH key without a passphrase was one finding,
+ * `secret:ssh:<a>,<b>`; a key accepted that way stays accepted now that each key is a finding of its own.
+ */
+export function acceptedBefore(accepted: Record<string, unknown>, id: string): boolean {
+  const key = /^secret:ssh:([^,]+)$/.exec(id)?.[1];
+  if (!key) return false;
+  return Object.keys(accepted).some((a) => a.startsWith("secret:ssh:") && a.includes(",") && a.slice("secret:ssh:".length).split(",").includes(key));
+}
+
+/**
  * `only` checks just those parts of the scan (see scan.ts), without credentials or the team's requirements, and does
  * not save the result: a gate must never reuse a verdict that looked at part of the machine.
  */
@@ -60,9 +70,14 @@ export async function check(ctx: Ctx, opt: { offline?: boolean; osvNewOnly?: boo
   const pinned = await loadPins();
   const drift = mcpDrift(scanned.items, pinned.pins);
   all.push(...drift.findings);
-  if (pinned.untrusted)
+  if (pinned.untrusted && !pinned.nokey)
     state("mcp-pins", "medium", "vswarm's record of MCP tool definitions was changed outside vswarm; it is ignored", [`mcp-tools.json ${pinned.untrusted}`],
       "A changed record could hide a server that changed its tools. Inspect them again: vswarm agents --inspect");
+  const { readPolicy } = await import("./policy");
+  const pol = await readPolicy();
+  if (pol.untrusted)
+    state("policy", "medium", "vswarm's WARN policy was changed outside vswarm; WARN is refused until it is set again", [`policy.json ${pol.untrusted}`],
+      "If you did not edit it, treat the machine as suspect (vswarm respond). Otherwise set it again: vswarm policy warn allow (or refuse)");
   const a = await readAccepted();
   // An accepted list that does not verify accepts nothing.
   const acceptedIds = a.untrusted ? {} : a.value ?? {};
@@ -78,7 +93,7 @@ export async function check(ctx: Ctx, opt: { offline?: boolean; osvNewOnly?: boo
       `If you did not edit it, treat the machine as suspect (vswarm respond). Then remove ${files.keystore()}; vswarm goes back to ${k.store.where}`);
   // A known-malicious package can never be accepted away.
   const findings = [...own, ...all]
-    .filter((f) => f.rule === "malicious" || f.rule === STATE_RULE || f.rule === "team-require" || (!acceptedIds[f.id] && !matches(team.policy?.accept, f.id)))
+    .filter((f) => f.rule === "malicious" || f.rule === STATE_RULE || f.rule === "team-require" || (!acceptedIds[f.id] && !acceptedBefore(acceptedIds, f.id) && !matches(team.policy?.accept, f.id)))
     .sort((x, y) => RANK[y.severity] - RANK[x.severity]);
   const notes: string[] = [];
   if (!baseline) notes.push("No baseline yet: only always-wrong things are checked. Run `vswarm baseline` on a machine you trust.");

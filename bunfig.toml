@@ -1,0 +1,3 @@
+[test]
+# Every test run keeps vswarm's state in a temp folder of its own (test/isolate.ts).
+preload = ["./test/isolate.ts"]

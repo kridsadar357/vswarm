@@ -16,7 +16,9 @@ import { readFileSync, writeFileSync } from "node:fs";
 import { delimiter, join } from "node:path";
 import { readText } from "./ctx";
 import { linesOf } from "./awsgate";
-import { loadCloudGates, note, ok, realEnv, saveCloudGates, warn, type CloudEnv } from "./cloudgate";
+import { loadCloudGates, note, ok, pruneBackup, realEnv, saveCloudGates, warn, type CloudEnv } from "./cloudgate";
+import { ownLaunchers } from "./collect/tools";
+import { backupCopy } from "./fix";
 
 export interface KubeHook {
   /** The kubeconfig vswarm changed: the first one that defines the user. */
@@ -363,7 +365,27 @@ export function kubeLocate(context: string, files: string[]): { user: string; fi
 }
 
 /** Each gated user and whether its gate is still in place. */
-export function kubeStatus(): { name: string; ok: boolean; detail: string }[] {
+/**
+ * Whether a plugin runs this vswarm's preflight first: its command (and the words before `preflight`) are exactly
+ * one of this vswarm's launchers. Another program that has "vswarm" in its name does not count.
+ */
+export function ownGatedExec(command: string | undefined, args: string[], launchers: string[][] = ownLaunchers()): boolean {
+  const i = args.indexOf("preflight");
+  if (i < 0 || args[i + 1] !== "--quiet" || args[i + 2] !== "--then" || args.length <= i + 3) return false;
+  const head = [command ?? "", ...args.slice(0, i)];
+  return launchers.some((l) => l.length === head.length && l.every((w, j) => w === head[j]));
+}
+
+/** The launcher words in an exec block as vswarm wrote it: the command and the args before `preflight`. */
+export function writtenHead(written: string): string[] | undefined {
+  const cmd = /^\s*command:\s*(.+?)\s*$/m.exec(written)?.[1];
+  if (cmd === undefined) return;
+  const items = [...written.matchAll(/^\s*- (.+?)\s*$/gm)].map((m) => scalar(m[1]) ?? m[1]);
+  const i = items.indexOf("preflight");
+  return i < 0 ? undefined : [scalar(cmd) ?? cmd, ...items.slice(0, i)];
+}
+
+export function kubeStatus(launchers?: string[][]): { name: string; ok: boolean; detail: string }[] {
   return Object.entries(loadCloudGates().kube).map(([name, h]) => {
     const t = readText(h.file);
     let u: KubeUser | undefined;
@@ -373,6 +395,9 @@ export function kubeStatus(): { name: string; ok: boolean; detail: string }[] {
     const x = u?.exec;
     const ctx = `context${h.for.length === 1 ? "" : "s"} ${h.for.join(", ")}`;
     if (!x || !gatedExec(x.command, x.args)) return { name, ok: false, detail: `${h.file}: user ${name} (${ctx}) was changed by hand; its exec plugin no longer runs vswarm preflight` };
+    // This vswarm's launcher, or exactly the one vswarm wrote there when it gated the user.
+    const mine = launchers ?? [...ownLaunchers(), ...[writtenHead(h.written)].filter((x): x is string[] => !!x)];
+    if (!ownGatedExec(x.command, x.args, mine)) return { name, ok: false, detail: `${h.file}: user ${name} (${ctx}) runs ${x.command} as its gate, which is not this vswarm (${mine.map((l) => l.join(" ")).join(" or ")})` };
     if (u!.alsoStatic) return { name, ok: false, detail: `user ${name} has a stored ${u!.alsoStatic} now, next to its exec plugin` };
     const now = yamlLines(t!).slice(x.start, x.end).map((l) => l.raw).join("");
     return { name, ok: true, detail: `${h.file} · ${ctx} · exec plugin runs preflight first${now === h.written ? "" : " · file rewritten since, still gated"}` };
@@ -395,6 +420,7 @@ export function kubeGateOff(user: string): { done: boolean; note?: string } {
   }
   delete state.kube[user];
   saveCloudGates(state);
+  pruneBackup(h.backup, h.file, state);
   return { done: true, note: n };
 }
 
@@ -445,11 +471,8 @@ export async function gateKube(args: string[], e?: CloudEnv): Promise<boolean> {
         continue;
       }
       const r = kubeGateText(text, user, e.launcher);
-      if (!backups.has(file)) {
-        const b = `${file}.bak-vswarm-${Date.now()}`;
-        writeFileSync(b, readFileSync(file), { mode: 0o600 });
-        backups.set(file, b);
-      }
+      // In ~/.vswarm/backups, not beside the kubeconfig; removed again with the last gate that needs it.
+      if (!backups.has(file)) backups.set(file, backupCopy(file, "kube"));
       writeFileSync(file, r.text);
       state.kube[user] = { file, backup: backups.get(file)!, for: [context], ...r.hook, at: Date.now() };
       saveCloudGates(state);

@@ -13,7 +13,7 @@ import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
-import { HOME, paths } from "../home";
+import { GLOBAL_TAG, HOME, paths } from "../home";
 import { exec, ls, powershell, readJson, readText, realCtx, run, type Ctx } from "./ctx";
 import { RC_FILES } from "./collect/system";
 import { TOOL_CONFIGS } from "./collect/tools";
@@ -243,12 +243,16 @@ export async function watchOn(launcher: string, everyMinutes = 60): Promise<{ do
   const notes: string[] = [];
   // How it works here, not something wrong.
   const info: string[] = [];
+  const first = mac() && !existsSync(plistPath(homedir()));
   for (const [path, text] of Object.entries(jobFiles(launcher, everyMinutes))) {
     mkdirSync(dirname(path), { recursive: true });
     writeFileSync(path, text);
     recordManagedFile(text);
     done.push(path);
   }
+  // Said once, the first time: macOS announces a new LaunchAgent, and people take it for something foreign.
+  if (first) info.push('macOS will show "Background Items Added: vswarm" (or a notice naming bun): that is this LaunchAgent, and it is expected · System Settings → General → Login Items & Extensions lists it');
+  if (process.env.VSWARM_HOME && !win()) info.push(`the job files are your user's${GLOBAL_TAG()}`);
   markSeen();
   if (win()) {
     const a = winTaskAction(launcher);
@@ -301,8 +305,18 @@ export const watchInstalled = (home = homedir()) => (win() ? existsSync(taskXml(
 /** Whether the real-time job is installed too (never on Windows). */
 export const realtimeInstalled = (home = homedir()) => !win() && REALTIME_FILES(home).every((f) => existsSync(f));
 
-export function watchState(): { on: boolean; realtime: boolean; state?: State } {
-  return { on: watchInstalled(), realtime: realtimeInstalled(), state: readJson<State>(stateFile()) };
+/**
+ * The background job as this vswarm sees it. The LaunchAgent, systemd units and scheduled task are the user's,
+ * whatever VSWARM_HOME says; one that runs another vswarm's launcher is not this one's, and `note` says so.
+ */
+export function watchState(home = homedir()): { on: boolean; realtime: boolean; state?: State; note?: string } {
+  const on = watchInstalled(home), realtime = realtimeInstalled(home);
+  const state = readJson<State>(stateFile());
+  if (!process.env.VSWARM_HOME || !on || win()) return { on, realtime, state };
+  const job = readText(mac() ? plistPath(home) : join(unitDir(home), "vswarm-watch.service")) ?? "";
+  const launcher = join(paths.bin(), "vswarm");
+  if (job.includes(launcher)) return { on, realtime, state, note: `the job files are your user's${GLOBAL_TAG()}` };
+  return { on: false, realtime: false, state, note: `a watch job is installed, but for another vswarm, not this VSWARM_HOME${GLOBAL_TAG()}` };
 }
 
 /** A desktop notification; silently nothing where there is no desktop. */
@@ -465,8 +479,8 @@ export async function watchCommand(action: string, opt: { every: number }) {
     return;
   }
   if (action === "on") {
-    const launcher = join(paths.bin(), win() ? "vswarm.cmd" : "vswarm");
-    if (!existsSync(launcher)) throw new Error("install the launcher first: vswarm install (or vswarm install --no-path to keep it inside VSWARM_HOME)");
+    // Written from this checkout when missing (a clone, never installed): watch on works without vswarm install.
+    const launcher = (await import("../setup")).ensureLauncher((t) => line(t));
     const every = opt.every;
     const r = await watchOn(launcher, every);
     for (const f of r.done) line(`${c.green("✔")} ${f.replace(homedir(), "~")}`);
@@ -483,6 +497,7 @@ export async function watchCommand(action: string, opt: { every: number }) {
   }
   if (action === "status") {
     const s = watchState();
+    if (s.note) line(c.dim(`  ${s.note}`));
     line(s.on ? `${c.green("●")} watch is on${s.realtime ? " · real-time" : win() ? " · on the schedule (Windows)" : ` · ${c.amber("real-time off")} (vswarm watch on adds it)`}` : `${c.dim("○")} watch is off · vswarm watch on`);
     if (s.state?.at) line(`  ${c.dim(`last check ${new Date(s.state.at).toLocaleString()} · ${s.state.verdict.toUpperCase()}${s.state.last ? ` · last notified: ${s.state.last}` : ""}`)}`);
     if (s.state?.quick) line(`  ${c.dim(`last real-time check ${new Date(s.state.quick.at).toLocaleString()} · ${s.state.quick.parts.join(", ")} · ${s.state.quick.ms} ms`)}`);

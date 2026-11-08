@@ -22,7 +22,8 @@
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { readText } from "./ctx";
-import { loadCloudGates, note, ok, realEnv, saveCloudGates, ungated, warn, type CloudEnv } from "./cloudgate";
+import { loadCloudGates, note, ok, pruneBackup, realEnv, saveCloudGates, ungated, warn, type CloudEnv } from "./cloudgate";
+import { backupCopy } from "./fix";
 
 export interface AwsHook {
   /** The config file vswarm changed (~/.aws/config or AWS_CONFIG_FILE). */
@@ -242,8 +243,14 @@ export function awsStatus(e: CloudEnv): { name: string; ok: boolean; detail: str
     const roles = h.for.filter((f) => f !== name);
     const covers = roles.length ? ` · used by ${roles.join(", ")}` : "";
     if (!s || !lines.slice(s.start, s.end).some((l) => bare(l) === bare(cp))) return { name, ok: false, detail: `${h.file}: [profile ${name}] was changed by hand; its credential_process no longer runs vswarm preflight` };
-    const k = find(creds, true, name);
-    if (k && keys(creds, k).has("aws_access_key_id")) return { name, ok: false, detail: `${credentials} has static keys for ${name} now, which aws uses before credential_process: the gate is bypassed` };
+    // Static keys added since, for the profile or for a role that goes through it, in either file: aws sends those
+    // before it would run credential_process, so the gate is bypassed.
+    for (const p of [name, ...roles]) {
+      const k = find(creds, true, p);
+      if (k && keys(creds, k).has("aws_access_key_id")) return { name, ok: false, detail: `${credentials} has static keys for ${p} now, which aws uses before credential_process: the gate is bypassed` };
+      const cs = find(lines, false, p);
+      if (cs && keys(lines, cs).has("aws_access_key_id")) return { name, ok: false, detail: `${h.file} has static keys in [profile ${p}] now, which aws uses before credential_process: the gate is bypassed` };
+    }
     if (h.kind === "sso" && !find(lines, false, companionOf(name))) return { name, ok: false, detail: `[profile ${companionOf(name)}] is gone: ${name} has no SSO sign-in to hand out` };
     const edited = textOf(lines, s) !== h.written ? " · section edited since, still gated" : "";
     return { name, ok: true, detail: `${h.file} · credential_process runs preflight first${h.kind === "sso" ? ` (SSO in [profile ${companionOf(name)}])` : ""}${covers}${edited}` };
@@ -267,6 +274,7 @@ export function awsGateOff(profile: string): { done: boolean; notes: string[] } 
   }
   delete state.aws[profile];
   saveCloudGates(state);
+  pruneBackup(h.backup, h.file, state);
   return { done: true, notes };
 }
 
@@ -324,10 +332,8 @@ export async function gateAws(args: string[], e?: CloudEnv): Promise<boolean> {
       } else warn(`aws profile ${plan.profile}: its credential_process already runs vswarm preflight, but not as vswarm wrote it; left as it is${via}`);
       continue;
     }
-    if (!backup) {
-      backup = `${config}.bak-vswarm-${Date.now()}`;
-      writeFileSync(backup, readFileSync(config), { mode: 0o600 });
-    }
+    // In ~/.vswarm/backups, not beside the file; removed again with the last gate that needs it.
+    if (!backup) backup = backupCopy(config, "aws");
     const r = awsGateText(text, plan, e.launcher, win);
     writeFileSync(config, r.text);
     state.aws[plan.profile] = { file: config, backup, for: [name], ...r.hook, at: Date.now() };

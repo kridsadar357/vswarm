@@ -205,6 +205,13 @@ export async function requirements(p: Policy, ctx: Ctx, baselineAt?: number): Pr
     const { watchInstalled } = await import("./schedule");
     if (!watchInstalled(ctx.home)) add("watch", "the background watch should be on", "vswarm watch on");
   }
+  // The install guard, as preflight and every gate see it (not only team status).
+  if (r.guard || r.guardIgnoreScripts) {
+    const { guardOn } = await import("../setup");
+    const { loadGuardConfig } = await import("./pkg");
+    if (!(await guardOn(ctx.home).catch(() => false))) add("guard", "the install guard should be on", r.guardIgnoreScripts ? "vswarm guard on --ignore-scripts" : "vswarm guard on");
+    else if (r.guardIgnoreScripts && !loadGuardConfig().ignoreScripts) add("guard-scripts", "installs should run with their scripts off", "vswarm guard on --ignore-scripts");
+  }
   const want = p.gate?.ssh ?? [];
   if (want.length) {
     const cfg = readText(join(ctx.home, ".ssh", "config")) ?? "";
@@ -284,14 +291,6 @@ export async function teamCommand(action: string, args: string[], opt: { fingerp
     const { realCtx } = await import("./ctx");
     const { loadBaseline } = await import("./store");
     const missing = await requirements(l.policy, realCtx(), (await loadBaseline())?.at);
-    const r = l.policy.require ?? {};
-    if (r.guard || r.guardIgnoreScripts) {
-      const { guardOn } = await import("../setup");
-      const { loadGuardConfig } = await import("./pkg");
-      if (!(await guardOn())) missing.push({ id: "team:guard", rule: "team-require", severity: "medium", title: "the install guard should be on", detail: [], fix: "vswarm guard on" });
-      else if (r.guardIgnoreScripts && !loadGuardConfig().ignoreScripts)
-        missing.push({ id: "team:guard-scripts", rule: "team-require", severity: "medium", title: "installs should run with their scripts off", detail: [], fix: "vswarm guard on --ignore-scripts" });
-    }
     if (!missing.length) line(`  ${c.green("✔")} this machine has what the policy requires`);
     for (const f of missing) line(`  ${c.amber("!")} ${f.title.replace(`Team ${l.policy.name}: `, "")} ${c.dim(`· ${f.fix}`)}`);
     return;

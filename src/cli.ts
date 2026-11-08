@@ -6,20 +6,20 @@ import { join } from "node:path";
 import { VERSION } from "./home";
 import { readJson, realCtx, redact } from "./sec/ctx";
 import { check, STATE_RULE } from "./sec/engine";
-import { c, finding as printFinding, line, summary } from "./sec/print";
+import { c, finding as printFinding, line, numbers, summary, toStdout } from "./sec/print";
 import { writeReport } from "./sec/report";
 import { respond } from "./sec/respond";
 import { forBaseline } from "./sec/scan";
 import { secrets as findSecrets } from "./sec/secrets";
 import { selftest } from "./sec/selftest";
 import { clearLock, files, loadAccepted, loadBaseline, loadLast, lockState, readLog, saveAccepted, saveBaseline } from "./sec/store";
-import { RANK } from "./sec/types";
-import { ask, banner, COMMANDS, completion, doctor, gate, guard, install, trust, uninstall, update, yes } from "./setup";
+import { RANK, type Finding } from "./sec/types";
+import { ask, banner, COMMANDS, completion, doctor, gate, guard, install, launcherPath, trust, uninstall, update, yes } from "./setup";
 import { pkgCheckCommand, pkgCommand } from "./sec/pkg";
 import { shot } from "./shot";
 import { canaryCommand } from "./sec/canary";
 import { homedir } from "node:os";
-import { verdictNow } from "./sec/gate";
+import { gateVerdict } from "./sec/gate";
 import { caCommand, certCommand } from "./sec/cert";
 import { cleanTries, listTries, tryIt, type Net } from "./sec/try";
 
@@ -70,12 +70,53 @@ function noMoreOptions(cmd: string, args: string[], known: string[] = []) {
 
 /** Commands that need a Unix shell, ssh config, launchd/systemd or a sandbox; Windows gets them in a later phase. */
 const NOT_ON_WINDOWS = new Set(["try", "ca", "cert", "canary", "shot", "agent"]);
+export const notOnWindows = (cmd: string) => `vswarm ${cmd} is not on Windows yet; use it inside WSL`;
+
+/**
+ * Whether this command line prints a report (to stdout, so it can be kept) rather than a gate's or an action's
+ * messages (stderr). preflight is a report only on its own: with --quiet or --then it is a gate.
+ */
+export function reportsTo(cmd: string, args: string[]): boolean {
+  if (["scan", "diff", "check", "secrets", "agents", "why", "policy"].includes(cmd)) return true;
+  if (cmd === "preflight") return !args.some((a) => a === "--quiet" || a === "-q" || a === "--then" || a === "--json");
+  if (cmd === "pkg") return args[0] === "check";
+  if (cmd === "accept" || cmd === "ok" || cmd === "try") return args.includes("--list");
+  if (["agent", "watch", "team", "ca"].includes(cmd)) return args[0] === undefined || ["status", "log"].includes(args[0]);
+  if (cmd === "canary") return args[0] === undefined || args[0] === "list";
+  return false;
+}
+
+/** Findings for JSON output: the facts a fix needs (meta) stay in vswarm's own files. */
+const forJson = (fs: Finding[]) => fs.map(({ meta: _m, ...f }) => f);
+
+/**
+ * One row of the help table: the command in a column as wide as the longest that fits, the description beside it,
+ * wrapped to the terminal; a command longer than the column gets its description on the next line instead.
+ */
+export function helpRow(cmd: string, desc: string, width = process.stdout.columns || 100, col = 44): { cmd: string; gap: string; desc: string[]; pad: string } {
+  const indent = 2 + col + 2;
+  const room = Math.max(30, width - indent);
+  const wrapped: string[] = [];
+  for (const w of desc.split(" ")) {
+    const last = wrapped.at(-1);
+    if (last !== undefined && `${last} ${w}`.length <= room) wrapped[wrapped.length - 1] = `${last} ${w}`;
+    else wrapped.push(w);
+  }
+  const pad = " ".repeat(indent);
+  // Too long for the column: the description starts on the next line, under the others.
+  if (cmd.length > col) return { cmd, gap: `\n${pad}`, desc: wrapped, pad };
+  return { cmd, gap: " ".repeat(col - cmd.length + 2), desc: wrapped, pad };
+}
 
 function usage() {
   banner("check your machine before it touches production");
-  const row = (cmd: string, desc: string) => console.log(`  ${c.cyan(cmd.padEnd(46))}${c.dim(desc)}`);
+  const row = (cmd: string, desc: string) => {
+    // Laid out first, coloured after: the escape codes must not count as width.
+    const r = helpRow(cmd, desc);
+    console.log(`  ${c.cyan(r.cmd)}${r.gap}${r.desc.map(c.dim).join(`\n${r.pad}`)}`);
+  };
   console.log(`  ${c.bold("check")}`);
-  row("vswarm scan [--all] [--json]", "everything that can run code, persist or hold access");
+  row("vswarm scan [--all] [--json]", "everything that can run code, persist or hold access (vswarm check is the same)");
   row("vswarm baseline", "record this machine as clean (after a scan you trust)");
   row("vswarm diff", "only what changed since the baseline");
   row("vswarm watch on", "check hourly, and within seconds when a login job, rc or agent config changes");
@@ -83,20 +124,24 @@ function usage() {
   row("vswarm agents", "MCP servers, hooks and permissions of AI coding agents");
   row("vswarm agents --inspect [--show] [--timeout s]", "start each MCP server sandboxed, read its tools for hidden instructions");
   console.log(`\n  ${c.bold("gate production access")}`);
-  row("vswarm preflight [--quiet] [--strict]", "PASS / WARN / BLOCK; exit 3 on BLOCK");
+  row("vswarm preflight [--quiet] [--strict] [--json]", "PASS / WARN / BLOCK; exit 3 on BLOCK, 2 on a WARN the policy refuses");
+  row("vswarm why", "each finding with the exact command to fix or accept it, and the policy");
+  row("vswarm ok <n…> · vswarm fix <n>", "accept finding n of the last check · fix it (shows what, asks first)");
+  row("vswarm policy [warn allow|refuse]", "what WARN does at every gate and in vswarm agent (default: allow)");
   row("vswarm preflight --then <command…>", "run the command only if this machine passes");
   row('vswarm gate ssh "prod-*" "*.internal"', "ssh to these hosts only after preflight passes");
+  row("vswarm gate status · gate ssh --prune", "what is gated, and whether each host still answers · drop the ones that do not");
   row("vswarm gate aws <profile…> · --off", "the profile's credential_process runs preflight first (SSO and credential_process)");
   row("vswarm gate kube <context…> · --off", "the context's exec plugin runs preflight first");
   row("vswarm ca init · ca server <account>", "a CA for short-lived SSH certificates");
   row("vswarm canary plant aws|dns|env · list", "decoy credentials that alert you when used");
   row('vswarm cert · gate ssh --cert "prod-*"', "15-minute certificate, only when preflight passes");
-  row("vswarm agent protect <key> · agent on", "an ssh agent that holds the key and signs only when this machine passes");
+  row("vswarm agent protect <key> · agent on", "an ssh agent that holds the key and signs only when this machine passes; protect tries the key on its hosts first");
   row('vswarm gate cmd psql "*.prod.internal"', "a reminder before commands with no credential hook (telnet, mysql, …)");
   row("vswarm gate gcloud <configuration> · gate az", "gcloud: the token command runs preflight; az: a wrapper");
-  row("vswarm accept <id…> | --all | --list", "mark reviewed findings as expected");
+  row("vswarm accept <n|id…> | --all | --list", "mark reviewed findings as expected (vswarm ok is the same)");
   console.log(`\n  ${c.bold("before you install")}`);
-  row("vswarm guard on [--ignore-scripts] [--sandbox] [--strict]", "npm, pip, brew … ask vswarm before installing");
+  row("vswarm guard on [--ignore-scripts] [--sandbox] [--strict]", "npm, pip, brew … ask vswarm before installing (--sandbox: macOS and Linux with bubblewrap)");
   row("vswarm pkg npm install <name>", "check by hand: malicious, look-alike, brand new, scripts");
   row("vswarm pkg check npm|pip <name>[@v] [--sandbox]", "read its contents and diff the version before, without installing");
   console.log(`\n  ${c.bold("run code you do not trust")}`);
@@ -130,9 +175,12 @@ async function main() {
   const tail = tailAt >= 0 ? args.splice(tailAt + 1) : [];
   // pkg hands everything after the tool name to that tool, `=` and all.
   if (cmd !== "pkg" && cmd !== "cmdgate") splitEquals(args);
+  // The report is what these print: to stdout, so it can be kept (vswarm scan > scan.txt). Gates, questions and
+  // progress stay on stderr. Decided before the options are taken off the list.
+  if (reportsTo(cmd, args)) toStdout();
   const offline = has(args, "--offline");
   const json = has(args, "--json");
-  if (process.platform === "win32" && NOT_ON_WINDOWS.has(cmd)) throw new Error(`vswarm ${cmd} is not on Windows yet ; use it inside WSL`);
+  if (process.platform === "win32" && NOT_ON_WINDOWS.has(cmd)) throw new Error(notOnWindows(cmd));
 
   switch (cmd) {
     case "scan":
@@ -141,22 +189,34 @@ async function main() {
       const all = has(args, "--all");
       noMoreOptions(cmd, args);
       const r = await check(realCtx(), { offline });
+      // Numbered as the check was saved, so vswarm ok <n> and fix <n> mean the finding shown with n.
+      const numbered = numbers(r.findings);
       if (cmd === "diff") r.findings = r.findings.filter((f) => f.rule !== "secret");
-      if (json) console.log(JSON.stringify({ verdict: r.verdict, findings: r.findings, notes: r.notes, items: r.scan.items.length, ms: r.ms }, null, 2));
-      else summary(r, { all, title: cmd });
+      const { readPolicy } = await import("./sec/policy");
+      if (json) console.log(JSON.stringify({ verdict: r.verdict, findings: forJson(r.findings), notes: r.notes, items: r.scan.items.length, ms: r.ms }, null, 2));
+      else summary(r, { all, title: cmd === "check" ? "scan" : cmd, numbered, policy: (await readPolicy()).warn });
       process.exitCode = r.verdict === "block" ? 3 : 0;
       return;
     }
 
     case "baseline": {
       const auto = has(args, "--yes", "-y");
+      const acceptHigh = has(args, "--accept-high");
       noMoreOptions(cmd, args);
       const r = await check(realCtx(), { offline });
       summary(r, { title: "baseline check" });
       // During an incident this is the step that records the cleaned machine; vswarm unlock needs it.
       if (r.lock) line(c.amber(`\n  Incident ${r.lock.incident} is open. Record a baseline only once the machine is clean (best: reinstalled) and credentials are rotated.`));
       const serious = r.findings.filter((f) => RANK[f.severity] >= RANK.high);
-      if (serious.length) line(c.red(`\n  ${serious.length} serious finding${serious.length > 1 ? "s" : ""} above. A baseline taken now treats them as normal.`));
+      // A baseline over HIGH or CRIT findings makes them normal from now on: never by default, never silently.
+      if (serious.length && !acceptHigh) {
+        line(c.red(`\n  ${serious.length} serious finding${serious.length > 1 ? "s" : ""}: a baseline taken now would treat ${serious.length > 1 ? "them" : "it"} as normal. Not recorded.`));
+        for (const f of serious) line(`    ${c.red(f.severity === "critical" ? "CRIT" : "HIGH")}  ${f.title}`);
+        line(c.dim("  Deal with them first (vswarm why; vswarm respond if you do not know them). If you know every one is yours: vswarm baseline --accept-high"));
+        process.exitCode = 3;
+        return;
+      }
+      if (serious.length) line(c.amber(`\n  ${serious.length} serious finding${serious.length > 1 ? "s" : ""} above will be treated as normal (--accept-high).`));
       const count = r.scan.items.filter((i) => i.kind !== "proc" && i.kind !== "conn").length;
       if (!auto) line("");
       const ok = auto || (await yes(`Record this machine (${count} items) as the clean baseline?`, !serious.length));
@@ -177,7 +237,8 @@ async function main() {
       noMoreOptions(cmd, args);
       const list = await agents(realCtx());
       if (doInspect) {
-        if (process.platform === "win32") throw new Error("vswarm agents --inspect is not on Windows yet (it needs the sandbox); use it inside WSL");
+        // No sandbox on Windows yet: --inspect starts the servers only when you say they may run as you (--no-sandbox).
+        if (process.platform === "win32" && inspectOpt.sandbox) throw new Error("vswarm agents --inspect needs the sandbox, which Windows does not have yet: use it inside WSL, or --inspect --no-sandbox to start each server as your agent would, with your access");
         const { inspectAll } = await import("./sec/mcp");
         process.exitCode = await inspectAll(list.filter((i) => i.kind === "mcp"), inspectOpt);
         return;
@@ -216,9 +277,21 @@ async function main() {
       flag(args, "--host"); // accepted for ssh's %h; the check is about this machine, whatever the host
       noMoreOptions(cmd, args);
       const then = args.includes("--then") ? tail : [];
-      const verdict = await verdictNow({ fresh, quiet, offline, maxAge });
-      if (verdict === "block" || (strict && verdict === "warn")) {
-        process.exitCode = verdict === "block" ? 3 : 2;
+      if (json && then.length) throw new Error("preflight --json prints the verdict on stdout, and --then hands stdout to the command; use one");
+      // --json: the same decision, as data on stdout; the human lines (a BLOCK's findings) stay on stderr.
+      const g = await gateVerdict({ fresh, quiet: quiet || json, offline, maxAge, strict });
+      if (json) {
+        const last = await loadLast();
+        const { lock } = await lockState();
+        console.log(JSON.stringify({
+          verdict: g.verdict, allowed: g.allowed, code: g.code, policy: { warn: g.policy.warn, set: g.policy.set, ...(g.policy.untrusted ? { untrusted: g.policy.untrusted } : {}) },
+          ...(lock ? { incident: lock.incident } : {}), at: last?.at, findings: forJson(last?.findings ?? []),
+        }, null, 2));
+        process.exitCode = g.code;
+        return;
+      }
+      if (!g.allowed) {
+        process.exitCode = g.code;
         return;
       }
       if (then.length) {
@@ -228,6 +301,66 @@ async function main() {
       return;
     }
 
+    case "why": {
+      // preflight --fresh, with the way out under each finding and the policy at the end.
+      noMoreOptions(cmd, args);
+      const { readPolicy, policyLine } = await import("./sec/policy");
+      const { fixFor } = await import("./sec/fix");
+      const pol = await readPolicy();
+      const r = await check(realCtx(), { offline });
+      const nums = numbers(r.findings);
+      line(`${c.violet("▼ vswarm why")} ${c.dim(`· a fresh check · ${r.scan.items.length} items · ${r.ms} ms`)}`);
+      if (r.lock) line(`  ${c.red("LOCKED")}  incident ${r.lock.incident} is open (${r.lock.reason}) ${c.dim("· after vswarm respond, on the cleaned machine: vswarm baseline, then vswarm unlock")}`);
+      const shown = r.findings.filter((f) => RANK[f.severity] >= RANK.medium);
+      if (!shown.length) line(`  ${c.green("✔")} nothing that counts against this machine`);
+      const self = existsSync(launcherPath()) ? "vswarm" : `${process.execPath} ${join(import.meta.dir, "cli.ts")}`;
+      for (const f of shown) {
+        const n = nums.get(f.id)!;
+        printFinding({ ...f, id: "" }, false, n);
+        const plan = fixFor(f, { n, self: [self] });
+        if (plan.run) line(`        ${c.cyan("fix")}     vswarm fix ${n}  ${c.dim(`(${plan.what}; shows it and asks first)`)}`);
+        else if (f.fix) line(`        ${c.cyan("fix")}     ${f.fix}`);
+        if (f.rule === "malicious" || f.rule === STATE_RULE) line(`        ${c.dim("accept  cannot be accepted")}`);
+        else if (f.rule === "team-require") line(`        ${c.dim("accept  required by the team policy; only fixing it clears it")}`);
+        else line(`        ${c.cyan("accept")}  vswarm ok ${n}  ${c.dim("(if you know it and it is expected)")}`);
+      }
+      const low = r.findings.length - shown.length;
+      if (low) line(c.dim(`  … ${low} low/info finding${low > 1 ? "s" : ""}, which do not count against the machine · vswarm scan --all`));
+      line(`\n${r.verdict === "block" ? c.red(c.bold("BLOCK")) : r.verdict === "warn" ? c.amber(c.bold("WARN")) : c.green(c.bold("PASS"))}${c.dim(r.verdict === "warn" ? (pol.warn === "allow" ? " · let through" : " · refused") : r.verdict === "block" ? " · refused" : " · let through")}`);
+      line(c.dim(`  ${policyLine(pol)}`));
+      const { listVaults, keyOverrides } = await import("./sec/agent");
+      if (process.platform !== "win32" && listVaults().length) for (const k of await keyOverrides()) line(c.dim(`  ${k}`));
+      process.exitCode = r.verdict === "block" ? 3 : r.verdict === "warn" && pol.warn === "refuse" ? 2 : 0;
+      return;
+    }
+
+    case "policy": {
+      const { readPolicy, savePolicy, policyLine } = await import("./sec/policy");
+      noMoreOptions(cmd, args);
+      const [what, value] = args;
+      if (what === undefined) return line(policyLine(await readPolicy()));
+      if (what !== "warn" || (value !== "allow" && value !== "refuse")) throw new Error("usage: vswarm policy [warn allow|refuse]");
+      await savePolicy(value);
+      line(`${c.green("✔")} ${policyLine(await readPolicy())}`);
+      if (value === "refuse") line(c.dim("  every gate (ssh, aws, kube, gcloud, cmd, az) and vswarm agent now refuse on WARN; protected keys with their own setting keep it (vswarm agent status)"));
+      return;
+    }
+
+    case "fix": {
+      noMoreOptions(cmd, args);
+      const n = Number(args[0]);
+      if (!Number.isInteger(n) || n < 1 || args.length !== 1) throw new Error("usage: vswarm fix <n>   (the number shown before a finding in vswarm scan, diff, preflight or why)");
+      const last = await loadLast();
+      if (!last) throw new Error("run vswarm scan first");
+      const f = last.findings[n - 1];
+      if (!f) throw new Error(`the last check has ${last.findings.length} finding${last.findings.length === 1 ? "" : "s"}; there is no ${n} · vswarm why`);
+      const { fixCommand } = await import("./sec/fix");
+      const self = existsSync(launcherPath()) ? [launcherPath()] : [process.execPath, join(import.meta.dir, "cli.ts")];
+      process.exitCode = await fixCommand(f, n, { self, yes });
+      return;
+    }
+
+    case "ok":
     case "accept": {
       const acc = await loadAccepted();
       const list = has(args, "--list");
@@ -249,8 +382,11 @@ async function main() {
       // Only ids from a check vswarm itself wrote: a forged last.json must not name what gets accepted.
       const last = await loadLast();
       if (!last) throw new Error("run vswarm scan first");
-      const pick = all ? last.findings : last.findings.filter((f) => args.includes(f.id));
-      if (!pick.length) throw new Error("name finding ids (shown under each finding), or --all");
+      // A number is the finding shown with it in the last check; an id is taken as it is.
+      const bad = args.filter((a) => /^\d+$/.test(a) && !last.findings[Number(a) - 1]);
+      if (bad.length) throw new Error(`no finding ${bad.join(", ")} in the last check (it has ${last.findings.length}) · vswarm why`);
+      const pick = all ? last.findings : last.findings.filter((f, i) => args.includes(f.id) || args.includes(String(i + 1)));
+      if (!pick.length) throw new Error("name findings by their number or id (shown with each finding), or --all");
       for (const f of pick) {
         if (f.rule === "malicious") {
           line(`  ${c.red("✖")} a known-malicious package cannot be accepted: ${f.title}`);
@@ -334,7 +470,7 @@ async function main() {
     }
 
     case "gate":
-      noMoreOptions(cmd, args, ["--cert", "--team", "--off", "--list", "--cred-file", "--wrapper"]);
+      noMoreOptions(cmd, args, ["--cert", "--team", "--off", "--list", "--cred-file", "--wrapper", "--prune", "--all"]);
       return gate(args);
 
     case "cmdgate": {
@@ -409,9 +545,12 @@ async function main() {
       const life = flag(args, "--life");
       const upTimeout = flag(args, "--upstream-timeout");
       // --strict is the default for protected keys since 2.7; it is still accepted, and `agent policy` takes it.
+      const port = flag(args, "--port");
       const opt = {
-        confirm: has(args, "--confirm"), allowWarn: has(args, "--allow-warn"), strict: has(args, "--strict"), global: has(args, "--global"), upstream: flag(args, "--upstream"),
-        upstreamTimeout: upTimeout === undefined ? undefined : Number(upTimeout), life: life === undefined ? undefined : Number(life), ask,
+        confirm: has(args, "--confirm"), allowWarn: has(args, "--allow-warn"), strict: has(args, "--strict"), inherit: has(args, "--inherit"), global: has(args, "--global"), upstream: flag(args, "--upstream"),
+        upstreamTimeout: upTimeout === undefined ? undefined : Number(upTimeout), life: life === undefined ? undefined : Number(life), ask, yes,
+        allowPasswords: has(args, "--allow-passwords"), allKeys: has(args, "--all-keys"), anyway: has(args, "--anyway"), noVerify: has(args, "--no-verify"),
+        host: flag(args, "--host"), hostname: flag(args, "--hostname"), port: port === undefined ? undefined : Number(port),
       };
       if (opt.life !== undefined && !(Number.isInteger(opt.life) && opt.life > 0)) throw new Error("--life takes a whole number of seconds");
       if (opt.upstreamTimeout !== undefined && !(Number.isInteger(opt.upstreamTimeout) && opt.upstreamTimeout > 0 && opt.upstreamTimeout <= 600)) throw new Error("--upstream-timeout takes a whole number of seconds, at most 600");
@@ -511,7 +650,7 @@ async function main() {
       if (!(await doctor())) process.exitCode = 1;
       return;
     case "install":
-      noMoreOptions(cmd, args, ["--yes", "-y", "--no-path"]);
+      noMoreOptions(cmd, args, ["--yes", "-y", "--no-path", "--path"]);
       return install(args);
     case "uninstall":
       noMoreOptions(cmd, args, ["--purge"]);
@@ -543,7 +682,9 @@ async function main() {
   }
 }
 
-main().catch((err) => {
-  console.error(`${c.red("✖")} ${err.message ?? err}`);
-  process.exit(4);
-});
+// Run as a program only: tests import helpRow and reportsTo from here.
+if (import.meta.main)
+  main().catch((err) => {
+    console.error(`${c.red("✖")} ${err.message ?? err}`);
+    process.exit(4);
+  });
