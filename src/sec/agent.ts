@@ -1100,12 +1100,22 @@ async function serviceOn(launcher: string) {
   }
   if (process.platform === "darwin") {
     const uid = process.getuid?.() ?? 501;
-    await run(["launchctl", "bootout", `gui/${uid}/${LABEL}`], 10_000);
-    await run(["launchctl", "bootstrap", `gui/${uid}`, plistPath()], 10_000);
+    const job = `gui/${uid}/${LABEL}`;
+    await run(["launchctl", "bootout", job], 10_000);
+    // bootout returns before launchd has let go of the job, and a bootstrap in that window fails (error 5) and
+    // leaves no agent at all: wait for the old job to go, and try the bootstrap again while it is still going.
+    for (let i = 0; i < 25 && (await run(["launchctl", "print", job], 5_000)) !== undefined; i++) await Bun.sleep(200);
+    for (let i = 0; i < 5 && (await run(["launchctl", "bootstrap", `gui/${uid}`, plistPath()], 10_000)) === undefined; i++) await Bun.sleep(500);
   } else {
     await run(["systemctl", "--user", "daemon-reload"], 10_000);
     await run(["systemctl", "--user", "enable", "--now", "vswarm-agent.service"], 10_000);
   }
+  // Report a start that did not happen, instead of a login refused later for "agent is not running".
+  for (let i = 0; i < 25; i++) {
+    if (await listIdentities(agentPaths.sock(), 1000)) return;
+    await Bun.sleep(200);
+  }
+  line(`${c.red("✖")} vswarm agent did not start ${c.dim(`· ${short(agentPaths.dir())}/agent.log says why · try again: vswarm agent on`)}`);
 }
 
 export async function agentOff(home = homedir()): Promise<string[]> {
