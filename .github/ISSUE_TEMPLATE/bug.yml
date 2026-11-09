@@ -1,0 +1,28 @@
+name: Bug
+description: Something does not work as the docs say.
+labels: [bug]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened, and what you expected
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      render: text
+  - type: textarea
+    id: doctor
+    attributes:
+      label: vswarm doctor
+      description: The output of `vswarm doctor`. Check it for anything private first.
+      render: text
+  - type: input
+    id: version
+    attributes:
+      label: vswarm version and OS
+      placeholder: "vswarm 2.9.0, Ubuntu 24.04"
+    validations:
+      required: true

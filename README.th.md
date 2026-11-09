@@ -1,6 +1,27 @@
-# vswarm (ภาษาไทย)
+<p align="center">
+  <img src="docs/logo.png" width="160" alt="vswarm: หนอนใส่หมวก">
+</p>
 
-**อย่าให้เครื่องเราเป็นทางเข้าของผู้โจมตี**
+<h1 align="center">vswarm</h1>
+
+<p align="center"><b>อย่าให้เครื่องเราเป็นทางเข้าของผู้โจมตี</b><br>
+ตรวจเครื่องตัวเองก่อนแตะ production</p>
+
+<p align="center">
+  <a href="https://github.com/kridsadar357/vswarm/actions/workflows/test.yml"><img src="https://github.com/kridsadar357/vswarm/actions/workflows/test.yml/badge.svg" alt="tests"></a>
+  <a href="https://github.com/kridsadar357/vswarm/releases/latest"><img src="https://img.shields.io/github/v/release/kridsadar357/vswarm?label=release" alt="latest release"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache--2.0-blue" alt="Apache-2.0"></a>
+  <img src="https://img.shields.io/badge/macOS%20%7C%20Linux%20%7C%20Windows-supported-555" alt="macOS, Linux, Windows">
+  <a href="SECURITY.md#signed-releases"><img src="https://img.shields.io/badge/releases-signed-2ea44f" alt="signed releases"></a>
+</p>
+
+<p align="center">
+  <a href="#ติดตั้ง">ติดตั้ง</a> ·
+  <a href="#ใช้งานจริงหน้าตาเป็นยังไง">ใช้งาน</a> ·
+  <a href="#เทียบกับเครื่องมืออื่น">เทียบ</a> ·
+  <a href="docs/guide.th.md">คู่มือ</a> ·
+  <a href="README.md">English</a>
+</p>
 
 server สมัยนี้ลง patch ครบ อยู่หลัง VPN เปิด MFA ทุกอย่าง แต่ก็ยังยอมให้ใครก็ได้ที่ถือ ssh key หรือ session AWS ของเราเข้าไป
 ผู้โจมตีเลยไม่เจาะ server แล้ว เขามาที่โน้ตบุ๊กของเราแทน:
@@ -14,8 +35,6 @@ server สมัยนี้ลง patch ครบ อยู่หลัง VPN 
 
 vswarm เป็นเครื่องมือ command line ฟรี รันในเครื่อง ใช้ได้บน macOS, Linux และ Windows มันเข้ามาในไม่กี่จังหวะที่เรื่องแบบนี้เกิด:
 ก่อนลง package, ก่อนรันโค้ดที่คนอื่นส่งมา, ก่อน AI tool ได้ server ตัวใหม่ และก่อนเครื่องจะได้เข้า production
-
-[English](README.md) · [คู่มือฉบับเต็ม](docs/guide.th.md) · [Full guide](docs/guide.md)
 
 ![vswarm try จับ repo สัมภาษณ์งานปลอมได้ แล้วไม่ยอมให้ ssh เข้า production](docs/poc.png)
 
@@ -202,6 +221,22 @@ detected 103/103 (100%) · benign look-alikes quiet 39/39 · false alarms 0
 และ 1.9% ของ npm โดยเตือนผิดราว 1% package อันตรายส่วนใหญ่ชื่อไม่คล้ายอะไรเลย guard จึงเช็ค OSV, อายุ, ยอดดาวน์โหลด และสิ่งที่ install
 script ทำด้วย รายละเอียดใน[คู่มือ](docs/guide.th.md#13-วัดผลการตรวจจับ-selftest)
 
+## ทำไมถึงมี vswarm
+
+vswarm เริ่มจากการเป็นกระดานใน terminal ไว้ดู AI agent ทำงาน ระหว่างทำมีคำถามหนึ่งวนกลับมาตลอด: server จะป้องกันแน่นแค่ไหน
+ก็ยังเชื่อคนที่ถือ key ถูกต้อง ถ้าเครื่องที่ถือ key มีของแปลกปลอม ก็ไม่มีอะไรบอกเจ้าของเครื่องก่อนเขาจะเชื่อมต่อเลย
+
+vswarm 2.0 จึงเปลี่ยนหน้าที่มาเป็นแบบนั้น: ตรวจเครื่องตัวเองก่อนแตะ production ส่วนที่เพิ่มหลังจากนั้นทั้งหมดมาจากช่องทางที่ผู้โจมตีใช้เข้าเครื่อง developer จริง
+
+เป้าหมายคือด่านตรวจที่คนทำงานคนเดียวหรือทีมเล็กจะใช้ต่อไปจริงๆ: คำสั่งเดียว พูดภาษาคน เงียบจนกว่าจะมีเรื่อง บอกตรงๆ ว่าทำอะไรไม่ได้
+เป็นโอเพนซอร์ส และไม่ส่งอะไรออกไป
+
+**จะไปทางไหนต่อ**
+
+- **ตอนนี้:** Windows ทำได้เท่า macOS และ Linux, หาผู้ทดสอบ beta บนเครื่องจริง, แปลไทยให้ครบ
+- **ถัดไป:** แอปบน menu bar สำหรับคนที่ไม่ได้อยู่ใน terminal, กรณีทดสอบจากการโจมตีจริงที่ชุมชนช่วยกันเพิ่ม
+- **ระยะยาว:** ให้ server ตัดสินใจจากผลตรวจที่มีลายเซ็นและ certificate อายุสั้น ทีมเล็กจะได้คุมการเข้าถึงตามสภาพเครื่องโดยไม่ต้องซื้อ platform
+
 ## ความเป็นส่วนตัว
 
 ทุกอย่างอยู่ในเครื่อง ใน `~/.vswarm` ไม่มีบัญชี ไม่มี telemetry สิ่งที่ส่งออกเน็ต: ชื่อและเวอร์ชันของ package ไปที่ `api.osv.dev`
@@ -261,4 +296,13 @@ bunx tsc --noEmit
 bun src/cli.ts selftest
 ```
 
-ดู [CONTRIBUTING.md](CONTRIBUTING.md) และ [SECURITY.md](SECURITY.md) สัญญาอนุญาต Apache-2.0
+## ร่วมพัฒนา
+
+สิ่งที่ช่วยได้มากที่สุดคือเทคนิคโจมตีที่เคยเห็นใช้กับ developer แปลงเป็นกรณีทดสอบใน selftest ดู [CONTRIBUTING.md](CONTRIBUTING.md)
+การเตือนผิดถือเป็นบั๊ก [แจ้งได้ที่นี่](https://github.com/kridsadar357/vswarm/issues/new/choose) ส่วนช่องโหว่ให้แจ้งแบบ
+[ส่วนตัว](SECURITY.md#reporting-a-vulnerability)
+
+## สัญญาอนุญาต
+
+Apache-2.0 ดู [LICENSE](LICENSE) และ [NOTICE](NOTICE) จะ fork ไปทำเวอร์ชันของตัวเองก็ได้ แต่ชื่อและโลโก้เป็นของโปรเจกต์ทางการ
+([TRADEMARKS.md](TRADEMARKS.md)) และ release ทางการมีลายเซ็นเสมอ

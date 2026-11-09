@@ -1,0 +1,28 @@
+name: Missed attack
+description: A technique used against developers that vswarm does not catch.
+labels: [detection]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Please do not attach live malware or working exploit code. Describe what it does and where it hides,
+        and link a public write-up if there is one. A harmless stand-in for `vswarm selftest` is the best way
+        to send it: see [CONTRIBUTING.md](https://github.com/kridsadar357/vswarm/blob/main/CONTRIBUTING.md#add-a-detection).
+  - type: textarea
+    id: technique
+    attributes:
+      label: What the attack does
+      description: How it gets in, where it persists, what it takes.
+    validations:
+      required: true
+  - type: input
+    id: writeup
+    attributes:
+      label: Public write-up
+      placeholder: https://…
+  - type: textarea
+    id: seen
+    attributes:
+      label: What vswarm said
+      description: The output of `vswarm scan` / `vswarm try` / the guard, if you ran it against a harmless stand-in.
+      render: text

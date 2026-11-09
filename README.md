@@ -1,6 +1,27 @@
-# vswarm
+<p align="center">
+  <img src="docs/logo.png" width="160" alt="vswarm: a worm in a helmet">
+</p>
 
-**Don't be the one who carries it in.**
+<h1 align="center">vswarm</h1>
+
+<p align="center"><b>Don't be the one who carries it in.</b><br>
+Check your own machine before it touches production.</p>
+
+<p align="center">
+  <a href="https://github.com/kridsadar357/vswarm/actions/workflows/test.yml"><img src="https://github.com/kridsadar357/vswarm/actions/workflows/test.yml/badge.svg" alt="tests"></a>
+  <a href="https://github.com/kridsadar357/vswarm/releases/latest"><img src="https://img.shields.io/github/v/release/kridsadar357/vswarm?label=release" alt="latest release"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache--2.0-blue" alt="Apache-2.0"></a>
+  <img src="https://img.shields.io/badge/macOS%20%7C%20Linux%20%7C%20Windows-supported-555" alt="macOS, Linux, Windows">
+  <a href="SECURITY.md#signed-releases"><img src="https://img.shields.io/badge/releases-signed-2ea44f" alt="signed releases"></a>
+</p>
+
+<p align="center">
+  <a href="#install">Install</a> ·
+  <a href="#what-using-it-looks-like">Use</a> ·
+  <a href="#how-it-compares">Compare</a> ·
+  <a href="docs/guide.md">Guide</a> ·
+  <a href="README.th.md">ภาษาไทย</a>
+</p>
 
 Your servers are patched, behind a VPN, with MFA on the console. They still let in anyone holding your ssh key or your
 AWS session. So attackers stopped going for the server. They go for your laptop:
@@ -15,8 +36,6 @@ None of this needs an exploit. You run it yourself, it runs as you, and what it 
 vswarm is a free, local command line tool for macOS, Linux and Windows. It steps in at the few moments where that
 happens: before an install, before running code you got from someone, before an AI tool gets a new server, and before
 your machine is let near production.
-
-[ภาษาไทย](README.th.md) · [Full guide](docs/guide.md) · [คู่มือภาษาไทย](docs/guide.th.md)
 
 ![vswarm try catching a fake job-interview repo, then refusing ssh to production](docs/poc.png)
 
@@ -211,6 +230,26 @@ The package-name check alone, measured against every malicious npm and PyPI name
 is why the guard also checks OSV, the package's age and downloads, and what its install script does. Details in
 [the guide](docs/guide.md#13-measure-detection-selftest).
 
+## Why this exists
+
+vswarm started as a terminal board for watching AI coding agents work. Building it kept raising the same question:
+a server can be hardened as much as you like, and it still trusts whoever holds a valid key. If the laptop holding
+that key has picked up something it shouldn't have, nothing tells its owner before they connect.
+
+So vswarm 2.0 changed its job to that: check your own machine before it touches production. Everything since
+follows the ways attackers actually get onto developer machines.
+
+The aim is a check that a solo developer or a small team will actually keep using: one command, plain words, quiet
+unless it matters, honest about its limits, open source, and nothing sent anywhere.
+
+**Where it is going**
+
+- **Now:** Windows on par with macOS and Linux, beta testers on real machines, the Thai translation complete.
+- **Next:** a menu-bar app for people who don't live in a terminal; more detection cases from real attacks,
+  contributed by the community.
+- **Later:** let servers decide from a signed verdict and short-lived certificates, so a small team gets
+  device-aware access without buying a platform.
+
 ## Privacy
 
 Everything stays on your machine, in `~/.vswarm`. No account, no telemetry. The network calls it makes: package names
@@ -292,4 +331,13 @@ bunx tsc --noEmit
 bun src/cli.ts selftest
 ```
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) and [SECURITY.md](SECURITY.md). Apache-2.0.
+## Contributing
+
+The most useful contribution is a technique you have seen used against developers, turned into a selftest case: see
+[CONTRIBUTING.md](CONTRIBUTING.md). False alarms are bugs; [report them](https://github.com/kridsadar357/vswarm/issues/new/choose).
+Security issues go through [private reporting](SECURITY.md#reporting-a-vulnerability).
+
+## License
+
+Apache-2.0, see [LICENSE](LICENSE) and [NOTICE](NOTICE). You can fork it and ship your own version; the name and
+the logo stay with the official project ([TRADEMARKS.md](TRADEMARKS.md)), and official releases are signed.
