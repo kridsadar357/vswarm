@@ -185,7 +185,8 @@ export async function runSetup(d: SetupDeps): Promise<number> {
     if (fix && /^f/.test(a)) {
       await d.fix(f, n);
       changed = true;
-    } else if (!no && /^(o|m|y)/.test(a)) {
+    // Only the letter the question offers: a stray "y" is not "this is mine".
+    } else if (!no && /^o/.test(a)) {
       if (await acceptFindings([f])) changed = true;
     } else off(t("cli.setup.skipped"));
   }

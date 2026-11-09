@@ -1147,6 +1147,10 @@ export async function agentDoctor(): Promise<{ level: "ok" | "warn" | "bad" | "o
   for (const { v } of vaults)
     if (named.has(`${v.path}.pub`))
       out.push({ level: "warn", text: `~/.ssh/config names ${short(v.path)}.pub as an IdentityFile`, detail: `ssh reads it as a private key when the agent is not used ("UNPROTECTED PRIVATE KEY FILE"); write IdentityFile ${short(v.path)}, and ssh finds the .pub beside it` });
+  // A block written by 2.7 or earlier: no check before each login, so a refusal still ends in a password prompt, and
+  // the running agent is the old code until agent on restarts it.
+  if (cfgText.includes(AGENT_START) && !cfgText.includes("agent check"))
+    out.push({ level: "warn", text: "the agent's block in ~/.ssh/config is from an older vswarm", detail: "vswarm agent on refreshes it and restarts the agent, so the shared WARN policy and the clear refusal apply" });
   for (const l of leftOnDisk()) out.push({ level: "warn", text: `a file is still at ${short(l.path)}, though that key is in the vault`, detail: `protect did not finish removing it · vswarm agent protect ${short(l.path)} finishes` });
   const audit = await readAudit();
   if (audit.notice) out.push({ level: "warn", text: "the agent's audit log started again", detail: audit.notice });
