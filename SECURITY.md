@@ -31,7 +31,18 @@ repository or of the maintainer's GitHub account cannot then ship code to instal
 Check the pinned key with `vswarm trust` and compare it with the fingerprint published here and on the release page:
 
 ```
-release key: SHA256:9WDeb6hMDIq0ry94Hs8t+qW4EegPT0uRkQ0v0w4jpng (ED25519), principal kridsadar357@gmail.com
+release key: SHA256:icVOFCVDfJzfuqeKqZRicZ5TtRp0jZ4g5qfuA9PUe2g (ED25519), principal kridsadar357@gmail.com
+```
+
+**Key change, 9 November 2026 (v2.8.0):** the first release key
+(`SHA256:9WDeb6hMDIq0ry94Hs8t+qW4EegPT0uRkQ0v0w4jpng`, which signed v2.6.0 to v2.7.1) was retired because its
+passphrase was lost. It never left the maintainer's machine and was not compromised, but it can no longer sign, so
+v2.8.0 is signed by the key above and not by the old one. A copy that pinned the old key refuses v2.8.0 by design.
+To move to the new key, check its fingerprint against this page and the release page, then:
+
+```
+curl -fsSL https://raw.githubusercontent.com/kridsadar357/vswarm/main/install.sh | sh   # installs v2.8.0 after checking its signature
+vswarm trust pin                                                                       # pins the key v2.8.0 lists
 ```
 
 Trust on first use is the weak point: an attacker in control of the repository before your first signed install
@@ -52,7 +63,7 @@ Bun release from GitHub and unpack it only when its SHA-256 matches the value wr
    creates the GitHub release; paste the fingerprint into the release notes as well.
 5. From that release on, installs and updates are signature-checked. Replacing the key later is a change to
    `trust/allowed_signers` in a release signed by the old key; users who pinned the old key see `vswarm update`
-   refuse anything else.
+   refuse anything else. If the old key is lost, sign with the new one and publish the re-pin steps, as above.
 
 ## What vswarm can and cannot protect against
 

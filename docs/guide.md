@@ -1196,7 +1196,7 @@ copies refuse the attacker's release. Older unsigned tags are skipped and named.
 
 ```bash
 vswarm update          # the newest correctly signed release
-vswarm trust           # the pinned key's fingerprint: SHA256:9WDeb6hMDIq0ry94Hs8t+qW4EegPT0uRkQ0v0w4jpng
+vswarm trust           # the pinned key's fingerprint: SHA256:icVOFCVDfJzfuqeKqZRicZ5TtRp0jZ4g5qfuA9PUe2g
 ```
 
 ![vswarm trust](img/trust.png)

@@ -346,7 +346,7 @@ ship code to installed copies without the signing key. `vswarm trust` shows what
 fingerprint in [SECURITY.md](SECURITY.md):
 
 ```
-SHA256:9WDeb6hMDIq0ry94Hs8t+qW4EegPT0uRkQ0v0w4jpng
+SHA256:icVOFCVDfJzfuqeKqZRicZ5TtRp0jZ4g5qfuA9PUe2g
 ```
 
 The installer itself does not pipe a script from the network into a shell for Bun: it uses the Bun on your PATH, or

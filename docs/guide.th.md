@@ -859,7 +859,7 @@ bun scripts/bench-names.ts --fixture  # เขียนตัวอย่าง�
 
 ```bash
 vswarm update          # release ล่าสุดที่เซ็นถูกต้อง
-vswarm trust           # fingerprint ของกุญแจที่เครื่องนี้ยอมรับ: SHA256:9WDeb6hMDIq0ry94Hs8t+qW4EegPT0uRkQ0v0w4jpng
+vswarm trust           # fingerprint ของกุญแจที่เครื่องนี้ยอมรับ: SHA256:icVOFCVDfJzfuqeKqZRicZ5TtRp0jZ4g5qfuA9PUe2g
 ```
 
 ![vswarm trust](img/trust.png)
