@@ -2,159 +2,263 @@
 
 **อย่าให้เครื่องเราเป็นทางเข้าของผู้โจมตี**
 
-server ทุกวันนี้แน่นหนาขึ้นมาก แต่ก็ยังเชื่อใครก็ตามที่ถือกุญแจถูกต้อง ผู้โจมตีจึงหันมาเล่นงาน developer กับโน้ตบุ๊กแทน
-เช่น npm package ชื่อเลียนแบบ, "แบบทดสอบเขียนโค้ด" จากผู้สัมภาษณ์งานปลอม, MCP server ที่แอบใส่คำสั่ง, Homebrew tap ที่ถูกดัดแปลง
-โค้ดอันตรายรันในนามของเรา ใช้สิ่งที่เครื่องจำไว้ แล้ว server ก็เห็นแค่ token ที่ถูกต้อง
+server สมัยนี้ลง patch ครบ อยู่หลัง VPN เปิด MFA ทุกอย่าง แต่ก็ยังยอมให้ใครก็ได้ที่ถือ ssh key หรือ session AWS ของเราเข้าไป
+ผู้โจมตีเลยไม่เจาะ server แล้ว เขามาที่โน้ตบุ๊กของเราแทน:
 
-vswarm จะเตือนและหยุดให้คิดก่อน ในจังหวะที่เสี่ยงจริงๆ ก่อนเรื่องจะใหญ่:
-- **ตอนลง package** (`guard`) เช็คชื่อก่อนติดตั้ง: ชื่อเลียนแบบ, package อันตรายที่มีรายงานแล้ว, เวอร์ชันที่เพิ่งออก, สคริปต์ติดตั้ง
-- **ตอนรันโค้ดของคนแปลกหน้า** (`try`) รันใน sandbox แล้วบอกว่ามันพยายามทำอะไร
-- **ตอนเพิ่ม AI agent หรือ MCP server** (`agents --inspect`) เปิดใน sandbox แล้วอ่านสิ่งที่โมเดลจะได้อ่าน
-- **ตอนจะเข้า production** (`preflight`, `gate`) ตรวจเครื่องก่อนที่ ssh, AWS หรือ kubectl จะได้ credential ไป
+- package ชื่อ `axois` ที่ตั้งใจให้พิมพ์ผิดจาก `axios`
+- "แบบทดสอบก่อนสัมภาษณ์" จาก recruiter ที่ไม่มีตัวตน
+- MCP server ที่ใน description ของ tool แอบสั่ง AI agent ให้ไปอ่าน `~/.ssh`
+- Homebrew tap ที่แถม binary มาอีกตัว
 
-ทุกคำเตือนบอกว่าเสี่ยงเพราะอะไร และควรทำอะไรแทน นอกจังหวะเหล่านี้มันจะไม่กวน เพราะเครื่องมือที่เตือนพร่ำเพรื่อสุดท้ายก็โดนถอนทิ้ง
-ใช้คำสั่งเดียวในเครื่อง ไม่ต้องมี server, MDM หรือ license รายหัว คนทำงานคนเดียวหรือทีมเล็กก็ใช้ได้จริง
+ไม่ต้องมีช่องโหว่อะไรเลย เรารันเอง มันรันในนามเรา และของที่มันเอาไป server ก็เห็นเป็นตัวเราทุกอย่าง
 
-vswarm **ไม่ใช่** EDR และไม่ใช่ระบบควบคุมสิทธิ์แบบปิดตาย ถ้ามี malware รันในนามเราอยู่แล้ว มันปิด vswarm ได้
-vswarm ทำงานเสริมกับ Socket, osquery, EDR และ device trust (Teleport, Kolide) ไม่ได้มาแทน
+vswarm เป็นเครื่องมือ command line ฟรี รันในเครื่อง ใช้ได้บน macOS, Linux และ Windows มันเข้ามาในไม่กี่จังหวะที่เรื่องแบบนี้เกิด:
+ก่อนลง package, ก่อนรันโค้ดที่คนอื่นส่งมา, ก่อน AI tool ได้ server ตัวใหม่ และก่อนเครื่องจะได้เข้า production
 
+[English](README.md) · [คู่มือฉบับเต็ม](docs/guide.th.md) · [Full guide](docs/guide.md)
 
-**คู่มือฉบับเต็มพร้อมภาพ:** [docs/guide.th.md](docs/guide.th.md) · [English](docs/guide.md)
+![vswarm try จับ repo สัมภาษณ์งานปลอมได้ แล้วไม่ยอมให้ ssh เข้า production](docs/poc.png)
+
+<sub>ผลจากการรันจริงกับ `test/fixtures/fake-interview` ซึ่งเป็นของจำลองที่ไม่มีอันตราย เลียนแบบ repo สัมภาษณ์งานปลอมที่ใช้โจมตีกันจริง</sub>
+
+## ไม่มี vswarm กับมี vswarm
+
+| เหตุการณ์ | ไม่มี vswarm | มี vswarm |
+| --- | --- | --- |
+| พิมพ์ `npm install axois` | install script ของมันรันในนามเราไปแล้ว ก่อนเราจะเห็นว่าพิมพ์ผิด | หยุดก่อนอะไรจะรัน: เป็น package อันตรายที่มีรายงานแล้ว และถามว่า "หมายถึง axios หรือเปล่า?" |
+| recruiter ส่ง repo มาให้ "ช่วยแก้บั๊ก" | แค่ `npm install` หรือเปิดโฟลเดอร์ใน VS Code ตัว loader ก็รันแล้ว key, รหัสผ่านใน browser และ wallet หลุดออกไป | `vswarm try` รันบนสำเนา เข้า home ไม่ได้ ออกเน็ตไม่ได้ แล้วบอกว่ามันพยายามเอาอะไรไปบ้าง |
+| เพิ่ม MCP server ใน Cursor หรือ Claude Code | description ของ tool ไปถึงโมเดลตรงๆ รวมถึงคำสั่งที่ซ่อนไว้ด้วย | เปิดใน sandbox ก่อน คำสั่งที่ซ่อนไว้ถูกแสดงให้เห็น และจำ tool ไว้ ถ้าเปลี่ยนทีหลังจะรู้ |
+| มีอะไรฝัง login job ไว้เมื่ออาทิตย์ก่อน | ไม่มีใครบอก มันรันทุกครั้งที่ login | watch เห็นภายในไม่กี่วินาทีหลังไฟล์เปลี่ยน และ `vswarm diff` ชี้ให้ดูเทียบกับตอนที่เครื่องยังสะอาด |
+| `ssh prod-db` จากเครื่องนั้น | server เห็น key ถูกต้องก็ให้เข้า | ถูกปฏิเสธตั้งแต่ในเครื่อง พร้อมบอกเหตุผล ถ้าใช้ `vswarm agent` ตัว key เองจะไม่ยอมเซ็น ต่อให้ใช้ `ssh -F /dev/null` ก็ตาม |
+| รู้ตัวว่าโดนแล้ว | เดาเอาว่าต้องเปลี่ยนรหัสอะไรบ้าง หลักฐานโดนทับไประหว่างที่ค้น | `vswarm respond` ล็อกการเข้า production เก็บหลักฐานพร้อม hash และให้รายการสิ่งที่ต้องเปลี่ยน |
+
+## ควรใช้ไหม?
+
+น่าจะควร ถ้า:
+
+- โน้ตบุ๊กเข้า production ได้ (ssh, AWS, kubectl, database)
+- ลง package จาก npm, pip หรือ brew แทบทุกวัน
+- ใช้ AI coding agent กับ MCP server
+- รับ repo จากคนที่ไม่รู้จัก เช่น ตอนหางาน, รับงาน freelance, ทำ open source
+
+อาจไม่จำเป็น ถ้า:
+
+- บริษัทมี EDR และ device trust ผูกกับ identity provider อยู่แล้ว และไม่เคยเก็บ credential production แบบอายุยาวไว้ในเครื่องเลย
+  แบบนั้นป้องกันได้ดีกว่าเครื่องมือที่รันในเครื่องอยู่แล้ว
+- เครื่องนั้นไม่ได้แตะอะไรที่เสียไปแล้วจะเดือดร้อน
+
+vswarm ไม่ใช่ antivirus และไม่ใช่ EDR ถ้ามี malware รันในนามเราอยู่แล้ว มันปิด vswarm ได้ ซึ่งเขียนไว้ตรงๆ ใน
+[SECURITY.md](SECURITY.md#what-vswarm-can-and-cannot-protect-against) สิ่งที่ vswarm ทำได้ดีคือขั้นก่อนหน้านั้น:
+กันไม่ให้ของไม่ดีเข้ามา และไม่ให้เครื่องที่ดูผิดปกติได้ key ของ production ไป
 
 ## ติดตั้ง
 
-ใช้ได้ทั้ง macOS และ Linux ต้องมี git และ [Bun](https://bun.sh) (ตัวติดตั้งใช้ Bun ที่มีอยู่ หรือลง Bun รุ่นที่กำหนดไว้หลังตรวจ SHA-256) บน Linux ถ้าจะใช้ `vswarm try` ต้องลง bubblewrap และ strace ด้วย (`sudo apt install bubblewrap strace`) ส่วน Windows 10/11 มีรุ่นทดลองที่ตรวจเครื่องได้ (Run key, task, service, WMI, PowerShell profile …) พร้อม watch, ssh gate, install guard และ ssh agent ส่วน `try` รันใน AppContainer ซึ่งโปรเจกต์ Node ที่มีสคริปต์ติดตั้งควรลองใน WSL แทน ดู[Windows (รุ่นทดลอง)](docs/guide.th.md#windows-รุ่นทดลอง)
-
-บน Linux vswarm ตรวจ systemd unit, XDG autostart, `/etc/ld.so.preload` และ process จาก `/proc`
-- `vswarm try` ใช้ bubblewrap: ซ่อน home ทุกคน ซ่อน `/run` (socket ของ Docker, D-Bus, keyring) ระบบเป็นอ่านอย่างเดียว และมี network กับ pid ของตัวเอง
-- strace บันทึกทุกไฟล์ที่โค้ดพยายามเปิด และทุกที่อยู่ที่พยายามต่อออกไป
-- Ubuntu 24.04 จำกัด user namespace: `sudo sysctl kernel.apparmor_restrict_unprivileged_userns=0`
-
 ```bash
+# macOS / Linux
 curl -fsSL https://raw.githubusercontent.com/kridsadar357/vswarm/main/install.sh | sh
+
+# Windows 10/11 (PowerShell)
+powershell -ExecutionPolicy Bypass -c "irm https://raw.githubusercontent.com/kridsadar357/vswarm/main/install.ps1 | iex"
 ```
 
-จากนั้นมีขั้นเดียว เปิด terminal ใหม่แล้วสั่ง:
+แล้วเปิด terminal ใหม่ สั่ง:
 
 ```bash
 vswarm setup
+vswarm lang th      # ถ้าอยากให้ตอบเป็นภาษาไทย
 ```
 
-ตั้งค่าทีละขั้น ถามทีละคำถาม: บอกก่อนว่าจะทำอะไร ตรวจเครื่องแล้วอธิบายแต่ละเรื่องในประโยคเดียว (แก้ให้ หรือยืนยันว่าเป็นของคุณ)
-บันทึกจุดอ้างอิง (baseline) เสนอให้เปิดการเฝ้าดูเบื้องหลัง การตรวจก่อนติดตั้ง package และการตรวจ tool server ของ AI
-ถามว่าเครื่องไหนใน `~/.ssh/config` เป็น production แล้วตั้งด่าน (gate) ไว้ให้ เสนอให้ย้ายกุญแจของเครื่องเหล่านั้นเข้าตู้เซฟ
-(`agent protect` ซึ่งจะลองกุญแจกับเซิร์ฟเวอร์ก่อนเสมอ) และถามคำถามเรื่องนโยบายด้วยภาษาง่ายๆ ทุกขั้นข้ามได้
-สั่งซ้ำเมื่อไรก็เสนอเฉพาะสิ่งที่ยังขาด `--yes` ใช้คำตอบที่แนะนำ (ไม่เลือกเครื่อง production และไม่ย้ายกุญแจแทนคุณ)
-ถ้าไม่มี terminal ให้ถาม จะแสดงแผนอย่างเดียวโดยไม่เปลี่ยนอะไร บน macOS เมื่อเปิดการเฝ้าดู macOS จะขึ้นข้อความ
-*Background Items Added: vswarm* ซึ่งเป็นเรื่องปกติ
+setup จะตรวจเครื่องแล้วอธิบายทีละเรื่องสั้นๆ ให้เราแก้ หรือบอกว่า "อันนี้ของเราเอง" จากนั้นถามว่า host ไหนใน ssh config เป็น production
+แล้วเสนอให้เปิด watch กับ install guard ทุกขั้นข้ามได้ สั่งซ้ำเมื่อไหร่ก็จะเสนอแค่ส่วนที่ยังขาด
 
-![vswarm setup ภาษาไทย](docs/img/setup-th.png)
+ต้องมี git ตัวติดตั้งใช้ [Bun](https://bun.sh) ที่มีอยู่ หรือลงรุ่นที่กำหนดไว้หลังตรวจ SHA-256 บน Linux ถ้าจะใช้ `vswarm try`
+ต้องลง `sudo apt install bubblewrap strace` ด้วย
 
-ภาษา: `vswarm lang th` ให้ทั้ง terminal และ `vswarm ui` เป็นภาษาไทย (`en` อังกฤษ, `auto` ตามภาษาของระบบ)
-ถ้าจะเปลี่ยนแค่ครั้งเดียวใช้ `VSWARM_LANG=th vswarm …` ชื่อคำสั่ง ตัวเลือก และ path ยังเป็นภาษาอังกฤษเหมือนเดิม
-ส่วน `--json` ยังเป็นภาษาอังกฤษเสมอ เพื่อให้สคริปต์ใช้ต่อได้
+## ใช้งานจริงหน้าตาเป็นยังไง
 
-ผลตรวจทุกคำสั่งใช้คำชุดเดียวกัน: **● ปลอดภัย**, **● ควรดูสักนิด** หรือ **● หยุดก่อน** ตามด้วยประโยคสั้นๆ
-("ไม่พบสิ่งอันตราย มี 1 เรื่องที่ควรดู") แล้วแบ่งเรื่องที่เจอเป็น *ต้องจัดการ*, *ควรดู* และ *แค่ให้รู้*
-แต่ละเรื่องมีหัวข้อภาษาง่ายๆ เหตุผลหนึ่งประโยค และคำสั่งเดียวที่ควรรัน (`vswarm fix 2`, `vswarm ok 2`)
-ส่วนรายละเอียดทางเทคนิคดูได้ด้วย `--details` ป้าย PASS / WARN / BLOCK ยังอยู่ข้างๆ ให้สคริปต์และเอกสารใช้ต่อได้
+### วันปกติ: แทบไม่รู้สึกว่ามันอยู่
+
+setup เสร็จแล้วก็ไม่ต้องสั่งอะไร watch ตรวจอยู่เบื้องหลัง guard ดักหน้า package manager และ gate ดักหน้า ssh ส่วน `npm run dev`
+หรือ `pip list` ไม่ได้ปลุก vswarm ขึ้นมาเลย มันจะโผล่มาเฉพาะตอนมีอะไรเปลี่ยน บอกเป็นภาษาคน พร้อมคำสั่งเดียวที่ต้องใช้:
+
+```bash
+vswarm scan        # ปลอดภัย, ควรดูสักนิด หรือ หยุดก่อน ตามด้วยรายการที่มีเลขกำกับ
+vswarm why 1       # ข้อ 1 สำคัญยังไง และมีทางไหนให้เลือกบ้าง
+vswarm ok 1        # "ข้อนี้ของเราเอง"
+```
 
 ![vswarm scan ภาษาไทย](docs/img/scan-th.png)
 
-## ใช้งาน
+ถ้าเตือนผิดเราถือเป็นบั๊ก เพราะเครื่องมือที่เตือนพร่ำเพรื่อสุดท้ายก็โดนถอนทิ้ง
+
+### ตอนลง package
+
+เปิด `vswarm guard on` แล้ว การติดตั้งผ่าน npm, npx, pnpm, yarn, bun, pip, uv, pipx และ brew จะถูกตรวจก่อนที่ install script
+ตัวไหนจะได้รัน: เวอร์ชันที่มีรายงานว่าอันตราย ([OSV](https://osv.dev)), ชื่อที่คล้ายของดัง, package ใหม่เอี่ยมที่มี install script,
+เวอร์ชันที่เพิ่งออกใน 48 ชั่วโมง และสิ่งที่ install script ทำจริงๆ
+
+![npm install axois ถูกหยุด: มีรายงานว่าอันตราย และชื่อคล้าย axios](docs/img/guard-npm.png)
+
+ข้ามครั้งเดียวด้วย `command npm …` อยากเช็คโดยไม่ติดตั้ง: `vswarm pkg check npm <ชื่อ>`
+
+### ตอนรันโค้ดที่คนอื่นส่งมา
 
 ```bash
-vswarm setup                         # เริ่มที่นี่: ตั้งค่าทุกอย่างทีละขั้น
-vswarm lang th                       # ภาษาไทยทั้งใน terminal และหน้าภาพรวม (th, en หรือ auto)
-vswarm why [n]                       # ทุกเรื่องที่เจอ: ทำไมถึงสำคัญ และคำสั่งที่ใช้แก้หรือยืนยันว่าเป็นของคุณ
-vswarm fix 2 · vswarm ok 3           # แก้เรื่องที่ 2 (แสดงก่อนแล้วถาม) · ยืนยันว่าเรื่องที่ 3 เป็นของคุณ
-vswarm scan                          # ตรวจตอนนี้
-vswarm ui                            # หน้าสรุปแบบอ่านง่าย ภาษาไทย: ปลอดภัย / ควรดูสักนิด / หยุดก่อน (เครื่องนี้เท่านั้น)
-vswarm baseline                      # บนเครื่องที่ไว้ใจ: บันทึกว่านี่คือสภาพสะอาด
-vswarm diff                          # ทีหลัง: อะไรเปลี่ยนไปจาก baseline
-vswarm secrets                       # credential อายุยาวในเครื่อง (ไม่แสดงค่า)
-vswarm gate ssh "prod-*"             # ssh เข้า prod-* ได้เฉพาะตอนเครื่องผ่าน
-vswarm gate aws prod-sso             # profile นี้ของ aws ได้ credential เฉพาะตอนเครื่องผ่าน (เก็บไฟล์ backup ไว้ --off คืนให้ตามเดิม)
-vswarm gate kube prod                # context นี้ของ kubectl ขอ token ได้เฉพาะตอนเครื่องผ่าน
-vswarm agent protect ~/.ssh/prod_key && vswarm agent on   # ย้ายกุญแจเข้า ssh agent ที่เซ็นให้เฉพาะตอนเครื่องผ่าน อ้อม config ก็ใช้กุญแจไม่ได้
-vswarm gate gcloud prod --cred-file wif.json   # gcloud แบบ workload identity: คำสั่งขอ token รัน preflight ก่อน
-vswarm gate cmd psql "*.prod.internal"         # ตัวเตือนก่อน psql, mysql, telnet … (ข้ามได้ด้วย command psql ไม่ใช่ตัวควบคุม)
-vswarm respond                       # เจอของผิดปกติ: ล็อก เก็บหลักฐาน เปลี่ยน credential กักกัน รายงาน
-vswarm selftest                      # ฝังภัยจำลอง 103 แบบใน home ปลอม วัดว่าจับได้กี่ข้อและแจ้งผิดกี่ครั้ง
-vswarm watch on                      # ตรวจทุกชั่วโมง และภายในไม่กี่วินาทีเมื่อ login job, rc หรือ config ของ agent เปลี่ยน
-vswarm try ./assignment -- npm install   # รันโค้ดที่ไม่ไว้ใจใน sandbox แล้วรายงานว่ามันพยายามทำอะไร
-vswarm ca init && vswarm gate ssh --cert "prod-*"   # ใบรับรอง ssh อายุ 15 นาที ออกให้เมื่อเครื่องผ่านเท่านั้น
-vswarm canary plant aws                  # วาง credential ล่อ ถ้ามีคนใช้จะได้ e-mail เตือน
-vswarm guard on                          # npm, pip, brew … ถาม vswarm ก่อนติดตั้งทุกครั้ง
+vswarm try ./assignment -- npm install
+vswarm try https://github.com/someone/repo        # ไม่ใส่คำสั่ง: เปิด shell ใน sandbox ให้
+vswarm try ./repo --net registries -- npm ci      # ให้ออกได้แค่ registry ของ package
 ```
 
-### vswarm agents: ตรวจ AI agent และ MCP
+`try` อ่านโค้ดก่อนว่ามีอะไรตั้งไว้ให้รันเอง (install script, task ของ VS Code ที่รันทันทีที่เปิดโฟลเดอร์, loader ที่ซ่อนใน
+`tailwind.config.js`) แล้วค่อยรันบนสำเนาใน sandbox ของระบบปฏิบัติการ: ไม่มี home, ไม่มี keychain, `HOME` ปลอม,
+ออกเน็ตได้แค่ผ่าน proxy ที่จดทุก host ไว้ จบแล้วจะได้รายการว่ามันพยายามทำอะไร
 
-AI agent รันโค้ดด้วยสิทธิ์ของคุณ และการตั้งค่าเป็นตัวกำหนดว่ามันเริ่มอะไรเองได้บ้าง vswarm ตรวจ:
-- MCP server ของ Claude Code (ทุก profile), Claude Desktop, Cursor, Windsurf, VS Code, Gemini CLI และ Codex
-- hook และ `statusLine` ของ Claude Code, โหมด permission และ plugin
+![vswarm try กับงานปลอม: พยายามอ่าน SSH key, รหัสผ่านใน browser, AWS credential และฝัง login job](docs/img/try-bad.png)
 
-ระดับความรุนแรง:
-- **สูง (หยุด):** MCP หรือ hook ที่ดาวน์โหลดแล้วรัน หรือรันจากโฟลเดอร์ชั่วคราว, MCP ที่ใช้ชื่อ package เลียนแบบ
-- **กลาง (เตือน):** MCP server หรือ hook ที่เพิ่มหรือเปลี่ยนตั้งแต่ baseline, agent ได้สิทธิ์กว้างขึ้น, MCP ที่ต่อแบบ http ไม่เข้ารหัส, token ที่วางไว้ตรงๆ ใน config
+sandbox ที่ใช้: Seatbelt บน macOS, bubblewrap กับ strace บน Linux, AppContainer บน Windows ส่วนโปรเจกต์ Node ที่มี install script
+บน Windows ลองใน WSL จะเห็นครบกว่า ([เหตุผล](docs/guide.th.md#windows-รุ่นทดลอง))
 
-ดูรายการทั้งหมดด้วย `vswarm agents`
+### ตอนเพิ่ม AI tool server
 
-### vswarm guard: ตรวจ package ก่อนติดตั้ง
+`vswarm agents` แสดง MCP server, hook และโหมดสิทธิ์ของ Claude Code, Claude Desktop, Cursor, Windsurf, VS Code, Gemini CLI และ Codex
+ส่วน `--inspect` จะเปิดแต่ละ server ใน sandbox แล้วอ่านสิ่งที่โมเดลจะได้อ่าน:
 
-`vswarm guard on` ครอบคำสั่ง npm, npx, pnpm, yarn, bun, bunx, pip, pip3, uv, uvx, pipx และ brew ใน shell
-ตอนสั่งติดตั้ง vswarm จะตรวจก่อนที่สคริปต์ติดตั้งจะได้รัน ส่วนคำสั่งอื่น เช่น `npm run dev` ไม่ผ่าน vswarm เลย
+![agents --inspect เจอ description ที่สั่งให้โมเดลอ่าน ~/.ssh/id_rsa แล้วห้ามบอกผู้ใช้](docs/img/agents-inspect.png)
 
-- **หยุดและถามก่อน:** package ที่มีรายงานว่าอันตราย (OSV `MAL-`), ชื่อเลียนแบบ package ดัง (axois, reqeusts), ชื่อที่ไม่มีจริงแต่คล้ายของดัง, package ที่เพิ่งสร้างไม่ถึง 30 วัน มีคนโหลดน้อย และมีสคริปต์ติดตั้ง
-- **เตือนแล้วไปต่อ:** เวอร์ชันที่เพิ่งออกไม่ถึง 48 ชั่วโมง (ช่วงที่ release ถูกแฮ็กมักโดนดึงออก), ติดตั้งจาก git URL หรือ tarball, Homebrew tap ของบุคคลที่สาม
-- `npm install` เปล่าๆ จะเช็คทุกเวอร์ชันใน lockfile กับ OSV
-- ข้าม vswarm ครั้งเดียวด้วย `command npm …` ปิดด้วย `vswarm guard off` ตรวจเองด้วย `vswarm pkg npm install <ชื่อ>`
-- **เปิดดูข้างใน package** ก่อนติดตั้ง: โค้ดตอนติดตั้งที่ถอดรหัสแล้วรัน อ่าน credential ต่อเน็ต หรือฝังตัว และสิ่งที่เพิ่งโผล่มาเมื่อเทียบกับเวอร์ชันก่อน อ่านตัวเดียวโดยไม่ติดตั้งด้วย `vswarm pkg check npm <ชื่อ>`
+นิยามของ tool ถูกจำไว้ ถ้า server เปลี่ยนทีหลัง (rug pull) scan ครั้งถัดไปจะบอก
 
-### vswarm try: รันโค้ดที่ไม่ไว้ใจ
+### ตอนจะเข้า production
 
-ใช้กับ "แบบทดสอบ" จากการสัมภาษณ์งาน, repo ที่คนแปลกหน้าส่งมา หรือ installer
-
-- **ก่อนรัน:** อ่านโค้ดหาสิ่งที่ตั้งให้รันเอง เช่น install script, VS Code task ที่รันทันทีเมื่อเปิดโฟลเดอร์, ตัวโหลดที่ซ่อนใน config file, `eval(atob(…))`
-- **ระหว่างรัน:** รันบนสำเนาใน sandbox ของ macOS
-  - อ่าน home, keychain และ clipboard ไม่ได้
-  - ใช้ HOME ปลอม ไม่ได้รับ token ของคุณ
-  - ออกเน็ตไม่ได้ ทุก host ที่พยายามติดต่อถูกบันทึกไว้
-- **รายงาน:** บอกว่ามันพยายามทำอะไร เช่น อ่าน `~/.ssh`, รหัสผ่านใน browser หรือ wallet, ฝัง login job, ต่อออกไปหา IP ภายนอก
-
+```bash
+vswarm gate ssh "prod-*"                  # ssh ไป host เหล่านี้ต้องผ่านการตรวจเครื่องก่อน
+vswarm agent protect ~/.ssh/prod_key      # ย้าย key เข้า agent ที่ยอมเซ็นเฉพาะตอนเครื่องผ่าน
+vswarm gate aws prod-admin                # แบบเดียวกันสำหรับ AWS profile
+vswarm gate kube prod                     # และ kube context
 ```
 
-ผล preflight: **PASS** ไปต่อ · **WARN** ไปต่อได้แต่ควรแก้ · **BLOCK** ไม่ปล่อย credential
+ตรวจครั้งหนึ่งราว 0.2 วินาที และใช้ผลซ้ำได้ 2 นาที เลยไม่รู้สึกช้า ถ้าเครื่องไม่ผ่าน:
 
-### หน้าสรุป: vswarm ui
+![vswarm preflight ภาษาไทย: หยุดก่อน](docs/img/preflight-block-th.png)
 
-คำตอบตัวใหญ่ว่า **ปลอดภัย** **ควรดูสักนิด** หรือ **หยุดก่อน** พร้อมเหตุผล การ์ดของแต่ละเรื่องบอกว่าทำไมถึงสำคัญและควรทำอะไร
-ความเคลื่อนไหวล่าสุด และสถานะการป้องกันแต่ละด้าน ทำมาให้คนที่ไม่ได้อ่านผลด้านความปลอดภัยเป็นประจำเข้าใจได้ทันที
-จากหน้านี้กดตรวจใหม่และยืนยันว่าเรื่องไหนเป็นของคุณได้ ส่วนเรื่องอื่นยังทำใน terminal โดยหน้าเว็บแสดงคำสั่งให้คัดลอก
-เปิดได้จากเครื่องนี้เท่านั้น และต้องใช้ลิงก์ที่มีกุญแจใช้ครั้งเดียว `vswarm report --html` เขียนหน้าเดียวกันเป็นไฟล์ไว้ส่งให้ทีม
+gate ใน `~/.ssh/config` ยังเลี่ยงได้ถ้าโปรแกรมไม่อ่าน config นั้น จึงมี `vswarm agent`: key ไม่ได้เป็นไฟล์ในเครื่องอีกต่อไป และ agent
+ไม่ยอมเซ็นตราบที่เครื่องยังไม่ผ่าน ไม่ว่า client ไหนจะขอ ถ้าอยากให้ server เชื่อ CA แทน key ก็มี SSH certificate อายุ 15 นาที (`vswarm ca`)
+
+### ตอนรู้ว่าโดนแล้ว
+
+```bash
+vswarm respond
+```
+
+ล็อกการเข้า production, เก็บไฟล์ที่น่าสงสัยพร้อม SHA-256, ให้รายการ credential ที่ต้องเปลี่ยน (ทำจากเครื่องอื่น), ถามก่อนทุกขั้นที่จะลบหรือย้ายอะไร
+แล้วเขียนรายงานให้ทีม และร่างรายงานส่ง registry ของ package ไม่มีอะไรถูกส่งออกไปเอง
+
+<details>
+<summary>ภาพ: vswarm respond</summary>
+
+![vswarm respond: ล็อก, หลักฐาน, เปลี่ยน credential, กักกัน, รายงาน](docs/img/respond.png)
+
+</details>
+
+### สำหรับคนที่ไม่อ่าน output ใน terminal
+
+`vswarm ui` เปิดหน้าเว็บในเครื่อง มีคำตอบเดียวตัวใหญ่ (ปลอดภัย, ควรดูสักนิด หรือ หยุดก่อน) รายการเป็นการ์ดที่บอกว่าทำไมสำคัญและต้องทำอะไร
+และดูได้ว่าเปิดการป้องกันอะไรไว้บ้าง มีทั้งไทยและอังกฤษ โหมดสว่างและมืด ส่วน `vswarm report --html` ได้หน้าเดียวกันเป็นไฟล์ไว้ส่งต่อ
+โดยปิด credential ไว้ให้แล้ว
 
 ![vswarm ui ภาษาไทย](docs/img/ui-th-light.png)
 
+## เทียบกับเครื่องมืออื่น
+
+เครื่องมือในกลุ่มนี้มีของดีหลายตัว และบางตัวทำบางส่วนได้ดีกว่า vswarm ด้วย ความต่างหลักคือ vswarm ครอบทุกจังหวะของ developer
+ตั้งแต่ต้นจนจบ ในเครื่องเดียว ไม่ต้องมีบัญชีหรือ server
+
+| เครื่องมือ | เก่งเรื่อง | สิ่งที่ไม่ได้ทำ แต่ vswarm ทำ | ควรใช้ตัวนั้นแทน (หรือใช้ด้วย) เมื่อ |
+| --- | --- | --- | --- |
+| [Socket Firewall](https://socket.dev) (`sfw`) | บล็อก package อันตราย โดยมีข้อมูลวิเคราะห์ทั้ง registry ของ Socket หนุนหลัง | ตรวจส่วนอื่นของเครื่อง, รัน repo ใน sandbox, กั้น production | อยากได้การตรวจ package ที่แรงที่สุด ถ้าลง `sfw` ไว้ vswarm จะส่งการติดตั้งไปผ่านมันด้วย |
+| [mcp-scan](https://github.com/invariantlabs-ai/mcp-scan) (Snyk) | ตรวจ tool poisoning และ rug pull ของ MCP server | เปิด server ใน sandbox, ตรวจ hook, โหมดสิทธิ์ หรืออะไรที่อยู่นอก MCP | ห่วงแค่เรื่อง MCP อย่างเดียว |
+| StepSecurity Dev Machine Guard | ทำบัญชี extension, package และ MCP server ของโน้ตบุ๊กทั้งบริษัท | หยุดของก่อนมันรัน หรือผูกผลตรวจเข้ากับสิทธิ์เข้า production | ต้องการภาพรวมทั้งองค์กร และใช้ platform ของเขาอยู่ |
+| Kolide (1Password Device Trust), Teleport Device Trust | ปฏิเสธการ login ตั้งแต่ฝั่ง server เมื่อเครื่องไม่ปกติ เลี่ยงจากโน้ตบุ๊กไม่ได้ | ใช้ได้โดยไม่ต้องมี identity provider และค่าสมาชิก, รันโค้ดใน sandbox, ตรวจการติดตั้ง | เป็นบริษัท อันนี้คุม production ได้แน่นกว่า ส่วน gate ของ vswarm คือรุ่นที่ทำในเครื่อง |
+| osquery | ถามอะไรก็ได้เกี่ยวกับเครื่องไหนก็ได้ด้วย SQL | มีคำตอบสำเร็จรูปให้เลย: ต้องดูอะไร อะไรปกติ ต้องทำอะไรต่อ | มีทีม security คอยเขียนและเฝ้า query |
+| Objective-See BlockBlock, Santa | เตือน persistence ทันทีที่เกิด (BlockBlock) และ allow-list ระดับ binary (Santa) บน macOS | ครอบ Linux กับ Windows, package, MCP หรือการเข้า production | อยากบังคับระดับ binary บน macOS |
+| VM ทิ้งได้ หรือ devcontainer | แยกโค้ดที่ไม่ไว้ใจได้จริง | บอกว่าโค้ดพยายามทำอะไร | ต้องการแค่แยก ไม่ต้องการรายงาน ถ้าไม่ไว้ใจจริงๆ ใช้ทั้งคู่ |
+| EDR / antivirus (CrowdStrike, Defender …) | malware ที่รู้จัก, พฤติกรรมทั้งระบบ, มีทีมเฝ้า alert | รู้ว่าจังหวะไหนของเราคือจังหวะเสี่ยง: ตอนลง package, ตอนรัน repo, ตอนเพิ่ม MCP server, ตอน ssh | ใช้เสมอถ้าบริษัทมีให้ |
+
+ถ้ามีเครื่องมือเหล่านี้อยู่ vswarm ก็ใช้ร่วมด้วย เช่น ส่งการติดตั้งไปผ่าน `sfw` และแนวทางฝั่ง server ใน [docs/server-side.md](docs/server-side.md)
+
+## จับได้จริงไหม?
+
+`vswarm selftest` สร้าง home ปลอม บันทึกจุดเริ่มต้นที่สะอาด แล้วฝังของจำลองเทคนิคโจมตีจริงทีละอย่าง (LaunchAgent, บรรทัดใน shell rc,
+systemd timer, LD_PRELOAD, ลูกเล่นใน ssh และ git config, config ของ package manager, helper ของ kubectl และ AWS, extension ของ editor
+และ browser, config ของ MCP, Run key, task และ WMI ของ Windows …) และฝังของหน้าตาคล้ายแต่ไม่อันตรายไว้ที่เดียวกัน เพื่อนับการเตือนผิด:
+
+```
+detected 103/103 (100%) · benign look-alikes quiet 39/39 · false alarms 0
+```
+
+ตัวเลขนี้นับเฉพาะกรณีใน [`src/sec/selftest-cases.ts`](src/sec/selftest-cases.ts) ที่เราเขียนเอง ไม่ใช่ทุกการโจมตีที่มีในโลก
+ถ้าเคยเจอเทคนิคที่มันจับไม่ได้ การเพิ่ม case เข้าไปคือการช่วยที่มีค่าที่สุด
+
+ส่วนการตรวจชื่อ package อย่างเดียว วัดกับชื่อ package อันตรายทั้งหมดของ npm และ PyPI ใน OSV: ดูจากชื่ออย่างเดียวหยุดได้ 8.0% ของ PyPI
+และ 1.9% ของ npm โดยเตือนผิดราว 1% package อันตรายส่วนใหญ่ชื่อไม่คล้ายอะไรเลย guard จึงเช็ค OSV, อายุ, ยอดดาวน์โหลด และสิ่งที่ install
+script ทำด้วย รายละเอียดใน[คู่มือ](docs/guide.th.md#13-วัดผลการตรวจจับ-selftest)
+
+## ความเป็นส่วนตัว
+
+ทุกอย่างอยู่ในเครื่อง ใน `~/.vswarm` ไม่มีบัญชี ไม่มี telemetry สิ่งที่ส่งออกเน็ต: ชื่อและเวอร์ชันของ package ไปที่ `api.osv.dev`
+และถ้าเปิด guard ก็ส่งชื่อ package ที่กำลังลงไปที่ registry ของมันเอง การตรวจ credential บอกแค่ว่าอยู่ที่ไหนและเป็นชนิดอะไร ไม่เคยแสดงค่า
+
 ## อัปเดตมีลายเซ็น
 
-ตั้งแต่ v2.6.0 ทุก release เป็น git tag ที่ผู้ดูแลเซ็นด้วย SSH key ตัวติดตั้งจะตรวจลายเซ็นของ tag ล่าสุดก่อนติดตั้ง `vswarm install` จะจำกุญแจไว้ และหลังจากนั้น `vswarm update` จะยอมไปเฉพาะ tag ที่เซ็นด้วยกุญแจที่จำไว้ ไม่ถอยกลับไปเวอร์ชันเก่า ถ้า repo หรือบัญชีของผู้ดูแลถูกยึด ผู้โจมตีก็ส่งโค้ดเข้าเครื่องที่ติดตั้งไว้ไม่ได้ถ้าไม่มีกุญแจ ดูกุญแจที่จำไว้ด้วย `vswarm trust` แล้วเทียบกับ fingerprint ใน [SECURITY.md](SECURITY.md):
+ทุก release เป็น git tag ที่เซ็นด้วย SSH key ของผู้ดูแล ตัวติดตั้งตรวจลายเซ็น `vswarm install` จำ key ไว้ และ `vswarm update`
+ยอมไปแค่ tag ใหม่กว่าที่เซ็นด้วย key ที่จำไว้ ต่อให้ใครยึด repository หรือบัญชี GitHub ได้ ก็ส่งโค้ดเข้าเครื่องที่ติดตั้งแล้วไม่ได้
+fingerprint สำหรับเทียบกับ `vswarm trust`:
 
 ```
 SHA256:icVOFCVDfJzfuqeKqZRicZ5TtRp0jZ4g5qfuA9PUe2g
 ```
 
-ตัวติดตั้งไม่ได้ดึงสคริปต์จากเน็ตมารันเพื่อลง Bun: ใช้ Bun ที่มีอยู่ หรือดาวน์โหลด Bun รุ่นที่กำหนดไว้จาก GitHub แล้วติดตั้งเฉพาะเมื่อ SHA-256 ตรงกับค่าในสคริปต์
+## สิ่งที่ทำไม่ได้
 
-## ความเป็นส่วนตัว
+- malware ที่รันในนามเราอยู่แล้วปิด vswarm ได้ vswarm ผนึกสถานะของตัวเองไว้ ถ้ามีคนแก้ผลตรวจด้วยมือจะรู้ แต่ทางแก้จริงของกรณีนี้อยู่ฝั่ง server
+  ([docs/server-side.md](docs/server-side.md))
+- มองไม่เห็น rootkit, ของที่ฝังใน firmware หรือโค้ดที่รันครั้งเดียวแล้วไม่ทิ้งร่องรอย
+- credential ที่ถูกขโมยไปแล้วและถูกใช้จากที่อื่น โน้ตบุ๊กมองไม่เห็น
+- ถ้าบันทึก baseline ตอนเครื่องติดอยู่แล้ว สิ่งที่ติดจะถูกนับเป็นเรื่องปกติ
+- Windows ยังเป็นรุ่นทดลอง: ยังไม่มี `ca`, `cert`, `canary` และ `shot`
 
-- ข้อมูลอยู่ในเครื่องที่ `~/.vswarm/sec` เจ้าของเครื่องอ่านได้คนเดียว ไม่มี telemetry
-- ส่งออกอย่างเดียว คือชื่อและเวอร์ชันของ package ไปที่ `api.osv.dev` เพื่อเช็คกับรายการ package อันตราย (ใช้ `--offline` เพื่อปิด)
-- ถ้าเปิด `vswarm guard` ชื่อ package ที่กำลังจะติดตั้งจะถูกส่งไปถาม registry ต้นทางด้วย (เป็นชื่อเดียวกับที่ package manager กำลังจะส่งอยู่แล้ว)
-- การตรวจ credential บอกแค่ตำแหน่งกับชนิด ไม่อ่านค่าออกมา
+<details>
+<summary>ทุกคำสั่ง</summary>
 
-## ข้อจำกัด
+```bash
+vswarm setup                 # ครั้งแรก และสั่งซ้ำได้ตลอด
+vswarm scan · why · fix · ok # ตรวจ, อธิบาย, แก้, ยอมรับ
+vswarm baseline · diff       # "ตอนนี้สะอาด" · อะไรเปลี่ยนไปตั้งแต่นั้น
+vswarm watch on              # ทุกชั่วโมง และภายในไม่กี่วินาทีเมื่อ login job, rc file หรือ config ของ agent เปลี่ยน
+vswarm secrets               # credential อายุยาวในเครื่อง (ไม่แสดงค่า)
+vswarm guard on · pkg        # ตรวจการติดตั้ง · ตรวจ package ด้วยมือ
+vswarm try                   # รันโค้ดที่ไม่ไว้ใจใน sandbox
+vswarm agents [--inspect]    # AI agent และ MCP server
+vswarm preflight · gate      # ตรวจก่อนเข้า production · ตั้งด่านหน้า ssh, aws, kube, gcloud, az
+vswarm agent                 # ssh agent ที่เซ็นเฉพาะตอนเครื่องผ่าน
+vswarm ca · cert             # SSH certificate อายุ 15 นาที
+vswarm canary                # credential ล่อ
+vswarm respond · unlock      # เมื่อมีเรื่อง · หลังเครื่องสะอาดแล้ว
+vswarm team                  # policy ที่เซ็นแล้ว แชร์ผ่าน git repo
+vswarm ui · report           # dashboard · รายงานไว้ส่งต่อ
+vswarm selftest              # วัดผลการตรวจจับ
+vswarm lang th               # ภาษาไทยทั้งใน terminal และ dashboard
+```
 
-- malware ที่รันในนามเราอยู่แล้วปิด vswarm ได้ vswarm ประทับตราไฟล์ของตัวเองด้วยกุญแจใน Keychain / Secret Service / DPAPI จึงจับการแก้ไฟล์ด้วยมือได้ แต่โปรแกรมที่รันในนามเราก็อ่านกุญแจนั้นได้เหมือนกัน การตัดสินใจที่ข้ามไม่ได้ควรอยู่ฝั่ง server ดู [docs/server-side.md](docs/server-side.md)
-- จับ malware ที่ซ่อนตัวเก่ง หรือโค้ดที่รันครั้งเดียวแล้วไม่เหลือร่องรอยไม่ได้
-- ถ้า credential ถูกขโมยไปแล้วและถูกใช้จากเครื่องผู้โจมตี vswarm มองไม่เห็น ต้องป้องกันฝั่ง server ด้วย credential อายุสั้น กุญแจฮาร์ดแวร์ และการตรวจสภาพเครื่อง
-- บน macOS การตรวจ extension ของ browser ต้องให้สิทธิ์ Full Disk Access กับ terminal ถ้าไม่ให้ vswarm จะบอกว่าตรวจไม่ได้ ไม่ทำเหมือนว่าผ่าน
+ทุกคำสั่งมีคำอธิบายพร้อมภาพใน[คู่มือ](docs/guide.th.md)
+
+</details>
+
+## พัฒนา
+
+```bash
+bun test            # unit และ end-to-end test ใน home จำลอง
+bunx tsc --noEmit
+bun src/cli.ts selftest
+```
+
+ดู [CONTRIBUTING.md](CONTRIBUTING.md) และ [SECURITY.md](SECURITY.md) สัญญาอนุญาต Apache-2.0

@@ -2,428 +2,294 @@
 
 **Don't be the one who carries it in.**
 
-Servers get hardened; they still trust whoever holds valid keys. So attackers go for the developer and the laptop:
-a typo-squatted npm package, a "coding assignment" from a fake recruiter, a poisoned MCP server, a tampered Homebrew
-tap. The malware runs as you, uses what your laptop remembers, and the server only sees a valid token.
+Your servers are patched, behind a VPN, with MFA on the console. They still let in anyone holding your ssh key or your
+AWS session. So attackers stopped going for the server. They go for your laptop:
 
-vswarm warns you and pauses at the risky moments, before anything big happens:
+- a package called `axois` instead of `axios`
+- a "take-home assignment" from a recruiter who does not exist
+- an MCP server whose tool description quietly tells your AI agent to read `~/.ssh`
+- a Homebrew tap that ships one extra binary
 
-- **installing a package**: `guard` checks npm, pip, brew … names before the install runs (look-alikes, known
-  malware, brand-new releases, install scripts);
-- **running a stranger's code**: `try` runs it in a sandbox and tells you what it tried;
-- **adding an AI agent or MCP server**: `agents --inspect` starts it sandboxed and reads what the model will read;
-- **reaching production**: `preflight` / `gate` check the machine before ssh, AWS or kubectl get your credentials.
+None of this needs an exploit. You run it yourself, it runs as you, and what it takes looks like you to the server.
 
-Every warning says why it is risky and what to do instead. Outside those moments it stays out of your way: a tool
-that cries wolf gets uninstalled, so false alarms are treated as bugs.
+vswarm is a free, local command line tool for macOS, Linux and Windows. It steps in at the few moments where that
+happens: before an install, before running code you got from someone, before an AI tool gets a new server, and before
+your machine is let near production.
 
-It is one local command: no server, no MDM, no per-seat licence, so a solo developer or a small team can actually use
-it. It is **not** an EDR and not a hard access control: malware already running as you can switch it off (see
-[what it protects and what not](SECURITY.md#what-vswarm-can-and-cannot-protect-against)). It complements Socket,
-osquery, EDR and device trust (Teleport, Kolide); it does not replace them.
+[ภาษาไทย](README.th.md) · [Full guide](docs/guide.md) · [คู่มือภาษาไทย](docs/guide.th.md)
 
-[ภาษาไทย](README.th.md)
+![vswarm try catching a fake job-interview repo, then refusing ssh to production](docs/poc.png)
 
-![vswarm try stopping a fake job-interview repo, and preflight blocking ssh](docs/poc.png)
+<sub>A real run against `test/fixtures/fake-interview`, a harmless copy of the fake-interview repos used in real attacks.</sub>
 
-<sub>Output from the test runs: `test/fixtures/fake-interview` (harmless imitation) and the selftest's planted Homebrew tap.</sub>
+## Without it, and with it
 
-**Full guide with screenshots:** [docs/guide.md](docs/guide.md) · [คู่มือภาษาไทย](docs/guide.th.md)
+| What happens | Without vswarm | With vswarm |
+| --- | --- | --- |
+| You type `npm install axois` | Its install script runs as you before you see the typo | Stopped before anything runs: known malicious, "did you mean axios?" |
+| A recruiter sends a repo to "fix a bug in" | `npm install` or just opening the folder in VS Code runs its loader. Your keys, browser passwords and wallets leave | `vswarm try` runs it on a copy with no access to your home or the network, then lists what it tried to take |
+| You add an MCP server to Cursor or Claude Code | Its tool descriptions go straight to the model, hidden instructions included | Started in a sandbox first. Hidden instructions are shown to you, and the tools are pinned so a later change is caught |
+| Something planted a login job last week | Nothing tells you. It runs at every login | The watch notices within seconds of the change, and `vswarm diff` shows it against your clean starting point |
+| You `ssh prod-db` from that machine | The server sees a valid key and lets it in | Refused on the laptop, with the reason. With `vswarm agent` the key itself will not sign, even for `ssh -F /dev/null` |
+| You find out you were hit | You guess what to rotate, and the evidence gets overwritten while you look | `vswarm respond` locks production access, keeps the evidence with hashes, and gives you the list of what to rotate |
+
+## Should you use it?
+
+Probably yes if:
+
+- your laptop can reach production (ssh, AWS, kubectl, a database)
+- you install npm, pip or brew packages most days
+- you use AI coding agents with MCP servers
+- you take repos from people you don't know: job hunting, freelancing, open source
+
+Probably not if:
+
+- your company already runs EDR plus device trust in its identity provider, and you never hold long-lived production
+  credentials on the laptop. You are already covered better than a local tool can do it.
+- the machine never touches anything you would mind losing
+
+vswarm is not antivirus and not EDR. Malware that is already running as you can switch it off, and vswarm says so in
+[SECURITY.md](SECURITY.md#what-vswarm-can-and-cannot-protect-against). What it is good at is the step before: making
+sure the bad thing doesn't get in, and that a machine that looks wrong doesn't get your production keys.
 
 ## Install
 
-macOS and Linux. Needs git, and [Bun](https://bun.sh) (the installer uses yours, or installs a pinned Bun release
-after checking its SHA-256); on Linux, `vswarm try` also needs bubblewrap and strace
-(`sudo apt install bubblewrap strace`). Windows 10/11: a preview that checks the machine (Run keys, tasks, services,
-WMI, PowerShell profiles, …) with watch, the ssh gate, the install guard and the ssh agent, installed with
-`install.ps1`; `try` runs in an AppContainer there, where Node projects with install scripts are better tried in WSL,
-see [Windows (preview)](docs/guide.md#windows-preview).
-
 ```bash
+# macOS / Linux
 curl -fsSL https://raw.githubusercontent.com/kridsadar357/vswarm/main/install.sh | sh
-# or
-git clone https://github.com/kridsadar357/vswarm.git && cd vswarm && ./vswarm install
+
+# Windows 10/11 (PowerShell)
+powershell -ExecutionPolicy Bypass -c "irm https://raw.githubusercontent.com/kridsadar357/vswarm/main/install.ps1 | iex"
 ```
 
-Then one step, in a new terminal:
+Then open a new terminal and run:
 
 ```bash
 vswarm setup
 ```
 
-It says what it will do, checks the machine and explains each finding in one sentence (fix it, or say it is yours),
-records the starting point (baseline), offers the background watch, the install guard and an inspection of AI tool
-servers, asks which hosts in `~/.ssh/config` are production and puts a door (gate) in front of them, offers to move
-their keys into the key safe (`agent protect`, which tries each key on its server first), and asks the one policy
-question in plain words. Every step can be skipped; run it again and it offers only what is missing. `--yes` takes
-the recommended answers (it never picks production hosts or moves keys); without a terminal it prints the plan and
-changes nothing. On macOS, turning the watch on makes macOS show *Background Items Added: vswarm*: that is expected.
+Setup checks the machine and walks you through each finding in one sentence. You fix it or tell vswarm it is yours.
+Then it asks which of your ssh hosts are production, and offers the background watch and the install guard. Every
+step can be skipped, and running it again only offers what is missing.
 
-![vswarm setup](docs/img/setup.png)
+Requirements: git. The installer uses your [Bun](https://bun.sh) or installs a pinned release after checking its
+SHA-256. On Linux, `vswarm try` also needs `sudo apt install bubblewrap strace`.
 
-## Use
+## What using it looks like
 
-```bash
-vswarm scan                 # the state in one line (Safe, Check this or Stop), then numbered findings with one command each
-vswarm why [n]              # each finding: why it matters, every way out (fix, or mark it as yours), the details, the policy
-vswarm fix 2 · vswarm ok 3  # fix finding 2 (shows what, asks first) · mark finding 3 as yours
-vswarm baseline             # on a machine you trust: "this is clean" (refused over HIGH/CRIT findings unless --accept-high)
-vswarm diff                 # later: what changed since then
-vswarm secrets              # long-lived credentials (never prints values)
-vswarm selftest             # plant fake threats in a sandbox home, measure detection
-vswarm watch on             # check hourly, and within seconds when a login job, rc or agent config changes
-vswarm lang th              # Thai in the terminal and the dashboard (th, en or auto; VSWARM_LANG=… for one run)
-```
+### Every day: you mostly don't notice it
 
-Every report speaks one vocabulary: **● Safe**, **● Check this** or **● Stop** with a plain sentence first ("Nothing
-dangerous, 1 thing worth a look"), then the findings grouped as *Needs action*, *Worth a look* and *FYI*, each with a
-plain title, why it matters, one command to run, and vswarm's technical title dimmed under it (`--details` for the
-rest). The PASS / WARN / BLOCK tag stays beside the state, and `--json` and exit codes are unchanged, so scripts keep
-working. Colour marks the state and the action only; `NO_COLOR` loses nothing, lines wrap at the terminal's width.
-
-![vswarm scan](docs/img/scan.png)
-
-### The dashboard: vswarm ui
+Once setup is done there is nothing to run. The watch checks in the background, the guard sits in front of your
+package manager, and the gate sits in front of ssh. `npm run dev` and `pip list` don't even start vswarm. You hear from
+it when something changed, in plain words, with one command to deal with it:
 
 ```bash
-vswarm ui                   # a local page in plain words, Thai or English; Ctrl+C to stop
-vswarm report --html        # the same view as one HTML file to share, credentials masked
+vswarm scan        # Safe, Check this or Stop, then numbered findings
+vswarm why 1       # why finding 1 matters and every way out
+vswarm ok 1        # "that one is mine"
 ```
 
-One big answer (**Safe**, **Check this** or **Stop**) with the reason, the findings as cards that say why each
-matters and what to do ("Needs action", "Fine if it's yours", "For your information"), recent events (checks, the
-watch, key use by `vswarm agent`, incidents) and a tile per protection. It is made for someone who does not read
-security output. From the page you can run a check and mark a finding as yours; everything else (respond, unlock,
-gates, keys, uninstall) stays in the terminal and the page shows the command to copy. It listens on 127.0.0.1 only,
-with a one-time key in the link; see [SECURITY.md](SECURITY.md#the-local-dashboard-vswarm-ui).
+![vswarm scan: Check this, one finding with the command to run](docs/img/scan.png)
 
-![vswarm ui in Thai: Check this, four cards, protection tiles and recent events](docs/img/ui-th-light.png)
+False alarms are treated as bugs. A tool that cries wolf gets uninstalled.
 
-<sub>A fake demo machine. English and dark mode: [light](docs/img/ui-en-light.png) · [dark](docs/img/ui-en-dark.png) · [Thai dark](docs/img/ui-th-dark.png) · [narrow screen](docs/img/ui-th-phone.png).</sub>
+### Installing a package
 
-### Gate production access
+With `vswarm guard on`, installs through npm, npx, pnpm, yarn, bun, pip, uv, pipx and brew are checked before the
+package manager runs a single install script: known-malicious versions ([OSV](https://osv.dev)), names that look like
+popular ones, brand-new packages with an install script, versions published in the last 48 hours, and what the
+install script itself does.
+
+![npm install axois stopped: known malicious, looks like axios](docs/img/guard-npm.png)
+
+Skip it once with `command npm …`. Check something without installing: `vswarm pkg check npm <name>`.
+
+### Running code someone sent you
 
 ```bash
-vswarm gate ssh "prod-*" "*.wallet.internal"     # adds a Match block to ~/.ssh/config (backup kept)
-vswarm agent protect ~/.ssh/prod_key             # tries the key on its hosts, then moves it into an ssh agent that signs only while the machine passes
-vswarm gate aws prod-sso prod-admin               # the profile's credential_process runs preflight first (backup kept)
-vswarm gate kube prod                             # the context's exec plugin runs preflight first (backup kept)
+vswarm try ./assignment -- npm install
+vswarm try https://github.com/someone/repo        # no command: a shell inside the sandbox
+vswarm try ./repo --net registries -- npm ci      # let it reach package registries, nothing else
 ```
 
-`gate aws` handles SSO profiles, profiles with a `credential_process`, and roles (`role_arn` + `source_profile`, gated
-at their source); `gate kube` handles users with an exec plugin (`aws eks get-token`, `gke-gcloud-auth-plugin`,
-kubelogin), in whichever `KUBECONFIG` file defines them. Static AWS keys, static kube tokens and client certificates
-are refused, because those are sent without running anything. `--off` puts the files back as they were (backups live
-in `~/.vswarm/backups` and go with the gate), and `status` notices a later hand edit, static keys added since, and a
-look-alike wrapper ([guide](docs/guide.md#aws-and-kubernetes)). Or by hand:
+`try` reads the code first for things set up to run on their own (install scripts, VS Code tasks that run when the
+folder opens, loaders hidden in `tailwind.config.js`). Then it runs it on a copy, in the operating system's sandbox:
+no home folder, no keychain, a fake `HOME`, no network except through a proxy that records every host. At the end you
+get what it tried.
 
-```ini
-# ~/.aws/config
-[profile prod]
-credential_process = vswarm preflight --quiet --then aws configure export-credentials --profile prod-sso --format process
-```
+![vswarm try on a fake assignment: tried to read SSH keys, browser passwords, AWS credentials, install login jobs](docs/img/try-bad.png)
 
-```yaml
-# kubeconfig
-users:
-- name: prod-deployer
-  user:
-    exec:
-      apiVersion: client.authentication.k8s.io/v1
-      command: vswarm
-      args: [preflight, --quiet, --then, kubelogin, get-token, --server-id, "<id>"]
-```
+Sandbox: Seatbelt on macOS, bubblewrap and strace on Linux, an AppContainer on Windows. On Windows, Node projects with
+install scripts are better tried in WSL ([why](docs/guide.md#windows-preview)).
 
-`vswarm gate gcloud <configuration>` puts the same check in front of a workload-identity credential's token command;
-`vswarm gate cmd psql "*.prod.internal"` (and `gate az "<subscription>"`, or `gate az --all`) is a shell reminder for tools with no credential hook, one
-you can bypass with `command psql` ([guide](docs/guide.md#commands-with-no-credential-hook-gate-cmd)).
+### Adding an AI tool server
 
-The config gate is advice to OpenSSH; `vswarm agent` puts the check on the key itself, so `ssh -F /dev/null`, an IP
-address or another client gets no signature from a machine that does not pass ([guide](docs/guide.md#vswarm-agent)).
-`agent protect` proves the key first: it checks the machine, finds the hosts in `~/.ssh/config` that use the key, logs
-in to them with it while the file is still on disk, and removes the file only once a host accepted it. For the hosts
-it routes, the agent's block runs the same decision before each login, so a refusal is said on the terminal with the
-way out, and ends in `Permission denied`, never a password prompt (`agent on --allow-passwords` for hosts that need
-one).
+`vswarm agents` lists the MCP servers, hooks and permission modes of Claude Code, Claude Desktop, Cursor, Windsurf,
+VS Code, Gemini CLI and Codex. `--inspect` starts each server in the sandbox and reads what the model would read:
 
-**One policy for WARN**, for every gate and the agent: BLOCK is always refused, WARN is let through by default and
-refused everywhere with `vswarm policy warn refuse`. `vswarm preflight` exits **0** on PASS and on a WARN the policy
-lets through, **2** on a WARN it refuses (or with `--strict`), **3** on BLOCK; `--json` gives the decision as data. A
-verdict is reused for two minutes, so gating every `kubectl` call costs about 20 ms. A fresh check takes about 0.2 s.
-`vswarm gate status` and `vswarm doctor` also say which gated hosts no longer answer (DNS and the ssh port, 2 s), and
-`vswarm gate ssh --prune` drops the ones you confirm.
+![agents --inspect finding a tool description that tells the model to read ~/.ssh/id_rsa and keep quiet about it](docs/img/agents-inspect.png)
 
-### Short-lived SSH certificates
+The tool definitions are pinned. If a server changes them later (a "rug pull"), the next scan says so.
 
-Servers trust a CA instead of keys. vswarm issues a fresh key with a 15-minute certificate, and only when the machine
-passes preflight. A stolen key file is trusted nowhere, and a stolen certificate expires before it is worth much.
+### Going to production
 
 ```bash
-vswarm ca init                      # CA key protected by a passphrase you type at each signing (or: --sk, a hardware key touch)
-vswarm ca server root               # prints the sshd commands to trust the CA; review them and run them on the server
-vswarm gate ssh --cert prod-*       # ssh gets a certificate automatically when it connects
+vswarm gate ssh "prod-*"                  # ssh to these hosts checks the machine first
+vswarm agent protect ~/.ssh/prod_key      # the key moves into an agent that signs only while the machine passes
+vswarm gate aws prod-admin                # same for an AWS profile
+vswarm gate kube prod                     # and a kube context
 ```
 
-Tested end to end against a real `sshd`: the certificate logs in, the bare key is refused, an expired certificate is
-refused, and no certificate is issued while preflight says BLOCK.
+A check takes about 0.2 s and is reused for two minutes, so you don't feel it. When the machine does not pass:
 
-### Canary tokens
+![ssh prod-wallet-01 refused: BLOCK, 7 things need action](docs/img/ssh-blocked.png)
 
-Decoy credentials placed where stealers look. Nobody has a reason to use them, so any use means the machine or a copy
-of its files is in someone else's hands. Make the tokens at [canarytokens.org](https://canarytokens.org) (free, by
-Thinkst) with your e-mail; vswarm plants and tracks them, and does not report your own decoys as exposure.
+The gate in `~/.ssh/config` can be bypassed by anything that ignores the config. That is why `vswarm agent` exists:
+the key is no longer a file on disk, and the agent refuses to sign while the machine does not pass, whatever client
+asks. There are also 15-minute SSH certificates (`vswarm ca`) if you'd rather have servers trust a CA instead of keys.
+
+### When something got in
 
 ```bash
-vswarm canary plant aws             # a decoy profile in ~/.aws/credentials
-vswarm canary plant dns <token-host> # a decoy host at the top of ~/.ssh/config
-vswarm canary plant env ~/develop/old-project
-vswarm canary list · vswarm canary remove <id>
+vswarm respond
 ```
 
-### AI agents and MCP servers
+It locks production access, copies the suspicious files with SHA-256 hashes, lists every credential to rotate
+(from another device), asks before each cleanup step, and writes a report for your team and drafts for the package
+registries. Nothing is sent anywhere.
 
-Coding agents run code with your access, and their settings decide what they may start on their own. `vswarm agents`
-lists, and `scan` / `preflight` check, the MCP servers of Claude Code (every profile), Claude Desktop, Cursor,
-Windsurf, VS Code, Gemini CLI and Codex, Claude Code hooks and `statusLine` commands, permission modes and plugins.
+<details>
+<summary>Screenshot: vswarm respond</summary>
 
-| Signal | Severity |
-| --- | --- |
-| MCP server or hook that downloads, decodes or backgrounds something, or runs from a temp/cache/hidden folder | high |
-| MCP server started through npx/uvx with a look-alike package name | high |
-| new or changed MCP server, new or changed hook, agent given more freedom (bypass, `Bash(*)`) since the baseline | medium |
-| remote MCP server over plain http; token pasted into an MCP config | medium |
-| a server `agents --inspect` saw change its tools (rug pull), until accepted | high |
-| a server defined differently than when it was inspected (checked without starting it) | medium |
+![vswarm respond: lock, evidence, rotate credentials, contain, report](docs/img/respond.png)
 
-A baseline taken before vswarm checked agents does not report every existing server as new; it says the baseline
-is older than the check, and `vswarm baseline` brings it up to date.
+</details>
 
-### Check packages before they install
+### For someone who doesn't read terminal output
 
-Most stealers arrive as a package: a look-alike name, a hijacked release, a name an AI assistant made up and an
-attacker then registered. `vswarm guard on` puts a thin wrapper around npm, npx, pnpm, yarn, bun, bunx, pip, pip3,
-uv, uvx, pipx and brew in your shell. Installs are checked before the package manager runs any install script;
-everything else (`npm run dev`, `pip list`) does not even start vswarm.
+`vswarm ui` opens a local page with one answer (Safe, Check this or Stop), the findings as cards that say why each
+matters and what to do, and what is switched on. Thai or English, light or dark. `vswarm report --html` gives the
+same view as a file to send, with credentials masked.
 
-```
-$ npm install axois
-▼ vswarm checked npm axois · 412 ms
-  CRIT  axois@0.0.1-security: known malicious
-        OSV MAL-2025-15245
-  HIGH  npm axois: looks like axios
-        → did you mean axios?
-  ? Stop here. Install anyway? [y/N]
-```
+![vswarm ui: Check this, four cards, protection tiles and recent events](docs/img/ui-en-light.png)
 
-| Signal | Severity |
-| --- | --- |
-| known-malicious version (OSV `MAL-`) | critical, blocks |
-| close to one of the top 2,000 npm / 1,000 PyPI names, and not established itself | high, blocks |
-| no such package, but it looks like a popular one | high, blocks |
-| package created in the last 30 days, few downloads, with an install script | high, blocks |
-| version published in the last 48 hours | medium, warns |
-| git URL, tarball, third-party Homebrew tap | medium, warns |
-| install script on an established package | low, one line |
+## How it compares
 
-A bare `npm install` / `npm ci` checks every locked version against OSV. Blocking asks first; skip vswarm once with
-`command npm …`, or turn it off with `vswarm guard off`. Check by hand without the wrapper:
-`vswarm pkg npm install <name>`. If a registry cannot be reached, the install goes ahead with a notice (`guard on --strict`
-stops instead). Opt-in: `guard on --ignore-scripts` runs npm/pnpm/yarn/bun installs with their install scripts off, and
-`--sandbox` runs them in the `try` sandbox inside your project folder, through Socket Firewall too when `sfw` is
-installed; where there is no sandbox, `--sandbox` is refused and such installs stop rather than run outside one. See
-the [guide](docs/guide.md#8-check-packages-before-they-install-guard-and-pkg).
-The guard also reads what is inside a package before it installs: install-time code that decodes and runs hidden code,
-reads credentials, reaches the network or persists, and what is new since the version before (`vswarm pkg check npm <name>`
-reads one without installing).
+There are good tools in this space, and several do one part better than vswarm. The difference is mostly that vswarm
+covers the developer's moments end to end, on one machine, without an account or a server.
 
-### Run code you do not trust
+| Tool | What it is great at | What it does not do that vswarm does | Pick it instead (or as well) when |
+| --- | --- | --- | --- |
+| [Socket Firewall](https://socket.dev) (`sfw`) | Blocking malicious packages, backed by Socket's analysis of the whole registry | Look at the rest of the machine, sandbox a repo, gate production | You want the strongest package check. vswarm hands installs to `sfw` when it is installed |
+| [mcp-scan](https://github.com/invariantlabs-ai/mcp-scan) (Snyk) | Tool poisoning and rug-pull checks for MCP servers | Start the servers in a sandbox. Look at hooks, permission modes, or anything outside MCP | Your only worry is MCP |
+| StepSecurity Dev Machine Guard | An inventory of extensions, packages and MCP servers across a company's laptops | Stop anything before it runs, or connect the result to production access | You need a fleet view and have their platform |
+| Kolide (1Password Device Trust), Teleport Device Trust | Refusing the login on the server side when a device is unhealthy. Can't be bypassed from the laptop | Work without an identity provider and a subscription. Sandbox code, check installs | You run a company. This is the stronger control for production; vswarm's gate is the local version |
+| osquery | Asking any question about any machine in SQL | Come with the questions answered: what to look for, what is normal, what to do | You have a security team to write and watch the queries |
+| Objective-See BlockBlock, Santa | Persistence alerts as they happen (BlockBlock), binary allow-listing (Santa) on macOS | Cover Linux and Windows, packages, MCP or production access | You want macOS enforcement at the binary level |
+| A throwaway VM or devcontainer | Real isolation for untrusted code | Tell you what the code tried to do | You want isolation and don't need the report. Use both for anything you really don't trust |
+| EDR / antivirus (CrowdStrike, Defender …) | Known malware, behaviour on the whole OS, a team watching alerts | Know which of your actions is the risky one: the install, the repo, the MCP server, the ssh | Always, if your company provides it |
 
-A "take-home assignment" from a recruiter, a repo a stranger sent, an installer: run it in a sandbox first.
+vswarm uses these where they are present: `sfw` for installs, and the server-side controls described in
+[docs/server-side.md](docs/server-side.md).
 
-```bash
-vswarm try ./assignment -- npm install          # or a git URL, a .zip, a single file
-vswarm try https://github.com/someone/repo      # no command: a shell opens inside the sandbox
-vswarm try ./repo --net registries -- npm ci    # allow package registries only
-```
+## Does it actually catch things?
 
-Before running, it reads the code for things built to run on their own: install scripts, VS Code tasks that run when
-the folder opens, loaders hidden in `tailwind.config.js` / `next.config.js`, `eval(atob(…))`, raw IPs, references to
-wallets and browser password stores. Then it runs the code on a **copy**, under the macOS sandbox:
-
-- no access to your home folder (only your toolchains, read-only), keychain, clipboard, or other apps;
-- a fake `HOME` and a clean environment (your tokens are not passed in);
-- no network except localhost and a vswarm proxy that records every host it tries (`--net none` by default).
-
-Afterwards it reports what the code **tried**: reading `~/.ssh`, browser passwords or wallets, planting login jobs or
-shell lines, contacting outside hosts, leaving processes behind. Verdicts: DANGEROUS, SUSPICIOUS, NOTHING SEEN, or
-INCONCLUSIVE when the command failed early.
+`vswarm selftest` builds a fake home, records a clean baseline, then plants harmless copies of real attack steps one at
+a time (LaunchAgents, shell rc lines, systemd timers, LD_PRELOAD, ssh and git config tricks, package manager config,
+kubectl and AWS helpers, editor and browser extensions, MCP configs, Windows Run keys, tasks and WMI …). It also plants
+harmless look-alikes in the same places, to count false alarms:
 
 ```
-3  what it tried
-  HIGH  Tried to read SSH keys            ~/.ssh/id_ed25519 (node)
-  HIGH  Tried to read browser passwords   ~/Library/Application Support/Google/Chrome/Default/Login Data (node)
-  HIGH  tried to install a login job      ~/Library/LaunchAgents/com.dev.helper.plist
-  HIGH  Tried to contact raw IP addresses 203.0.113.9:1224
-DANGEROUS · do not run this outside the sandbox; report it (see report.md)
+detected 103/103 (100%) · benign look-alikes quiet 39/39 · false alarms 0
 ```
 
-`test/fixtures/fake-interview` is a harmless imitation of a fake-interview repo used to test this.
+That covers the cases in [`src/sec/selftest-cases.ts`](src/sec/selftest-cases.ts), which we wrote, not every attack
+there is. If you have seen a technique it misses, adding a case is the most useful contribution you can make.
 
-### When something is wrong
+The package-name check alone, measured against every malicious npm and PyPI name in OSV: it stops 8.0% of PyPI's and
+1.9% of npm's by name, with about 1% false positives. Most malicious packages have names that look like nothing, which
+is why the guard also checks OSV, the package's age and downloads, and what its install script does. Details in
+[the guide](docs/guide.md#13-measure-detection-selftest).
 
-```bash
-vswarm respond      # 1 lock  2 evidence  3 credential checklist  4 contain  5 report
-vswarm unlock       # after the machine is clean (best: reinstalled) and a new baseline is recorded
+## Privacy
+
+Everything stays on your machine, in `~/.vswarm`. No account, no telemetry. The network calls it makes: package names
+and versions to `api.osv.dev`, and with the guard on, the package you are installing to its own registry. Credential
+checks say where and what kind, never the value.
+
+## Updates are signed
+
+Releases are git tags signed with the maintainer's SSH key. The installer checks the signature, `vswarm install` pins
+the key, and `vswarm update` only moves to newer tags signed by a pinned key. Someone who takes over the repository or
+the GitHub account still can't push code to installed copies. Fingerprint, to compare with `vswarm trust`:
+
+```
+SHA256:icVOFCVDfJzfuqeKqZRicZ5TtRp0jZ4g5qfuA9PUe2g
 ```
 
-`respond` locks production access, copies the suspicious files with SHA-256 hashes, snapshots processes and
-connections, lists every credential to rotate **from another device**, and asks before each change it would make
-(unloading a login job, moving a binary to quarantine, removing added shell lines). It writes `report.md` /
-`report.json` for your team, and OSV-format drafts for
-[OpenSSF malicious-packages](https://github.com/ossf/malicious-packages) and the package registries. Nothing is sent
-anywhere; you review and send.
+## What it can't do
 
-### For a small team
+- Malware already running as you can turn vswarm off. vswarm seals its own state, so a hand-edited verdict is noticed,
+  but the real fix for that case is on the server side ([docs/server-side.md](docs/server-side.md)).
+- It won't see rootkits, firmware implants, or code that ran once and left nothing.
+- A credential that was already stolen and is used from somewhere else is invisible to the laptop.
+- A baseline taken on an infected machine treats the infection as normal.
+- Windows is a preview: `ca`, `cert`, `canary` and `shot` are not there yet.
 
-```bash
-vswarm team join git@github.com:acme/vswarm-policy.git   # pins the policy's signing keys once you confirm them
-vswarm team sync · vswarm team status                     # newer signed policy only · what this machine lacks
-vswarm report --json --sign ~/.ssh/device --out ~/reports # a signed report per run, to collect however you like
-```
-
-The team policy is a JSON file in a git repository you control, signed with an SSH key: findings accepted for
-everyone, the team's own package names, required checks (baseline age, watch, guard) and the hosts the ssh gate
-should cover. Unsigned policies, policies signed by another key, a changed list of signers and older policies are
-refused. No server, no upload: see [docs/team.md](docs/team.md) and [docs/server-side.md](docs/server-side.md).
-
-## What it checks
+<details>
+<summary>Everything it checks</summary>
 
 | Area | What | Why |
 |---|---|---|
 | Homebrew | taps, formulae, casks; third-party taps | tampered formulae from unofficial taps |
 | npm / bun globals, Python, Cargo | new packages, install scripts, look-alike names | install-time malware, typosquats |
 | Known-malicious | exact versions against [OSV](https://osv.dev) `MAL-` records | packages already reported |
-| Login jobs | LaunchAgents / LaunchDaemons, login items inside apps, crontab | persistence |
-| System extensions | network / endpoint-security system extensions, kernel extensions (macOS) | traffic and file interception |
-| Startup files | `.zshrc`, `.bashrc`, `.profile`, fish `conf.d`, `/etc/profile.d`, `environment.d`, `.gitconfig`, `~/.ssh/config`, `authorized_keys`, `/etc/hosts`: added lines that download, preload a library, hook the prompt, wrap sudo, put an odd folder first on PATH, run ssh `LocalCommand` / `Match exec` or git `fsmonitor` | persistence, backdoors, redirection |
-| Package manager config | `~/.npmrc`, `pip.conf`, `uv.toml`, `.yarnrc.yml`, cargo config: registries over plain http, bare IPs or look-alike hosts, `script-shell`, runners | every install or build redirected |
-| Programs other tools run | kubeconfig exec plugins, AWS `credential_process`, Docker credential helpers and contexts, editor tasks that run when a folder opens, Python `.pth` / `sitecustomize` hooks, global git hooks | code that runs with every CLI call |
+| Login jobs | LaunchAgents / LaunchDaemons, login items, crontab, systemd units, XDG autostart, Windows Run keys, tasks, services, WMI | persistence |
+| System extensions | network / endpoint-security system extensions, kernel extensions (macOS), `/etc/ld.so.preload` (Linux) | traffic and file interception |
+| Startup files | `.zshrc`, `.bashrc`, `.profile`, fish, PowerShell profiles, `.gitconfig`, `~/.ssh/config`, `authorized_keys`, `/etc/hosts` | persistence, backdoors, redirection |
+| Package manager config | `~/.npmrc`, `pip.conf`, `uv.toml`, `.yarnrc.yml`, cargo config | every install or build redirected |
+| Programs other tools run | kubeconfig exec plugins, AWS `credential_process`, Docker credential helpers, editor tasks, Python `.pth` hooks, global git hooks | code that runs with every CLI call |
+| AI agents | MCP servers, hooks, `statusLine` commands, permission modes and plugins of Claude Code, Claude Desktop, Cursor, Windsurf, VS Code, Gemini CLI, Codex | agents run code with your access |
 | Executables | new programs on PATH and their code signature | dropped binaries |
-| Right now | programs running from temp/cache/hidden folders; unsigned or ad-hoc signed programs holding outside connections | active implants |
-| Credentials | SSH keys without a passphrase (MED when production hosts use them, LOW otherwise), AWS `AKIA` keys, static kube tokens, plain docker/gh/npm/pypi tokens, Azure, gcloud, Vault and Terraform token files, `.env` files | what a thief would take |
-| Editors, browsers | VS Code / Cursor extensions, and ones that did not come from the marketplace; Chrome / Brave / Edge / Arc extensions, their permissions, and side-loaded ones | extension malware |
+| Right now | programs running from temp/cache/hidden folders; unsigned programs holding outside connections | active implants |
+| Credentials | SSH keys without a passphrase, AWS `AKIA` keys, static kube tokens, plain docker/gh/npm/pypi tokens, cloud token files, `.env` files | what a thief would take |
+| Editors, browsers | VS Code / Cursor extensions and side-loaded ones; Chrome / Brave / Edge / Arc extensions and their permissions | extension malware |
 
-## Measured, not claimed
+</details>
 
-`vswarm selftest` builds a fake home, records a clean baseline, plants harmless stand-ins for real attack steps
-one at a time (grouped by MITRE ATT&CK technique: LaunchAgents, shell rc, cron and systemd timers, login items,
-dylib and LD_PRELOAD hijacks, authorized_keys, ssh and git config, package manager config, kubectl / aws / docker
-helpers, editor and browser extensions, MCP configs, Python start-up hooks, Windows Run keys, tasks, services and WMI),
-plants benign look-alikes of the same places, and prints what was caught and what raised a false alarm:
+<details>
+<summary>All commands</summary>
 
-```
-detected 103/103 (100%) · benign look-alikes quiet 39/39 · false alarms 0
-```
-
-Before the rules they led to, the same catalogue measured 55 of 93 (59%), with no false alarms: package manager
-config, CLI helpers, Python start-up hooks, editor tasks and several shell-file tricks were not caught at all. Those
-numbers cover the cases in [`src/sec/selftest-cases.ts`](src/sec/selftest-cases.ts), which are ours, not every
-attack. Adding a case for a technique you have seen is the most useful contribution you can make.
-
-The install guard's name checks, measured on real data with `bun scripts/bench-names.ts` (OSV's `MAL-` records for
-npm and PyPI, and download rankings past the 2,000 / 1,000 names the look-alike list holds; 2026-11-07): offline, by
-name alone, it stops **8.0% of PyPI's 11,987 malicious names** (18.8% of those reported as typosquats) and **1.9% of
-npm's 82,365** (leaving out 140,725 tea.xyz spam packages), with **1.3% and 0.9% false positives** on real packages
-ranked 1,001–15,000 and 2,001–17,335. Most malicious packages have names nothing resembles; the guard catches them
-with the OSV lookup and the registry's facts (age, downloads, install scripts), which this measurement leaves out on
-purpose. See [the guide](docs/guide.md#13-measure-detection-selftest).
-
-## Updates are signed
-
-Releases are git tags signed with the maintainer's SSH key, from v2.6.0 on. The installer checks the newest tag's
-signature before installing it, `vswarm install` pins the key, and `vswarm update` from then on moves only to tags
-signed by a pinned key, never to an older version: a takeover of the repository or of the maintainer's account cannot
-ship code to installed copies without the signing key. `vswarm trust` shows what is pinned; compare it with the
-fingerprint in [SECURITY.md](SECURITY.md):
-
-```
-SHA256:icVOFCVDfJzfuqeKqZRicZ5TtRp0jZ4g5qfuA9PUe2g
+```bash
+vswarm setup                 # first run, and again whenever you like
+vswarm scan · why · fix · ok # check, explain, fix, accept
+vswarm baseline · diff       # "this is clean" · what changed since
+vswarm watch on              # hourly, and within seconds of a change to a login job, rc file or agent config
+vswarm secrets               # long-lived credentials on the machine (never prints values)
+vswarm guard on · pkg        # check installs · check a package by hand
+vswarm try                   # run untrusted code in a sandbox
+vswarm agents [--inspect]    # AI agents and MCP servers
+vswarm preflight · gate      # check before production · put that check in front of ssh, aws, kube, gcloud, az
+vswarm agent                 # an ssh agent that signs only while the machine passes
+vswarm ca · cert             # 15-minute SSH certificates
+vswarm canary                # decoy credentials
+vswarm respond · unlock      # when something is wrong · after it is clean
+vswarm team                  # a signed policy shared through a git repo
+vswarm ui · report           # dashboard · report to share
+vswarm selftest              # measure detection
+vswarm lang th               # Thai in the terminal and the dashboard
 ```
 
-The installer itself does not pipe a script from the network into a shell for Bun: it uses the Bun on your PATH, or
-downloads one pinned Bun release from GitHub and installs it only if its SHA-256 matches the value in the script.
+Each one is explained, with screenshots, in [the guide](docs/guide.md).
 
-## How it relates to other tools
-
-| | vswarm | also look at |
-| --- | --- | --- |
-| scan a developer machine (packages, extensions, MCP, AI agents) | local, no account | StepSecurity Dev Machine Guard (reports to its platform) |
-| check installs before scripts run | names, whole dependency tree, brand-new versions; hands off to `sfw` | Socket Firewall (`sfw`) |
-| MCP tool poisoning and rug pulls | servers started **in a sandbox**, tools read and pinned | mcp-scan (Snyk) |
-| gate production access on the machine's state | ssh, AWS, kubectl from the local verdict; short-lived SSH certificates | 1Password Device Trust (Kolide), Teleport Device Trust |
-| run an untrusted repo and see what it tries | Seatbelt / bubblewrap with a behaviour report | a disposable VM |
-| persistence and binaries | baseline diff, signatures, background watch | osquery, Objective-See BlockBlock, Santa |
-
-vswarm puts these in one local tool for people and small teams without an endpoint platform, and uses the others
-when they are there (`sfw`). Enforcement on the server side (device trust in your identity provider, Teleport) is
-stronger than any check on the laptop; short-lived certificates and signed reports (`vswarm report --json --sign`)
-are vswarm's steps in that direction, see [docs/server-side.md](docs/server-side.md).
-
-## Privacy
-
-- Everything stays on your machine, under `~/.vswarm/sec` with owner-only permissions. No telemetry.
-- One network call: package **names and versions** to `api.osv.dev` for the known-malicious check, cached for a day.
-  `--offline` skips it; the quiet gate (`preflight --quiet`) asks only about package versions it has never seen,
-  waits at most 3 seconds, and says so when it could not.
-- With `vswarm guard on`, the names you install also go to the registry they come from (registry.npmjs.org,
-  api.npmjs.org, api.deps.dev, pypi.org): the same names your package manager is about to send anyway. The archives it
-  reads come from registry.npmjs.org and files.pythonhosted.org.
-- Credential checks report where and what kind, never the value.
-- `vswarm team join` / `sync` run `git clone` / `git fetch` of the team repository you name; `report --json` is written
-  locally (to stdout or `--out`) and sent nowhere by vswarm.
-
-## Linux
-
-The same commands, with Linux's own places to hide:
-
-| | macOS | Linux |
-| --- | --- | --- |
-| login jobs | LaunchAgents / LaunchDaemons | systemd units (user and system), XDG autostart |
-| system-wide hooks | | `/etc/ld.so.preload` |
-| running programs | `ps`, `lsof` | `/proc`, `ss` |
-| `vswarm try` walls | Seatbelt (`sandbox-exec`) | bubblewrap: every home hidden, system read-only, `/run` hidden (Docker, D-Bus, keyring and agent sockets), own network and pid namespace |
-| `vswarm try` record | the sandbox's deny log | strace: every path it tried and every address it tried to connect to |
-| code signatures | `codesign` | not checked; new programs on PATH are reported as unverified, and loose programs in your home folder holding outside connections are named |
-
-Things that differ: on Linux the code's background processes end with the sandbox (reported as "detaches from the
-terminal"); a hidden home is an empty writable folder, so writes there are recorded and thrown away. Ubuntu 24.04
-limits user namespaces: `sudo sysctl kernel.apparmor_restrict_unprivileged_userns=0`, or give bwrap an AppArmor
-profile. Inside Docker, run the container with `--security-opt seccomp=unconfined --security-opt apparmor=unconfined
---security-opt systempaths=unconfined`: the sandbox needs a `/proc` of its own and does not run without one. The `try`
-proxy never connects to loopback (unless `--localhost`), link-local or cloud metadata addresses, checked on what a name
-resolves to.
-
-## Limits
-
-- **Malware already running as you can disable vswarm.** It can remove the ssh gate from `~/.ssh/config`, stop the
-  watch, or run `vswarm unlock --force` itself. vswarm seals its own files (verdict, lock, baseline, accepted
-  findings, an incident log) with a key kept in the Keychain / Secret Service / DPAPI, so a hand-edited "pass" or a
-  deleted lock is noticed, but a program running as you can read that key too. What vswarm does well is catch what
-  such malware leaves behind before you reach production, and pause the risky moments that let it in; the decision
-  that cannot be bypassed from the laptop belongs on the server ([docs/server-side.md](docs/server-side.md)).
-- It cannot see malware that hides well (rootkits, firmware) or code that ran once and left nothing behind.
-- If a credential was already stolen and is used from the attacker's machine, nothing here sees it. What stops that
-  is on the server side: short-lived credentials, hardware keys, device posture checks.
-- On macOS, browser extensions need **Full Disk Access** for your terminal; without it vswarm says it could not
-  check them instead of looking clean.
-- A baseline taken on a machine that is already compromised treats the compromise as normal.
+</details>
 
 ## Development
 
 ```bash
-bun test            # unit + end-to-end tests (sandbox homes)
+bun test            # unit and end-to-end tests, in sandbox homes
 bunx tsc --noEmit
 bun src/cli.ts selftest
 ```
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) and [SECURITY.md](SECURITY.md). Licensed under Apache-2.0.
+See [CONTRIBUTING.md](CONTRIBUTING.md) and [SECURITY.md](SECURITY.md). Apache-2.0.
