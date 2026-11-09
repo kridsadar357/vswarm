@@ -141,7 +141,6 @@
   "tile.keys.confirm": " · ถามคุณทุกครั้ง",
   "tile.keys.lastUse": "ใช้ล่าสุด {at}",
   "tile.keys.neverUsed": "ยังไม่เคยถูกใช้",
-  "tile.keys.notHere": "ยังไม่มีบน Windows (ใช้ใน WSL ได้)",
 
   "tile.doors.title": "ด่านเข้า production",
   "tile.doors.on": "ตั้งด่านไว้ {n} จุด",

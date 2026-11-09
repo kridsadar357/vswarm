@@ -7,8 +7,8 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, st
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import {
-  AGENT_MAX_AGE, agentCall, agentCheck, agentDoctor, agentHosts, agentJob, agentJobFiles, agentSshBlock, agentUninstall, backgroundItemNote, captureKey, gatedHosts, hostNames, keyPolicyOf, knownHostKeys, leftOnDisk, listIdentities, listVaults, MSG, protect, protectFlow, restore, setAgentBlock, setKeyPolicy, startAgent,
-  unprotect, UPSTREAM_SIGN_TIMEOUT, type AgentOptions,
+  AGENT_MAX_AGE, agentCall, agentCheck, agentDoctor, agentHosts, agentJob, agentJobFiles, agentSshBlock, agentUninstall, backgroundItemNote, captureKey, gatedHosts, hostNames, keyPolicyOf, knownHostKeys, leftOnDisk, listIdentities, listVaults, MSG, pipeFor, protect, protectFlow, restore, setAgentBlock, setKeyPolicy, sshAgentPath, startAgent,
+  unprotect, UPSTREAM_SIGN_TIMEOUT, winAgentAction, type AgentOptions,
 } from "../src/sec/agent";
 import type { Ctx } from "../src/sec/ctx";
 import { fileStore, type KeyStore } from "../src/sec/seal";
@@ -95,7 +95,7 @@ async function signVerify(sock: string, pubFile: string, dir: string): Promise<b
   return v.code === 0 && v.out.includes("Good");
 }
 
-describe.skipIf(WIN)("vswarm agent: the protocol", () => {
+describe("vswarm agent: the protocol", () => {
   test("keys, fingerprints and public lines come out as ssh-keygen writes them", () => withState(async (d) => {
     for (const t of [["-t", "ed25519"], ["-t", "rsa", "-b", "2048"], ["-t", "ecdsa", "-b", "256"], ["-t", "ecdsa", "-b", "384"], ["-t", "ecdsa", "-b", "521"]]) {
       const f = await keygen(d.home, `k${t.join("")}`, t);
@@ -159,22 +159,24 @@ describe.skipIf(WIN)("vswarm agent: the protocol", () => {
       conn.write(new Writer().u32(10_000_000).out());
       await Bun.sleep(200);
       expect(conn.readyState).not.toBe(1);
-      // The socket is the owner's only, in a folder only the owner can enter.
-      expect(statSync(d.agent).mode & 0o077).toBe(0);
-      expect(statSync(a.sock).mode & 0o077).toBe(0);
+      // The socket is the owner's only, in a folder only the owner can enter (Windows: a pipe, no mode bits).
+      if (!WIN) {
+        expect(statSync(d.agent).mode & 0o077).toBe(0);
+        expect(statSync(a.sock).mode & 0o077).toBe(0);
+      }
     } finally {
       a.stop();
     }
   }), 60_000);
 
-  test("refuses a folder others can enter", () => withState(async (d) => {
+  test.skipIf(WIN)("refuses a folder others can enter", () => withState(async (d) => {
     mkdirSync(d.agent, { mode: 0o755 });
     chmodSync(d.agent, 0o755);
     await expect(agentFor(d)).rejects.toThrow("other users");
   }));
 });
 
-describe.skipIf(WIN)("vswarm agent: signing only when the machine passes", () => {
+describe("vswarm agent: signing only when the machine passes", () => {
   test("ssh-keygen -Y sign through the agent verifies with ssh-keygen -Y verify (ed25519, rsa-sha2-512, ecdsa)", () => withState(async (d) => {
     await sealed("pass");
     const { a } = await agentFor(d, { vaults: false });
@@ -264,7 +266,7 @@ describe.skipIf(WIN)("vswarm agent: signing only when the machine passes", () =>
     }
   }), 60_000);
 
-  test("keys it does not hold go to the upstream agent untouched, whatever the verdict", () => withState(async (d) => {
+  test.skipIf(WIN)("keys it does not hold go to the upstream agent untouched, whatever the verdict", () => withState(async (d) => {
     const upSock = join(d.home, "up.sock");
     // A throwaway ssh-agent of our own, in the foreground so its PID is the one we kill.
     const up = Bun.spawn(["ssh-agent", "-D", "-a", upSock], { env: envWith(), stdout: "ignore", stderr: "ignore" });
@@ -295,7 +297,7 @@ describe.skipIf(WIN)("vswarm agent: signing only when the machine passes", () =>
   }), 60_000);
 });
 
-describe.skipIf(WIN)("vswarm agent: the policy at its edges", () => {
+describe("vswarm agent: the policy at its edges", () => {
   test("a key store that does not answer: no signature, the refusal says why, and nothing unsealed lands in the audit log", () => withState(async (d) => {
     const { a, told } = await agentFor(d, { vaults: false, verdict: async () => "pass" });
     try {
@@ -318,7 +320,7 @@ describe.skipIf(WIN)("vswarm agent: the policy at its edges", () => {
     }
   }), 60_000);
 
-  test("ssh-add -d and -D reach your usual agent for the keys vswarm does not hold; protected keys stay", () => withState(async (d) => {
+  test.skipIf(WIN)("ssh-add -d and -D reach your usual agent for the keys vswarm does not hold; protected keys stay", () => withState(async (d) => {
     const upSock = join(d.home, "up.sock");
     const up = Bun.spawn(["ssh-agent", "-D", "-a", upSock], { env: envWith(), stdout: "ignore", stderr: "ignore" });
     try {
@@ -429,7 +431,7 @@ describe.skipIf(WIN)("vswarm agent: the policy at its edges", () => {
   test("signatures for upstream keys wait for the upstream agent (confirm-on-use, a hardware touch) up to a minute, not ten seconds", () => withState(async (d) => {
     expect(UPSTREAM_SIGN_TIMEOUT).toBe(60_000);
     // A stand-in for an upstream agent that asks you first: it answers a signature after 400 ms.
-    const upSock = join(d.home, "slow.sock");
+    const upSock = WIN ? `\\\\.\\pipe\\vs-test-slow-${process.pid}-${Date.now()}` : join(d.home, "slow.sock");
     const srv = Bun.listen<undefined>({
       unix: upSock,
       socket: {
@@ -476,8 +478,8 @@ describe.skipIf(WIN)("vswarm agent: the policy at its edges", () => {
   }), 60_000);
 });
 
-describe.skipIf(WIN)("vswarm agent: protected keys", () => {
-  test("protect moves a key into the vault and off the disk; unprotect puts it back byte for byte", () => withState(async (d) => {
+describe("vswarm agent: protected keys", () => {
+  test.skipIf(WIN)("protect moves a key into the vault and off the disk; unprotect puts it back byte for byte", () => withState(async (d) => {
     // A passphrase-protected key, the passphrase typed by a stand-in for ssh's own prompt (a throwaway literal).
     const k = await keygen(d.home, "prod_key", ["-t", "ed25519"], "throwaway-test-passphrase");
     const askpass = join(d.home, "askpass.sh");
@@ -547,7 +549,7 @@ describe.skipIf(WIN)("vswarm agent: protected keys", () => {
   }), 60_000);
 });
 
-describe.skipIf(WIN)("vswarm agent: how it is wired in", () => {
+describe("vswarm agent: how it is wired in", () => {
   test("IdentityAgent for the gated hosts goes first in ~/.ssh/config and leaves cleanly", () => {
     const dir = tmp("cfg");
     const cfg = join(dir, "config");
@@ -555,7 +557,7 @@ describe.skipIf(WIN)("vswarm agent: how it is wired in", () => {
     writeFileSync(cfg, theirs);
     const hosts = gatedHosts(sshGate(["prod-*", "*.internal"], ["/v/vswarm"], { win: false }));
     expect(hosts).toEqual(["prod-*", "*.internal"]);
-    const block = agentSshBlock(hosts, "/Users/a/.vswarm/agent/agent.sock");
+    const block = agentSshBlock(hosts, "/Users/a/.vswarm/agent/agent.sock", { win: false });
     expect(block).toContain('Match originalhost prod-*,*.internal\n    IdentityAgent "/Users/a/.vswarm/agent/agent.sock"');
     expect(setAgentBlock(cfg, block).changed).toBe(true);
     expect(readFileSync(cfg, "utf8").startsWith("# >>> vswarm agent >>>")).toBe(true);
@@ -568,7 +570,7 @@ describe.skipIf(WIN)("vswarm agent: how it is wired in", () => {
   });
 
   test("the agent block: a check before each login, the protected keys by name, no password prompts; the flags leave them out", () => {
-    const block = agentSshBlock(["prod-*", "db1"], "/s/agent.sock", { launcher: ["/v/vswarm"], keys: ["/h/.ssh/prod"] });
+    const block = agentSshBlock(["prod-*", "db1"], "/s/agent.sock", { launcher: ["/v/vswarm"], keys: ["/h/.ssh/prod"], win: false });
     expect(block).toContain('Match originalhost prod-*,db1 !exec "/v/vswarm agent check --host %n --hostname %h --port %p"');
     expect(block).toContain("    ProxyCommand /bin/sh -c 'echo \"vswarm agent: not connecting (the reason is above) · vswarm why\" >&2; exit 1'");
     // The key by its own path, not its .pub: ssh reads the .pub beside it, and never takes a public key for a private one.
@@ -579,6 +581,36 @@ describe.skipIf(WIN)("vswarm agent: how it is wired in", () => {
     expect(open).not.toContain("IdentitiesOnly");
     expect(open).not.toContain("exec");
     expect(() => agentSshBlock(["db1"], "/s/a.sock", { keys: ['/h/"x'] })).toThrow("double quote");
+  });
+
+  test("on Windows: the pipe as //./pipe/…, cmd.exe escapes, and host names for the check only with plain patterns", () => {
+    const pipe = "\\\\.\\pipe\\vswarm-agent-0123456789abcdef";
+    const block = agentSshBlock(["orca-prod", "db1"], pipe, { launcher: ["C:\\Users\\A B\\.vswarm\\bin\\vswarm.cmd"], keys: ["C:\\Users\\A B\\.ssh\\prod"], win: true });
+    expect(block).toContain('Match originalhost orca-prod,db1 !exec "C:\\Users\\A^ B\\.vswarm\\bin\\vswarm.cmd agent check --host %n --hostname %h --port %p"');
+    expect(block).toContain('    ProxyCommand cmd.exe /d /c "echo vswarm agent: not connecting (the reason is above); run: vswarm why 1>&2 & exit 1"');
+    expect(block).toContain('    IdentityAgent "//./pipe/vswarm-agent-0123456789abcdef"\n    IdentityFile "C:/Users/A B/.ssh/prod"');
+    expect(agentHosts(block)).toEqual(["orca-prod", "db1"]);
+    // A wildcard lets any name through %n, and cmd.exe would read & or | in it: the check then goes without names.
+    const wild = agentSshBlock(["prod-*"], pipe, { launcher: ["C:\\v\\vswarm.cmd"], win: true });
+    expect(wild).toContain('!exec "C:\\v\\vswarm.cmd agent check"');
+    expect(() => agentSshBlock(["db1"], pipe, { launcher: ["C:\\100%\\vswarm.cmd"], win: true })).toThrow("%");
+    expect(sshAgentPath(pipe)).toBe("//./pipe/vswarm-agent-0123456789abcdef");
+    // The pipe's name is random, kept in the agent folder: the same folder, the same pipe; another, another.
+    const a = tmp("pipe-a"), b = tmp("pipe-b");
+    expect(pipeFor(a)).toMatch(/^\\\\\.\\pipe\\vswarm-agent-[0-9a-f]{32}$/);
+    expect(pipeFor(a)).toBe(pipeFor(a));
+    expect(pipeFor(a)).not.toBe(pipeFor(b));
+  });
+
+  test("on Windows the agent is a Task Scheduler task: at logon, no time limit, started again, no console window", () => {
+    const [file, text] = Object.entries(agentJobFiles("C:\\Users\\t\\.vswarm\\bin\\vswarm.cmd", "C:\\Users\\t", "win32", "S-1-5-21-1-2-3-1001"))[0];
+    expect(file.endsWith("agent-task.xml")).toBe(true);
+    expect(text).toContain("<LogonTrigger><Enabled>true</Enabled><UserId>S-1-5-21-1-2-3-1001</UserId></LogonTrigger>");
+    expect(text).toContain("<ExecutionTimeLimit>PT0S</ExecutionTimeLimit>");
+    expect(text).toContain("<RestartOnFailure>");
+    expect(text).toMatch(/<Command>[^<]*System32[\\/]conhost\.exe<\/Command><Arguments>--headless &quot;C:\\Users\\t\\\.vswarm\\bin\\vswarm\.cmd&quot; agent run<\/Arguments>/);
+    expect(winAgentAction("C:\\v.cmd").args).toBe('--headless "C:\\v.cmd" agent run');
+    expect(winAgentAction("C:\\v.cmd").execute).toMatch(/System32[\\/]conhost\.exe$/);
   });
 
   test("a key's WARN setting: its own, or the policy's; vaults from before keep what they were protected with", () => {
@@ -601,7 +633,7 @@ describe.skipIf(WIN)("vswarm agent: how it is wired in", () => {
     expect(knownHostKeys(text, "other")).toEqual([]);
   });
 
-  test("with VSWARM_HOME, the LaunchAgent or unit of another vswarm is not called this one's, and what is the user's is labelled so", () => {
+  test.skipIf(WIN)("with VSWARM_HOME, the LaunchAgent or unit of another vswarm is not called this one's, and what is the user's is labelled so", () => {
     const home = tmp("jobs");
     const prev = process.env.VSWARM_HOME;
     try {
@@ -631,11 +663,11 @@ describe.skipIf(WIN)("vswarm agent: how it is wired in", () => {
   test("the LaunchAgent and the systemd user service run `vswarm agent run` and restart it", () => {
     const home = "/home/t";
     const mac = Object.entries(agentJobFiles("/home/t/.vswarm/bin/vswarm", home, "darwin"))[0];
-    expect(mac[0]).toBe("/home/t/Library/LaunchAgents/dev.vswarm.agent.plist");
+    expect(mac[0].replace(/\\/g, "/")).toBe("/home/t/Library/LaunchAgents/dev.vswarm.agent.plist");
     expect(mac[1]).toContain("<string>/home/t/.vswarm/bin/vswarm</string><string>agent</string><string>run</string>");
     expect(mac[1]).toContain("<key>KeepAlive</key><true/>");
     const linux = Object.entries(agentJobFiles("/home/t/.vswarm/bin/vswarm", home, "linux"))[0];
-    expect(linux[0]).toBe("/home/t/.config/systemd/user/vswarm-agent.service");
+    expect(linux[0].replace(/\\/g, "/")).toBe("/home/t/.config/systemd/user/vswarm-agent.service");
     expect(linux[1]).toContain("ExecStart=/home/t/.vswarm/bin/vswarm agent run\nRestart=on-failure");
   });
 });

@@ -321,9 +321,9 @@ export async function windows(ctx: Ctx): Promise<{ items: Item[]; texts: Record<
   return { items, texts };
 }
 
-/** vswarm's own background check (vswarm watch), with exactly the action vswarm registered. */
+/** vswarm's own tasks (vswarm watch, vswarm agent), with exactly the action vswarm registered. */
 export function ownWatchTask(i: Item): boolean {
-  return i.kind === "launch" && i.id === "task:\\vswarm\\watch" && isManagedFile(sha256(String(i.meta?.program ?? "")));
+  return i.kind === "launch" && (i.id === "task:\\vswarm\\watch" || i.id === "task:\\vswarm\\agent") && isManagedFile(sha256(String(i.meta?.program ?? "")));
 }
 
 // ── containment, as commands to paste (phase 1 never changes a Windows machine by itself)

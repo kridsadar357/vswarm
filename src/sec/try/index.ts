@@ -14,6 +14,7 @@ import { bwrapArgs, FORWARDER, freshProc, inner, INNER_PORT, NO_FRESH_PROC, trac
 import { cleanEnv, listeningPorts, profile, toolchains, type Box } from "./sandbox";
 import { staticCheck } from "./static";
 import { behaviour, denials, network, plantedFiles } from "./watch";
+import { containerSid, grantBox, grantToolchains, loopbackExempt, PROFILE, revokeBox, winCommandLine, winEnv, winToolchains } from "./windows";
 
 export const TRY_DIR = () => process.env.VSWARM_TRY_DIR ?? join(HOME, "try");
 export type Net = "none" | "registries" | "all";
@@ -53,11 +54,15 @@ export async function prepare(source: string, box: Box): Promise<string> {
   if (!existsSync(p)) throw new Error(`not found: ${source}`);
   const st = statSync(p);
   if (st.isDirectory()) {
-    cpSync(p, box.work, { recursive: true, filter: (src) => !src.includes("/node_modules/") || !src.endsWith("/.bin") });
+    cpSync(p, box.work, { recursive: true, filter: (src) => !/[\\/]node_modules[\\/]/.test(src) || !/[\\/]\.bin$/.test(src) });
     return `folder ${p}`;
   }
   if (/\.(zip)$/i.test(p)) {
-    if ((await run(["ditto", "-x", "-k", p, box.work], 300_000)) === undefined && (await run(["unzip", "-q", p, "-d", box.work], 300_000)) === undefined) throw new Error("could not unpack the zip");
+    // Windows: its own tar (bsdtar) reads zip.
+    const unpacked = process.platform === "win32"
+      ? (await run(["tar", "-xf", p, "-C", box.work], 300_000)) !== undefined
+      : (await run(["ditto", "-x", "-k", p, box.work], 300_000)) !== undefined || (await run(["unzip", "-q", p, "-d", box.work], 300_000)) !== undefined;
+    if (!unpacked) throw new Error("could not unpack the zip");
     return `zip ${p}`;
   }
   if (/\.(tar|tgz|tar\.gz|tar\.bz2|tar\.xz)$/i.test(p)) {
@@ -90,6 +95,11 @@ export function makeBox(prefix: string): Box {
   return box;
 }
 
+/** Windows: what the launcher found still in the job when the command ended (it stopped them). */
+function winLeftovers(file: string): { pid: number; command: string }[] {
+  return (readJson<{ left: { pid: number; image: string }[] }>(file)?.left ?? []).map((l) => ({ pid: l.pid, command: l.image || "(program not readable)" }));
+}
+
 /** Processes the run left behind (daemons it started). They stay sandboxed, but should not linger. */
 async function leftovers(rootPid: number, box: Box, seen: Set<number>): Promise<{ pid: number; command: string }[]> {
   const ps = await run(["ps", "-axww", "-o", "pid=,ppid=,command="], 10_000);
@@ -103,12 +113,28 @@ async function leftovers(rootPid: number, box: Box, seen: Set<number>): Promise<
   return rows.filter((r) => r.pid !== process.pid && r.pid !== rootPid && (kids.has(r.pid) || seen.has(r.pid) || r.command.includes(box.dir)));
 }
 
+/** Windows, a network beyond none: the sandbox's loopback exemption, asked for once (an administrator approves it). */
+async function windowsLoopback(opt: { ask: (q: string) => Promise<boolean>; yes?: boolean }) {
+  const { askLoopbackExempt, exemptCommand } = await import("./windows");
+  const sid = containerSid();
+  if (await loopbackExempt(sid)) return;
+  line(`${c.amber("!")} On Windows the sandbox reaches the network only through vswarm's proxy on this computer, and Windows lets it do that only after an administrator allows it, once.`);
+  line(c.dim("  With it, the code can also reach services listening on this computer's localhost. Without it, use --net none."));
+  if (!opt.yes && !(await opt.ask("  Ask Windows for that approval now?"))) throw new Error(`not run: the sandbox has no network on this computer yet · allow it in an administrator terminal: ${exemptCommand(sid)} · or run with --net none`);
+  if (!(await askLoopbackExempt(sid))) throw new Error(`Windows did not allow it · in an administrator terminal: ${exemptCommand(sid)} · or run with --net none`);
+  line(`  ${c.green("✔")} the sandbox may reach vswarm's proxy on this computer`);
+}
+
 export async function tryIt(source: string, command: string[], opt: { net: Net; ask: (q: string) => Promise<boolean>; yes?: boolean; quiet?: boolean; localhost?: boolean }): Promise<TryResult> {
   const linux = process.platform === "linux";
+  const win = process.platform === "win32";
   const bwrap = linux ? Bun.which("bwrap") : undefined;
   const strace = linux ? Bun.which("strace") ?? undefined : undefined;
   if (linux && !bwrap) throw new Error("vswarm try on Linux needs bubblewrap: sudo apt install bubblewrap strace  (dnf/pacman: bubblewrap strace)");
-  if (!linux && (process.platform !== "darwin" || !existsSync("/usr/bin/sandbox-exec"))) throw new Error("vswarm try needs macOS (sandbox-exec) or Linux (bubblewrap)");
+  if (!linux && !win && (process.platform !== "darwin" || !existsSync("/usr/bin/sandbox-exec"))) throw new Error("vswarm try needs macOS (sandbox-exec), Linux (bubblewrap) or Windows");
+  // Windows: the network beyond none goes through vswarm's proxy on loopback, which an AppContainer reaches only with
+  // an exemption, given once by an administrator. Asked here, before anything is copied.
+  if (win && opt.net !== "none") await windowsLoopback(opt);
   // `vswarm try .` names the folder after the project, not after the dot.
   const name = basename(isGitUrl(source) ? source.replace(/\.git$/, "").replace(/\/+$/, "") : resolve(source)) || "code";
   const want = join(TRY_DIR(), `${stamp()}-${name.replace(/[^A-Za-z0-9._-]/g, "_").slice(0, 40)}`);
@@ -132,18 +158,25 @@ export async function tryIt(source: string, command: string[], opt: { net: Net; 
 
   // 2 · run in the sandbox
   const shell = command.length === 0;
-  const sh = [process.env.SHELL, "/bin/zsh", "/bin/bash", "/bin/sh"].find((x) => x && existsSync(x))!;
-  const cmd = shell ? [sh, "-i"] : command;
+  const sh = win ? process.env.ComSpec ?? "C:\\Windows\\System32\\cmd.exe" : [process.env.SHELL, "/bin/zsh", "/bin/bash", "/bin/sh"].find((x) => x && existsSync(x))!;
+  const cmd = shell ? (win ? [sh] : [sh, "-i"]) : command;
   const serious = staticFindings.some((f) => RANK[f.severity] >= RANK.high);
-  line(`\n${c.bold("2  run in the sandbox")} ${c.dim(`· network: ${opt.net === "none" ? "blocked (attempts recorded)" : opt.net === "registries" ? "package registries only" : "open, every host recorded"}${opt.localhost ? (linux ? " · your localhost reachable through the proxy only, HTTP and HTTPS (--localhost; the sandbox has its own network)" : " · your localhost services reachable (--localhost)") : ""} · no access to your home, keychain or clipboard`)}`);
+  const netSay = opt.net === "none" ? (win ? "blocked (Windows does not record the attempts)" : "blocked (attempts recorded)") : opt.net === "registries" ? "package registries only" : "open, every host recorded";
+  const hostSay = win ? (opt.net !== "none" ? " · services on this computer's localhost are reachable too (Windows has no per-port rule for the sandbox)" : "")
+    : opt.localhost ? (linux ? " · your localhost reachable through the proxy only, HTTP and HTTPS (--localhost; the sandbox has its own network)" : " · your localhost services reachable (--localhost)") : "";
+  line(`\n${c.bold("2  run in the sandbox")} ${c.dim(`· network: ${netSay}${hostSay} · no access to your ${win ? "profile, other programs or the clipboard" : "home, keychain or clipboard"}`)}`);
   if (serious && !opt.yes && !(await opt.ask(`  ${c.red("This code has red flags above.")} Run it in the sandbox to see what it does?`))) {
     line(c.dim("  not run · the copy stays in " + box.work));
     return { box, source: what, command: cmd, exit: null, staticFindings, runFindings: [], verdict: verdictOf(staticFindings), leftovers: [], logRead: false };
   }
-  if (shell) line(c.dim(`  a shell opens inside the sandbox in work/ · try the code (npm install, npm test, python main.py …) · type exit when done`));
+  // What the AppContainer cannot give Node: named pipes, which child_process talks to its children through.
+  if (win) line(c.dim("  · on Windows a program that starts others through pipes (npm install scripts, most Node build tools) fails in this sandbox; to see what those do, run vswarm try inside WSL"));
+  if (shell) line(c.dim(win
+    ? "  a command prompt opens in a window of its own, inside the sandbox in work\\ (never in this terminal, which it could type into) · try the code there · type exit when done"
+    : "  a shell opens inside the sandbox in work/ · try the code (npm install, npm test, python main.py …) · type exit when done"));
   const o = await observe(box, cmd, {
     net: opt.net, localhost: opt.localhost, interactive: shell, say: line,
-    onRunEnd: () => line(`\n${c.bold("3  what it tried")} ${c.dim(linux ? (strace ? "· reading the strace log …" : "") : "· reading the sandbox log …")}`),
+    onRunEnd: () => line(`\n${c.bold("3  what it tried")} ${c.dim(win ? "" : linux ? (strace ? "· reading the strace log …" : "") : "· reading the sandbox log …")}`),
     onLeftovers: async (left) => {
       line(`  ${c.amber("!")} ${left.length} process${left.length > 1 ? "es" : ""} still running after it exited (it started something in the background)`);
       for (const l of left.slice(0, 5)) line(`      ${c.dim(`${l.pid} ${l.command.slice(0, 120)}`)}`);
@@ -155,9 +188,11 @@ export async function tryIt(source: string, command: string[], opt: { net: Net; 
   const failed = exit !== 0 && exit !== null;
   if (!runFindings.length) line(`  ${c.green("✔")} nothing suspicious: no reads of your secrets, no planted files, no outside connections`);
   for (const f of runFindings.sort((a, b) => RANK[b.severity] - RANK[a.severity])) printFinding({ ...f, id: "" }, true);
-  if (!o.logRead) line(c.dim(linux ? "  · strace is not installed, so file and connection attempts are not included: sudo apt install strace" : "  · could not read the macOS sandbox log; file and keychain attempts are not included"));
+  if (!o.logRead) line(c.dim(win ? "  · Windows keeps no record of what the sandbox refused: reads of your files were blocked, but are not listed" : linux ? "  · strace is not installed, so file and connection attempts are not included: sudo apt install strace" : "  · could not read the macOS sandbox log; file and keychain attempts are not included"));
   if (linux && exit !== 0 && /* bwrap's own failure, before the code ran */ !existsSync(join(box.tmp, "forwarder.ready")))
     line(c.amber("  ! the sandbox did not start (see bwrap's message above). \"Permission denied\" or \"No permissions to create new namespace\" means this kernel limits user namespaces (Ubuntu 24.04: sudo sysctl kernel.apparmor_restrict_unprivileged_userns=0, or an AppArmor profile for bwrap); in Docker, run the container with --security-opt seccomp=unconfined --security-opt apparmor=unconfined."));
+
+  if (win && failed) line(c.amber("  ! on Windows this may be the sandbox, not the code: a program that starts others through pipes fails here. For the full picture: vswarm try inside WSL"));
 
   const all = [...staticFindings, ...runFindings];
   const verdict = verdictOf(all);
@@ -199,10 +234,11 @@ export async function observe(box: Box, cmd: string[], opt: {
   say?: (t: string) => void; onRunEnd?: () => void; onLeftovers?: (left: { pid: number; command: string }[]) => Promise<boolean>;
 }): Promise<Observed> {
   const linux = process.platform === "linux";
+  const win = process.platform === "win32";
   const bwrap = linux ? Bun.which("bwrap") ?? undefined : undefined;
   const strace = linux ? Bun.which("strace") ?? undefined : undefined;
   if (linux && !bwrap) throw new Error("the sandbox on Linux needs bubblewrap: sudo apt install bubblewrap strace  (dnf/pacman: bubblewrap strace)");
-  if (!linux && (process.platform !== "darwin" || !existsSync("/usr/bin/sandbox-exec"))) throw new Error("the sandbox needs macOS (sandbox-exec) or Linux (bubblewrap)");
+  if (!linux && !win && (process.platform !== "darwin" || !existsSync("/usr/bin/sandbox-exec"))) throw new Error("the sandbox needs macOS (sandbox-exec), Linux (bubblewrap) or Windows");
   const decoys = opt.decoys ? Object.keys(DECOYS) : [];
   for (const rel of decoys) {
     mkdirSync(join(box.home, rel, ".."), { recursive: true, mode: 0o700 });
@@ -210,7 +246,36 @@ export async function observe(box: Box, cmd: string[], opt: {
   }
   const proxy = startProxy(allowedBy(opt.net), { ...(linux ? { unix: join(box.tmp, "proxy.sock") } : {}), localhost: opt.localhost });
   let argv: string[];
-  if (linux) {
+  let sid: string | undefined;
+  if (win) {
+    // The launcher (winbox.ts) starts the command in the AppContainer and waits; see windows.ts for what it may do.
+    sid = containerSid();
+    if (opt.net !== "none" && !(await loopbackExempt(sid))) {
+      proxy.stop();
+      throw new Error("the sandbox has no network on this computer yet (it needs a loopback exemption): vswarm try asks for it, or use --net none");
+    }
+    // The command line first: one that cmd.exe would misread is refused before anything is opened to the sandbox.
+    let cmdline: string;
+    try {
+      cmdline = winCommandLine(cmd);
+    } catch (e) {
+      proxy.stop();
+      throw e;
+    }
+    await grantToolchains(sid, winToolchains(homedir()), join(TRY_DIR(), "acl.json"), homedir());
+    for (const d of [join(box.home, "AppData", "Roaming"), join(box.home, "AppData", "Local")]) mkdirSync(d, { recursive: true });
+    await grantBox(box.dir, sid);
+    try {
+      const spec = { profile: PROFILE, cmdline, cwd: box.work, interactive: !!opt.interactive, env: { ...winEnv(box, opt.net === "none" ? undefined : proxy.port), ...opt.env }, result: join(box.tmp, "winbox-result.json") };
+      writeFileSync(join(box.tmp, "winbox.json"), JSON.stringify(spec, null, 1) + "\n");
+      writeFileSync(join(box.dir, "sandbox.json"), JSON.stringify(spec, null, 1) + "\n");
+    } catch (e) {
+      await revokeBox(box.dir, sid);
+      proxy.stop();
+      throw e;
+    }
+    argv = [process.execPath, join(import.meta.dir, "winbox.ts"), join(box.tmp, "winbox.json")];
+  } else if (linux) {
     writeFileSync(join(box.tmp, "forwarder.js"), FORWARDER);
     if (!(await freshProc(bwrap!))) {
       proxy.stop();
@@ -229,21 +294,31 @@ export async function observe(box: Box, cmd: string[], opt: {
   const t0 = Date.now();
   const tree = { pids: new Set<number>(), names: new Set<string>() };
   const io = opt.interactive ? "inherit" : "pipe";
-  const p = Bun.spawn(argv, {
-    cwd: box.work,
-    env: { ...cleanEnv(box, linux ? INNER_PORT : proxy.port, homedir()), ...opt.env },
-    stdin: opt.interactive ? "inherit" : "ignore",
-    stdout: io,
-    stderr: io,
-  });
+  let p: ReturnType<typeof Bun.spawn>;
+  try {
+    p = Bun.spawn(argv, {
+      cwd: box.work,
+      // Windows: the environment is the launcher's (vswarm's own); the code's is in the spec.
+      env: win ? process.env : { ...cleanEnv(box, linux ? INNER_PORT : proxy.port, homedir()), ...opt.env },
+      stdin: opt.interactive ? "inherit" : "ignore",
+      stdout: io,
+      stderr: io,
+    });
+  } catch (e) {
+    // The box is never left open to the sandbox after a run that did not start.
+    if (win) await revokeBox(box.dir, sid!);
+    proxy.stop();
+    throw e;
+  }
   let timedOut = false;
   const timer = opt.timeoutMs ? setTimeout(() => ((timedOut = true), p.kill(9)), opt.timeoutMs) : undefined;
   const output = opt.interactive ? Promise.resolve("")
     : Promise.all([new Response(p.stdout as ReadableStream).text(), new Response(p.stderr as ReadableStream).text()]).then(([a, b]) => (a + b).slice(-4000)).catch(() => "");
   // Follow the run's process tree, so daemons it starts are known even after they detach.
   tree.pids.add(p.pid);
-  // Linux: the pid namespace ends everything with the sandbox, and strace sees every process; no polling needed.
-  let polling = !linux;
+  // Linux: the pid namespace ends everything with the sandbox, and strace sees every process; Windows: the job object
+  // holds every process the code starts. No polling needed on either.
+  let polling = !linux && !win;
   const poll = (async () => {
     while (polling) {
       const ps = await run(["ps", "-axo", "pid=,ppid=,comm="], 5000);
@@ -264,10 +339,12 @@ export async function observe(box: Box, cmd: string[], opt: {
   await poll;
   opt.onRunEnd?.();
 
-  const left = linux ? [] : await leftovers(p.pid, box, tree.pids);
-  if (left.length && (!opt.onLeftovers || (await opt.onLeftovers(left)))) for (const l of left) await run(["kill", "-9", String(l.pid)]);
-  if (!linux) await Bun.sleep(1500); // the log is written a moment after the denials
-  let d = linux ? (strace ? traceDenials(join(box.tmp, "trace.log"), homedir(), box) : undefined) : await denials(t0, p.pid, tree);
+  // Windows: the launcher listed what the job still held, and stopped it.
+  const left = win ? winLeftovers(join(box.tmp, "winbox-result.json")) : linux ? [] : await leftovers(p.pid, box, tree.pids);
+  if (!win && left.length && (!opt.onLeftovers || (await opt.onLeftovers(left)))) for (const l of left) await run(["kill", "-9", String(l.pid)]);
+  if (win) await revokeBox(box.dir, sid!);
+  if (!linux && !win) await Bun.sleep(1500); // the log is written a moment after the denials
+  let d = win ? undefined : linux ? (strace ? traceDenials(join(box.tmp, "trace.log"), homedir(), box) : undefined) : await denials(t0, p.pid, tree);
   // A decoy read in the fake home is a read of your key, as far as the code could tell.
   if (!linux && d) d = d.map((x) => (x.target.startsWith(box.home + "/") ? { ...x, proc: `${x.proc}, via $HOME`, target: homedir() + x.target.slice(box.home.length) } : x));
   proxy.stop();
@@ -275,7 +352,7 @@ export async function observe(box: Box, cmd: string[], opt: {
   const planted = plantedFiles(box.home, new Set(Object.keys(seeded)), seeded);
   const net = network(proxy.hits, box.netlog);
   const runFindings = behaviour(d, planted, net, homedir());
-  if (left.length) runFindings.push({ id: "try:leftover", rule: "try-run", severity: "medium", title: `Left ${left.length} process${left.length > 1 ? "es" : ""} running in the background`, detail: left.slice(0, 5).map((l) => `${l.pid} ${l.command.slice(0, 120)}`) });
+  if (left.length) runFindings.push({ id: "try:leftover", rule: "try-run", severity: "medium", title: `Left ${left.length} process${left.length > 1 ? "es" : ""} running in the background${win ? " (stopped)" : ""}`, detail: left.slice(0, 5).map((l) => `${l.pid} ${l.command.slice(0, 120)}`) });
   if (timedOut) runFindings.push({ id: "try:timeout", rule: "try-run", severity: "low", title: `Stopped after ${Math.round(opt.timeoutMs! / 1000)} seconds`, detail: ["It was still running; what it would have done later is not included."] });
   // A run that failed early may simply not have reached the bad part; never call that clean.
   else if (exit !== 0) {

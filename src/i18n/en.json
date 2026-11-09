@@ -141,7 +141,6 @@
   "tile.keys.confirm": " · asks you each time",
   "tile.keys.lastUse": "Last used {at}",
   "tile.keys.neverUsed": "Not used yet",
-  "tile.keys.notHere": "Not on Windows yet (use it inside WSL)",
 
   "tile.doors.title": "Production doors (gates)",
   "tile.doors.on": "{n} guarded",

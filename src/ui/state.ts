@@ -244,7 +244,7 @@ export async function dashboard(opt: StateOpt = {}): Promise<Dash> {
 
   // Production keys in vswarm agent, and their audit log.
   const agent = await import("../sec/agent");
-  const vaults = process.platform === "win32" ? [] : agent.listVaults();
+  const vaults = agent.listVaults();
   const audit = await readAudit();
   const hosts = knownHosts(home);
   const keyName = (fp?: string) => {
@@ -259,10 +259,9 @@ export async function dashboard(opt: StateOpt = {}): Promise<Dash> {
     timeline.push({ at: e.at, tone: e.event === "sign" ? "info" : "warn", say: { key: `ev.${e.event}${host ? ".host" : a.user ? ".user" : ""}`, p } });
   }
   if (audit.why) timeline.push({ at: now, tone: "bad", say: { key: "ev.auditBroken", p: { why: audit.why } } });
-  if (process.platform === "win32") tiles.push({ key: "keys", tone: "off", say: { key: "tile.keys.notHere" }, lines: [], cmd: undefined });
-  else if (!vaults.length) tiles.push({ key: "keys", tone: "off", say: { key: "tile.keys.none" }, lines: [{ key: "tile.keys.noneWhy" }], cmd: "vswarm agent protect ~/.ssh/<production key>" });
+  if (!vaults.length) tiles.push({ key: "keys", tone: "off", say: { key: "tile.keys.none" }, lines: [{ key: "tile.keys.noneWhy" }], cmd: "vswarm agent protect ~/.ssh/<production key>" });
   else {
-    const running = existsSync(agent.agentPaths.sock()) ? !!(await agent.listIdentities(agent.agentPaths.sock(), 1500).catch(() => undefined)) : false;
+    const running = agent.mayAnswer(agent.agentPaths.sock()) ? !!(await agent.listIdentities(agent.agentPaths.sock(), 1500).catch(() => undefined)) : false;
     const pol = await agent.keyPolicies().catch(() => ({}) as Record<string, { allowWarn: boolean; confirm: boolean }>);
     const lastSign = audit.entries.filter((e) => e.event === "sign").at(-1);
     const lines: Say[] = vaults.map(({ v }) => {

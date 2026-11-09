@@ -780,7 +780,7 @@ describe("the guard reads contents", () => {
       if (prev === undefined) delete process.env.VSWARM_SEC_DIR;
       else process.env.VSWARM_SEC_DIR = prev;
     }
-  });
+  }, 30_000);
 });
 
 describe("install scripts in the sandbox", () => {

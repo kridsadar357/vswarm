@@ -242,8 +242,8 @@ export async function runSetup(d: SetupDeps): Promise<number> {
     } else if (gated.length) done(t("cli.setup.gateKept", { list: gated.join(", ") }));
     else off(t("cli.setup.later", { cmd: 'vswarm gate ssh "prod-*"' }));
 
-    // The keys those hosts use, as ssh picks them; each one offered for the vault (not on Windows yet).
-    if (d.platform !== "win32" && gated.length) {
+    // The keys those hosts use, as ssh picks them; each one offered for the vault.
+    if (gated.length) {
       const vaulted = new Set(d.vaulted());
       const keys = [...keysOf(d.home, [...new Set([...gated.filter(literal), ...names.filter((h) => listMatch(gated, h))])])].filter(([k]) => !vaulted.has(k));
       if (!keys.length) done(t(vaulted.size ? "cli.setup.keysHave" : "cli.setup.keysNone"));
@@ -299,7 +299,7 @@ export async function setupCommand(opt: { auto: boolean; offline?: boolean }): P
   const policy = await import("./sec/policy");
   const self = await selfCommand();
   const platform = process.platform;
-  const agent = platform === "win32" ? undefined : await import("./sec/agent");
+  const agent = await import("./sec/agent");
   return runSetup({
     home: homedir(), platform, interactive: canAsk(), auto: opt.auto, ask, yes,
     check: () => check(realCtx(), { offline: opt.offline }),

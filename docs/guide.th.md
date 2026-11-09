@@ -458,7 +458,9 @@ Match originalhost prod-*
 
 บล็อกใน config เป็นแค่ความสะดวก ไม่ใช่ตัวกัน client ที่อ้อมบล็อกนี้ไปจะไปเจอ agent ตัวเดิมของเรา ซึ่งไม่มีกุญแจ production แล้ว จึง login ไม่ได้ ส่วน client ที่มาถึง vswarm agent จะได้ลายเซ็นเฉพาะตอนเครื่องผ่าน ถ้ากุญแจ production ยังโหลดค้างอยู่ใน agent ตัวเดิม `protect` จะบอก ให้เอาออกจากตรงนั้นด้วย (`ssh-add -d ~/.ssh/prod_key.pub`)
 
-บน macOS agent รันเป็น LaunchAgent (`~/Library/LaunchAgents/dev.vswarm.agent.plist`) บน Linux เป็น systemd user service (`vswarm-agent.service`) ฟังอยู่ที่ `~/.vswarm/agent/agent.sock` ในโฟลเดอร์ที่เราเข้าได้คนเดียว (เช็คทุกครั้งที่เริ่ม) ครั้งแรกที่ติดตั้ง macOS จะขึ้นแจ้งเตือน "Background Items Added" (เป็นชื่อ vswarm หรือ bun) นั่นคือ LaunchAgent ตัวนี้ และเป็นเรื่องปกติ `agent on` กับ `watch on` จะบอกเรื่องนี้หนึ่งครั้ง `vswarm agent off` เอา service และบล็อกใน config ออก กุญแจที่ protect ไว้ยังอยู่ในตู้เซฟ แต่เซ็นไม่ได้จนกว่าจะเปิดใหม่หรือ unprotect `vswarm doctor` รายงานสถานะของมัน `vswarm uninstall` ปิดให้ และ `uninstall --purge` จะไม่ยอมทำถ้ายังมีกุญแจในตู้เซฟ ยังไม่มีบน Windows: ที่นั่น OpenSSH ใช้ named pipe (`\\.\pipe\openssh-ssh-agent`) และ vswarm ยังไม่ฝากงานนี้ไว้กับ named-pipe server ของ Bun ให้ใช้ใน WSL แทน
+บน macOS agent รันเป็น LaunchAgent (`~/Library/LaunchAgents/dev.vswarm.agent.plist`) บน Linux เป็น systemd user service (`vswarm-agent.service`) ฟังอยู่ที่ `~/.vswarm/agent/agent.sock` ในโฟลเดอร์ที่เราเข้าได้คนเดียว (เช็คทุกครั้งที่เริ่ม) ครั้งแรกที่ติดตั้ง macOS จะขึ้นแจ้งเตือน "Background Items Added" (เป็นชื่อ vswarm หรือ bun) นั่นคือ LaunchAgent ตัวนี้ และเป็นเรื่องปกติ `agent on` กับ `watch on` จะบอกเรื่องนี้หนึ่งครั้ง `vswarm agent off` เอา service และบล็อกใน config ออก กุญแจที่ protect ไว้ยังอยู่ในตู้เซฟ แต่เซ็นไม่ได้จนกว่าจะเปิดใหม่หรือ unprotect `vswarm doctor` รายงานสถานะของมัน `vswarm uninstall` ปิดให้ และ `uninstall --purge` จะไม่ยอมทำถ้ายังมีกุญแจในตู้เซฟ
+
+บน Windows agent เป็น named pipe ชื่อ `\\.\pipe\vswarm-agent-<id>` ที่ task `\vswarm\agent` ของ Task Scheduler เริ่มให้ตอน logon (ผ่าน `conhost --headless` จึงไม่มีหน้าต่างขึ้น และเริ่มใหม่หนึ่งนาทีหลังจากมันหยุด) และเขียน `agent.log` เอง บล็อกใน `~/.ssh/config` ระบุเป็น `IdentityAgent "//./pipe/vswarm-agent-<id>"` ซึ่งเป็นรูปแบบที่ OpenSSH ของ Windows อ่านได้ และรันคำสั่งตรวจผ่าน `cmd.exe` โดย escape path ของ launcher ถ้า pattern ของ host มี wildcard คำสั่งตรวจจะไม่ได้รับชื่อ host (เพราะ cmd.exe จะอ่าน `&` หรือ `|` ในชื่อ) จึงตรวจทุกกุญแจที่ protect ไว้ กุญแจที่ agent ไม่ได้ถือจะส่งต่อให้ agent ของ Windows เอง (`\\.\pipe\openssh-ssh-agent`) ถ้าไม่ได้ระบุตัวอื่น การยืนยันก่อนใช้กุญแจเป็นกล่อง Yes/No ที่ตอบ No เองหลัง 30 วินาที Git for Windows มี ssh ของตัวเองซึ่งอ่าน pipe ของ Windows ไม่ได้ ถ้าจะใช้ git ผ่าน ssh กับ host ที่ protect ไว้ ให้ตั้ง `git config --global core.sshCommand C:/Windows/System32/OpenSSH/ssh.exe`
 
 **ปิดอะไรได้ และอะไรยังปิดไม่ได้**
 - ปิดได้: การอ้อม config (client ไหน ทางไหน หรือลบบล็อกทิ้ง ก็ใช้กุญแจไม่ได้) และการก๊อปไฟล์กุญแจออกจากดิสก์ (โปรแกรม backup หรือ sync, stealer ที่ zip `~/.ssh` ไปทั้งโฟลเดอร์, commit พลาด) เพราะไฟล์หายไปแล้ว และตู้เซฟเปิดได้ด้วยกุญแจห่อเท่านั้น
@@ -694,12 +696,14 @@ vswarm try setup.zip                              # zip, tar.gz หรือไ�
 
 ![vswarm try กับโปรเจกต์ปกติ](img/try-clean.png)
 
-| | macOS | Linux |
-| --- | --- | --- |
-| กำแพง | Seatbelt (`sandbox-exec`) | bubblewrap: ซ่อน home ทุกคน, ซ่อน `/run`, ระบบอ่านอย่างเดียว, network และ pid ของตัวเอง |
-| บันทึกสิ่งที่พยายามทำ | log การปฏิเสธของ sandbox | strace |
-| home | home ปลอม ไม่มี token ใน environment | เหมือนกัน |
-| network | ออกได้ผ่าน proxy ของ vswarm เท่านั้น ทุก host ถูกบันทึก | เหมือนกัน |
+| | macOS | Linux | Windows |
+| --- | --- | --- | --- |
+| กำแพง | Seatbelt (`sandbox-exec`) | bubblewrap: ซ่อน home ทุกคน, ซ่อน `/run`, ระบบอ่านอย่างเดียว, network และ pid ของตัวเอง | AppContainer: ปิด profile ของคุณและดิสก์ส่วนอื่น, Windows กับ Program Files อ่านอย่างเดียว, โฟลเดอร์โปรแกรมของ toolchain ใน profile อ่านอย่างเดียว (แต่ไม่รวมข้อมูลล็อกอิน: `.cargo\credentials.toml` และ npmrc ยังปิดอยู่), ไม่ได้ใช้ console ของคุณ (shell จะเปิดในหน้าต่างของตัวเอง), ทุก process ที่มันเริ่มอยู่ใน job object |
+| บันทึกสิ่งที่พยายามทำ | log การปฏิเสธของ sandbox | strace | ไม่มีบันทึก: Windows ไม่เก็บ log ว่าปฏิเสธอะไรไปบ้าง |
+| home | home ปลอม ไม่มี token ใน environment | เหมือนกัน | เหมือนกัน (`USERPROFILE`, `APPDATA`, `TEMP` อยู่ในกล่อง) |
+| network | ออกได้ผ่าน proxy ของ vswarm เท่านั้น ทุก host ถูกบันทึก | เหมือนกัน | ไม่มีเลย ถ้าใช้ `--net registries` หรือ `all` จะออกได้ผ่าน proxy ของ vswarm เท่านั้น (ดูด้านล่าง) |
+
+บน Windows กล่องจะต่อ proxy ของ vswarm ทาง loopback ได้ก็ต่อเมื่อได้ loopback exemption ซึ่งผู้ดูแลระบบอนุญาตครั้งเดียว: `try --net registries` จะขอให้ Windows ถามอนุญาตเอง (หรือรัน `CheckNetIsolation LoopbackExempt -a -p=<SID>` ที่ `try` พิมพ์ให้) เมื่อได้แล้ว กล่องจะเข้าถึง service ที่ฟังบน localhost ของเครื่องนี้ได้ด้วย เพราะ AppContainer กันทีละพอร์ตไม่ได้ ข้อจำกัดที่ใหญ่กว่าคือ Node: AppContainer สร้าง named pipe ไม่ได้ ซึ่งเป็นช่องที่ `child_process` ใช้คุยกับโปรแกรมที่มันเริ่ม ดังนั้น `npm install` ที่มีสคริปต์ติดตั้งและ build tool ส่วนใหญ่จะล้มในกล่อง โค้ดนั้นจึงไม่ได้รัน (ไม่ได้แตะไฟล์ของคุณ) แต่ผลจะสรุปไม่ได้ โปรเจกต์แบบนี้ให้รัน `vswarm try` ใน WSL สิ่งที่ Windows ให้ได้คือ โปรแกรมหนีออกจาก job ไม่ได้ (`spawn` แบบ detached ถูกปฏิเสธ) และสิ่งที่มันทิ้งไว้ให้ทำงานต่อจะถูกแสดงและหยุดเมื่อคำสั่งจบ
 
 บริการที่เครื่องคุณเปิดรออยู่แล้ว (ฐานข้อมูล, Docker API, dev server ของคุณ) ก็เข้าไม่ถึงเช่นกัน: บน macOS ทุก port ที่เปิดรอจะถูกปฏิเสธทีละ port ส่วน Linux sandbox มี network ของตัวเอง; ใช้ `vswarm try … --localhost` เมื่อต้องการทดสอบโค้ดกับ server ที่คุณรันเอง
 
@@ -1008,8 +1012,8 @@ extension ของ Chrome/Edge/Brave, ค่าตั้งของ AI agent (
 ที่พบบ่อย ทั้งหมดมาจากการอ่าน PowerShell รอบเดียวต่อการตรวจ ([windows-snapshot.ps1](../src/sec/collect/windows-snapshot.ps1))
 ส่วนไหนอ่านไม่ได้จะแสดงเป็นช่องว่างที่ยังไม่ได้ตรวจ
 
-ใช้ได้ทุกคำสั่ง ยกเว้น `try`, `ca`, `cert`, `canary`, `agent` และ `shot` ซึ่งจะหยุดพร้อม exit 4 ถ้าจะใช้ให้ใช้ใน WSL ส่วน
-`agents --inspect` ต้องใส่ `--no-sandbox` (บน Windows ยังไม่มี sandbox) และจะเริ่มคำสั่งแบบ `.cmd` อย่าง `npx` หรือ `uvx` ผ่าน
+ใช้ได้ทุกคำสั่ง ยกเว้น `ca`, `cert`, `canary` และ `shot` ซึ่งจะหยุดพร้อม exit 4 ถ้าจะใช้ให้ใช้ใน WSL ส่วน
+`agents --inspect` ต้องใส่ `--no-sandbox` (sandbox ของมันยังไม่มีบน Windows) และจะเริ่มคำสั่งแบบ `.cmd` อย่าง `npx` หรือ `uvx` ผ่าน
 `cmd.exe` โดยใส่เครื่องหมายคำพูดครอบทุกคำ ส่วนที่ต่างจาก macOS และ Linux:
 
 - `watch` เป็น scheduled task ชื่อ `\vswarm\watch` ที่รัน launcher ทุกชั่วโมง (หรือตาม `--every` นาที) ผ่าน
@@ -1026,7 +1030,9 @@ extension ของ Chrome/Edge/Brave, ค่าตั้งของ AI agent (
   และถูกตรวจเหมือนใน bash และ zsh
 - `respond` จะล็อก เก็บหลักฐาน และพิมพ์คำสั่ง PowerShell สำหรับลบสิ่งที่เจอ (`Remove-ItemProperty`,
   `Disable-ScheduledTask`, `Set-Service`, `Remove-CimInstance`) ให้คุณรันเอง มันไม่รันเอง
-- `uninstall` จะลบ task, gate, guard, launcher และ PATH ออก
+- `agent` เป็น named pipe ที่ task `\vswarm\agent` รันให้ ดู [vswarm agent](#vswarm-agent)
+- `try` รันโค้ดใน AppContainer โปรแกรม Node ที่เริ่มโปรแกรมอื่นผ่าน pipe จะล้มในนั้น (สคริปต์ติดตั้งของ npm, build tool ส่วนใหญ่) ดู[ข้อ 9](#9-รันโค้ดที่ไม่ไว้ใจ-try)
+- `uninstall` จะลบ task, gate, guard, บล็อกของ agent, launcher และ PATH ออก
 
 ### ข้อจำกัด
 

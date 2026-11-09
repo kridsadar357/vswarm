@@ -69,7 +69,7 @@ function noMoreOptions(cmd: string, args: string[], known: string[] = []) {
 }
 
 /** Commands that need a Unix shell, ssh config, launchd/systemd or a sandbox; Windows gets them in a later phase. */
-const NOT_ON_WINDOWS = new Set(["try", "ca", "cert", "canary", "shot", "agent"]);
+const NOT_ON_WINDOWS = new Set(["ca", "cert", "canary", "shot"]);
 export const notOnWindows = (cmd: string) => t("cli.err.notOnWindows", { cmd });
 
 /**

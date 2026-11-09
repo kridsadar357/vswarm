@@ -389,7 +389,7 @@ describe("windows: respond and the command line", () => {
 
   test.if(process.platform === "win32")("on Windows, commands of later phases stop with exit 4 and point to WSL", async () => {
     const sec = tmp("sec");
-    for (const cmd of [["try", "."], ["ca", "init"], ["cert"], ["canary", "list"], ["shot", "x"], ["agents", "--inspect"]]) {
+    for (const cmd of [["ca", "init"], ["cert"], ["canary", "list"], ["shot", "x"], ["agents", "--inspect"]]) {
       const r = await vswarm(sec, ...cmd);
       expect([cmd.join(" "), r.code]).toEqual([cmd.join(" "), 4]);
       expect(r.err).toContain("not on Windows yet");

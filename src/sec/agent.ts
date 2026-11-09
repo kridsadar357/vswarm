@@ -9,7 +9,8 @@
 // refusal is logged and shown.
 //
 //   ~/.vswarm/agent/            0700, owned by you
-//     agent.sock                the agent (draft-miller-ssh-agent), 0600
+//     agent.sock                the agent (draft-miller-ssh-agent), 0600; on Windows a named pipe instead,
+//                               \\.\pipe\vswarm-agent-<folder hash>, run by the Task Scheduler task \vswarm\agent
 //     keys/<id>.json            protected keys: AES-256-GCM, the wrapping key in the Keychain / Secret Service / DPAPI
 //     config.json               the upstream agent, when you named one (agent on --upstream)
 //   ~/.vswarm/sec/audit.log     every signature and refusal, sealed and chained like the incident log
@@ -20,7 +21,7 @@
 // the machine passes, and could read the agent's memory. See docs/guide.md, "vswarm agent".
 
 import { createCipheriv, createDecipheriv, createHash, createHmac, randomBytes, scryptSync, timingSafeEqual } from "node:crypto";
-import { chmodSync, closeSync, existsSync, fsyncSync, lstatSync, mkdirSync, mkdtempSync, openSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync, writeSync } from "node:fs";
+import { appendFileSync, chmodSync, closeSync, existsSync, fsyncSync, lstatSync, mkdirSync, mkdtempSync, openSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync, writeSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { GLOBAL_TAG, HOME, paths } from "../home";
@@ -28,18 +29,44 @@ import { exec, readJson, readText, run, shq, type Ctx } from "./ctx";
 import { verdictNow } from "./gate";
 import { c, line } from "./print";
 import { t } from "../i18n";
-import { notify as desktopNotify } from "./schedule";
+import { notify as desktopNotify, powershell } from "./schedule";
 import { keyFromWire, fingerprint, parsePublicLine, publicLine, readPrivate, Reader, signedFor, signWith, Writer, type SignedFor, type SshKey } from "./sshkey";
 import { activeStore, appendAudit, blockRegex, lockState, readAudit, recordManaged, recordManagedFile, removeBlock } from "./store";
 import type { Verdict } from "./types";
-import { AGENT_END, AGENT_START } from "./sshblocks";
+import { AGENT_END, AGENT_START, cmdWord } from "./sshblocks";
 import { effective, readPolicy, type KeyPolicy, type WarnPolicy } from "./policy";
 import { blocks, expandPath, hostView, listMatch, literal, namedHosts, ownHosts } from "./sshconfig";
 import { keyEncrypted } from "./secrets";
 
+const WIN = process.platform === "win32";
+
+/**
+ * Windows has no Unix sockets for OpenSSH: the agent is a named pipe, one per agent folder, so a VSWARM_HOME of its
+ * own (or a test) gets an agent of its own. Pipe names are global to the machine and the first to create one owns it,
+ * so the name is a random one, kept in the agent folder (in your profile, which other users cannot read): another
+ * account cannot guess it and sit on it before the agent starts.
+ */
+export function pipeFor(dir: string): string {
+  const file = join(dir, "pipe");
+  let id = readText(file)?.trim();
+  if (!id || !/^[0-9a-f]{32}$/.test(id)) {
+    mkdirSync(dir, { recursive: true, mode: 0o700 });
+    id = randomBytes(16).toString("hex");
+    writeFileSync(file, id + "\n", { mode: 0o600 });
+  }
+  return `\\\\.\\pipe\\vswarm-agent-${id}`;
+}
+const isPipe = (p: string) => /^[\\/]{2}\.[\\/]pipe[\\/]/i.test(p);
+/** The agent's address as ~/.ssh/config and ssh -o take it: OpenSSH for Windows reads a pipe only as //./pipe/<name>. */
+export const sshAgentPath = (sock: string) => (isPipe(sock) ? sock.replace(/\\/g, "/") : sock);
+/** Whether there may be an agent at `sock`: a socket file, or on Windows a pipe (which has no file to look for). */
+/** This vswarm's launcher, as `vswarm install` writes it (setup.ts launcherPath; not imported, setup imports this file). */
+const ownLauncher = () => join(paths.bin(), WIN ? "vswarm.cmd" : "vswarm");
+export const mayAnswer = (sock: string) => isPipe(sock) || existsSync(sock);
+
 export const agentPaths = {
   dir: () => process.env.VSWARM_AGENT_DIR ?? join(HOME, "agent"),
-  sock: () => join(agentPaths.dir(), "agent.sock"),
+  sock: () => (WIN ? pipeFor(agentPaths.dir()) : join(agentPaths.dir(), "agent.sock")),
   keys: () => join(agentPaths.dir(), "keys"),
   config: () => join(agentPaths.dir(), "config.json"),
   log: () => join(agentPaths.dir(), "agent.log"),
@@ -300,7 +327,7 @@ function openBackup(b: Backup, code: string): Buffer {
  */
 export async function captureKey(keyfile: string, env: Record<string, string | undefined> = process.env): Promise<SshKey> {
   const dir = mkdtempSync(join(tmpdir(), "vswarm-add-"));
-  const sock = join(dir, "s");
+  const sock = WIN ? `\\\\.\\pipe\\vswarm-add-${randomBytes(12).toString("hex")}` : join(dir, "s");
   let got: SshKey | undefined;
   let why = "";
   const srv = Bun.listen<Out & { feed?: (d: Uint8Array) => void }>({
@@ -538,13 +565,16 @@ export interface Agent {
   stop(): void;
 }
 
-/** Whether `p` names the same socket as `q`. */
-const same = (p: string, q: string) => resolve(p) === resolve(q);
+/** Whether `p` names the same socket as `q` (a pipe in either spelling, any case). */
+const same = (p: string, q: string) => (isPipe(p) || isPipe(q) ? p.replace(/\//g, "\\").toLowerCase() === q.replace(/\//g, "\\").toLowerCase() : resolve(p) === resolve(q));
+
+/** Windows' own agent (the ssh-agent service), where ssh looks when SSH_AUTH_SOCK is not set. */
+export const WIN_UPSTREAM = "\\\\.\\pipe\\openssh-ssh-agent";
 
 /** Your usual agent: the one configured with agent on --upstream, else $SSH_AUTH_SOCK, never this agent itself. */
 export function resolveUpstream(env: Record<string, string | undefined> = process.env, own = agentPaths.sock()): string | undefined {
   const cfg = readJson<{ upstream?: string }>(agentPaths.config());
-  const v = env.VSWARM_AGENT_UPSTREAM ?? cfg?.upstream ?? env.SSH_AUTH_SOCK;
+  const v = env.VSWARM_AGENT_UPSTREAM ?? cfg?.upstream ?? env.SSH_AUTH_SOCK ?? (WIN ? WIN_UPSTREAM : undefined);
   if (!v || v === "none" || same(v, own)) return;
   return v;
 }
@@ -552,6 +582,8 @@ export function resolveUpstream(env: Record<string, string | undefined> = proces
 /** The socket's folder: made 0700 if missing, and refused when someone else owns it or others may enter it. */
 function safeDir(dir: string) {
   mkdirSync(dir, { recursive: true, mode: 0o700 });
+  // Windows has no mode bits to read; the folder is in your profile, which only you (and administrators) can open.
+  if (WIN) return;
   const st = statSync(dir);
   const uid = process.getuid?.();
   if (uid !== undefined && st.uid !== uid) throw new Error(`${dir} belongs to another user; the agent will not listen there`);
@@ -570,8 +602,14 @@ export const AGENT_MAX_AGE = 30_000;
  */
 export const UPSTREAM_SIGN_TIMEOUT = 60_000;
 
-/** Asks on the desktop: a dialog on macOS, SSH_ASKPASS or zenity on Linux. No way to ask means no. */
+/** Asks on the desktop: a dialog on macOS and Windows, SSH_ASKPASS or zenity on Linux. No way to ask means no. */
 export async function askOnDesktop(question: string): Promise<boolean> {
+  if (WIN) {
+    // Yes/No, No the default, gone after the timeout (-1). The question is passed in the environment, never parsed.
+    const r = await exec([powershell(), "-NoProfile", "-NonInteractive", "-Command", `if ((New-Object -ComObject WScript.Shell).Popup($env:VSWARM_Q, ${CONFIRM_TIMEOUT}, 'vswarm agent', 4 + 48 + 256) -eq 6) { 'allow' }`],
+      { env: { ...process.env, VSWARM_Q: question }, timeoutMs: (CONFIRM_TIMEOUT + 5) * 1000 }).catch(() => ({ code: 1, out: "" }));
+    return r.code === 0 && (r.out ?? "").trim() === "allow";
+  }
   if (process.platform === "darwin") {
     const q = (s: string) => `"${s.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
     const out = await run(["osascript", "-e", `display dialog ${q(question)} buttons {"Refuse", "Allow"} default button "Refuse" cancel button "Refuse" with title "vswarm agent" giving up after ${CONFIRM_TIMEOUT}`], (CONFIRM_TIMEOUT + 5) * 1000);
@@ -606,15 +644,15 @@ function target(f: SignedFor, conn: Conn, names: Record<string, string> = {}): s
 }
 
 export async function startAgent(opt: AgentOptions): Promise<Agent> {
-  if (process.platform === "win32") throw new Error("vswarm agent is not on Windows yet");
   const say = opt.log ?? ((t: string) => line(t));
-  const sock = resolve(opt.sock);
+  // On Windows a socket path names the pipe of its folder (tests, --sock); a pipe is taken as it is.
+  const sock = !WIN ? resolve(opt.sock) : isPipe(opt.sock) ? opt.sock.replace(/\//g, "\\") : pipeFor(dirname(resolve(opt.sock)));
   // sun_path is 104 bytes on macOS, 108 on Linux.
-  if (Buffer.byteLength(sock) > 100) throw new Error(`the socket path is too long for a Unix socket: ${sock}`);
-  safeDir(dirname(sock));
-  if (existsSync(sock)) {
+  if (!WIN && Buffer.byteLength(sock) > 100) throw new Error(`the socket path is too long for a Unix socket: ${sock}`);
+  if (!WIN) safeDir(dirname(sock));
+  if (mayAnswer(sock)) {
     if (await listIdentities(sock, 2000)) throw new Error(`an agent already answers on ${sock}`);
-    rmSync(sock, { force: true });
+    if (!WIN) rmSync(sock, { force: true });
   }
   const upstream = opt.upstream && !same(opt.upstream, sock) ? opt.upstream : undefined;
   const held = new Map<string, Held>();
@@ -847,28 +885,64 @@ export async function startAgent(opt: AgentOptions): Promise<Agent> {
       error() {},
     },
   });
-  try {
-    chmodSync(sock, 0o600);
-  } catch {}
+  if (!WIN)
+    try {
+      chmodSync(sock, 0o600);
+    } catch {}
   return {
     sock,
     held: () => live().map((h) => ({ fp: h.fp, comment: h.key.comment, vault: !!h.vault, confirm: h.confirm, policy: h.policy })),
     stop() {
       server.stop(true);
-      rmSync(sock, { force: true });
+      if (!WIN) rmSync(sock, { force: true });
     },
   };
 }
 
-// ── running it: a LaunchAgent or a systemd user service, and IdentityAgent for the gated hosts
+// ── running it: a LaunchAgent, a systemd user service or a Task Scheduler task, and IdentityAgent for the gated hosts
 
 const LABEL = "dev.vswarm.agent";
+export const WIN_AGENT_TASK = { path: "\\vswarm\\", name: "agent" };
+/** The task itself lives in Task Scheduler; this copy of its definition is what status and the scan look at. */
+const winTaskFile = () => join(agentPaths.dir(), "agent-task.xml");
+/** The task's one action as Get-ScheduledTask reports it: conhost --headless keeps a console window from showing. */
+export function winAgentAction(launcher: string): { execute: string; args: string } {
+  if (/["\r\n]/.test(launcher)) throw new Error(`cannot schedule ${launcher}: it contains a double quote`);
+  // By full path: Task Scheduler would otherwise look the name up.
+  return { execute: join(process.env.SystemRoot ?? "C:\\Windows", "System32", "conhost.exe"), args: `--headless "${launcher}" agent run` };
+}
 const plistPath = (home = homedir()) => join(home, "Library/LaunchAgents", `${LABEL}.plist`);
 const unitPath = (home = homedir()) => join(home, ".config/systemd/user/vswarm-agent.service");
 const xml = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;");
 const unitWord = (s: string) => (/^[A-Za-z0-9_./-]+$/.test(s) ? s : `"${s.replace(/[\\"]/g, "\\$&").replace(/%/g, "%%")}"`);
 
-export function agentJobFiles(launcher: string, home = homedir(), platform = process.platform): Record<string, string> {
+export function agentJobFiles(launcher: string, home = homedir(), platform = process.platform, winUser?: string): Record<string, string> {
+  if (platform === "win32") {
+    // At your logon, as you, without a time limit, started again a minute after it stops (as KeepAlive and Restart do).
+    const a = winAgentAction(launcher);
+    const x = (v: string) => xml(v).replace(/"/g, "&quot;");
+    // Your SID when known (an Azure AD account's DOMAIN\name may not resolve), else DOMAIN\name.
+    const user = winUser ?? (process.env.USERDOMAIN ? `${process.env.USERDOMAIN}\\${process.env.USERNAME}` : (process.env.USERNAME ?? ""));
+    return {
+      [winTaskFile()]: `<?xml version="1.0" encoding="UTF-16"?>
+<Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
+  <RegistrationInfo><Description>vswarm agent: ssh keys that sign only while this machine passes</Description></RegistrationInfo>
+  <Triggers><LogonTrigger><Enabled>true</Enabled><UserId>${x(user)}</UserId></LogonTrigger></Triggers>
+  <Principals><Principal id="Author"><LogonType>InteractiveToken</LogonType><RunLevel>LeastPrivilege</RunLevel></Principal></Principals>
+  <Settings>
+    <MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>
+    <DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>
+    <StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>
+    <StartWhenAvailable>true</StartWhenAvailable>
+    <ExecutionTimeLimit>PT0S</ExecutionTimeLimit>
+    <RestartOnFailure><Interval>PT1M</Interval><Count>999</Count></RestartOnFailure>
+    <Priority>7</Priority>
+  </Settings>
+  <Actions Context="Author"><Exec><Command>${x(a.execute)}</Command><Arguments>${x(a.args)}</Arguments></Exec></Actions>
+</Task>
+`,
+    };
+  }
   if (platform === "darwin")
     return {
       [plistPath(home)]: `<?xml version="1.0" encoding="UTF-8"?>
@@ -898,6 +972,8 @@ export interface AgentBlockOpt {
   allowPasswords?: boolean;
   /** Let ssh offer every key the agent has, not only the configured ones (agent on --all-keys). */
   allKeys?: boolean;
+  /** Windows OpenSSH: Match exec and ProxyCommand run through cmd.exe. */
+  win?: boolean;
 }
 
 /**
@@ -913,24 +989,31 @@ export interface AgentBlockOpt {
  *   KbdInteractiveAuthentication no        prompt that looks like a forgotten password
  */
 export function agentSshBlock(patterns: string[], sock: string, opt: AgentBlockOpt = {}): string {
+  const win = opt.win ?? WIN;
   const bad = patterns.find((p) => !/^[\w*?!.:\[\]-]+$/.test(p));
   if (bad !== undefined) throw new Error(`"${bad}" is not an ssh host pattern (letters, digits, . - * ? and !)`);
   // ssh expands % and ~ in IdentityAgent and IdentityFile, and the paths sit in double quotes.
   for (const p of [sock, ...(opt.keys ?? [])]) if (/["%\r\n]/.test(p)) throw new Error(`cannot put ${p} in ~/.ssh/config: it contains % or a double quote`);
   if (opt.launcher?.some((p) => /["\n]/.test(p))) throw new Error(`cannot put ${opt.launcher.join(" ")} in ~/.ssh/config: it contains a double quote`);
   const pats = patterns.join(",");
+  // cmd.exe reads & | ( ) in the host name ssh puts in for %n: on Windows the names go to the check only when every
+  // pattern is a plain name (so %n is one of them). Without them the check covers every protected key.
+  const names = !win || patterns.every((p) => /^[\w.:-]+$/.test(p)) ? " --host %n --hostname %h --port %p" : "";
+  const path = (p: string) => (win ? p.replace(/\\/g, "/") : p);
   return [
     AGENT_START,
     "# Hosts below take their keys from `vswarm agent`, which signs only while this machine passes. Remove with: vswarm agent off",
     ...(opt.launcher
       ? [
-        `Match originalhost ${pats} !exec "${opt.launcher.map(shq).join(" ")} agent check --host %n --hostname %h --port %p"`,
-        `    ProxyCommand /bin/sh -c 'echo "vswarm agent: not connecting (the reason is above) · vswarm why" >&2; exit 1'`,
+        `Match originalhost ${pats} !exec "${opt.launcher.map(win ? cmdWord : shq).join(" ")} agent check${names}"`,
+        win
+          ? `    ProxyCommand cmd.exe /d /c "echo vswarm agent: not connecting (the reason is above); run: vswarm why 1>&2 & exit 1"`
+          : `    ProxyCommand /bin/sh -c 'echo "vswarm agent: not connecting (the reason is above) · vswarm why" >&2; exit 1'`,
       ]
       : []),
     `Match originalhost ${pats}`,
-    `    IdentityAgent "${sock}"`,
-    ...(opt.keys ?? []).map((k) => `    IdentityFile "${k}"`),
+    `    IdentityAgent "${sshAgentPath(sock)}"`,
+    ...(opt.keys ?? []).map((k) => `    IdentityFile "${path(k)}"`),
     ...(opt.allKeys ? [] : ["    IdentitiesOnly yes"]),
     ...(opt.allowPasswords ? [] : ["    PasswordAuthentication no", "    KbdInteractiveAuthentication no"]),
     AGENT_END,
@@ -1013,10 +1096,11 @@ export interface CheckAnswer {
  */
 export async function agentCheck(host: string, opt: { hostname?: string; port?: number; home?: string; verdict?: () => Promise<Verdict>; policy?: () => Promise<WarnPolicy>; answering?: () => Promise<boolean> } = {}): Promise<CheckAnswer> {
   const home = opt.home ?? homedir();
-  const view = hostView(readText(join(home, ".ssh", "config")) ?? "", host, { home, withoutOwn: true });
+  // No host: Windows with wildcard patterns (see agentSshBlock); every protected key is then relevant.
+  const view = host ? hostView(readText(join(home, ".ssh", "config")) ?? "", host, { home, withoutOwn: true }) : { identityFiles: [] as string[], hostname: undefined, port: undefined };
   // The agent block comes first in the file, so when ssh runs this, a HostName or Port further down is not applied
   // yet (%h is still the name, %p 22): what the config says for the host wins.
-  noteHost(host, view.hostname ?? opt.hostname ?? host, view.port ?? opt.port ?? 22, home);
+  if (host) noteHost(host, view.hostname ?? opt.hostname ?? host, view.port ?? opt.port ?? 22, home);
   const vaults = listVaults();
   if (!vaults.length) return { ok: true, keys: [] };
   const own = view.identityFiles.map((f) => f.replace(/\.pub$/, ""));
@@ -1073,23 +1157,25 @@ export async function keyOverrides(): Promise<string[]> {
   return out;
 }
 
-export const agentInstalled = (home = homedir()) => existsSync(process.platform === "darwin" ? plistPath(home) : unitPath(home));
+const jobFile = (home: string) => (WIN ? winTaskFile() : process.platform === "darwin" ? plistPath(home) : unitPath(home));
+export const agentInstalled = (home = homedir()) => existsSync(jobFile(home));
 
 /**
  * The background job, as this vswarm sees it. The LaunchAgent or unit is the user's, whatever VSWARM_HOME says: one
  * that runs another vswarm's launcher is not this one's, and status says so instead of calling it installed.
  */
-export function agentJob(home = homedir(), launcher = join(paths.bin(), "vswarm")): { installed: boolean; note?: string } {
-  const file = process.platform === "darwin" ? plistPath(home) : unitPath(home);
+export function agentJob(home = homedir(), launcher = ownLauncher()): { installed: boolean; note?: string } {
+  const file = jobFile(home);
   const text = readText(file);
   if (text === undefined) return { installed: false };
   if (!process.env.VSWARM_HOME) return { installed: true };
-  const ours = text.includes(process.platform === "darwin" ? `<string>${xml(launcher)}</string>` : unitWord(launcher));
+  const ours = text.includes(WIN ? xml(`"${launcher}"`).replace(/"/g, "&quot;") : process.platform === "darwin" ? `<string>${xml(launcher)}</string>` : unitWord(launcher));
   return ours ? { installed: true, note: `${short(file)}${GLOBAL_TAG()}` } : { installed: false, note: `${short(file)} runs another vswarm, not this VSWARM_HOME's${GLOBAL_TAG()}` };
 }
 
 async function serviceOn(launcher: string) {
-  for (const [path, text] of Object.entries(agentJobFiles(launcher))) {
+  const sid = WIN ? /"(S-1-[0-9-]+)"/.exec((await run(["whoami", "/user", "/fo", "csv", "/nh"], 10_000)) ?? "")?.[1] : undefined;
+  for (const [path, text] of Object.entries(agentJobFiles(launcher, homedir(), process.platform, sid))) {
     const first = !existsSync(path);
     mkdirSync(dirname(path), { recursive: true });
     writeFileSync(path, text);
@@ -1106,6 +1192,12 @@ async function serviceOn(launcher: string) {
     // leaves no agent at all: wait for the old job to go, and try the bootstrap again while it is still going.
     for (let i = 0; i < 25 && (await run(["launchctl", "print", job], 5_000)) !== undefined; i++) await Bun.sleep(200);
     for (let i = 0; i < 5 && (await run(["launchctl", "bootstrap", `gui/${uid}`, plistPath()], 10_000)) === undefined; i++) await Bun.sleep(500);
+  } else if (WIN) {
+    const a = winAgentAction(launcher);
+    recordManagedFile(`${a.execute} ${a.args}`);
+    await winTaskStop();
+    const r = await ps(`Register-ScheduledTask ${WIN_TASK_ARGS} -Xml ([IO.File]::ReadAllText($env:VSWARM_TASK_XML)) -Force | Out-Null; Start-ScheduledTask ${WIN_TASK_ARGS}`, { VSWARM_TASK_XML: winTaskFile() });
+    if (r.code !== 0) throw new Error(`could not register the scheduled task: ${r.err.trim().split("\n")[0] || `exit ${r.code}`}`);
   } else {
     await run(["systemctl", "--user", "daemon-reload"], 10_000);
     await run(["systemctl", "--user", "enable", "--now", "vswarm-agent.service"], 10_000);
@@ -1118,12 +1210,43 @@ async function serviceOn(launcher: string) {
   line(`${c.red("✖")} vswarm agent did not start ${c.dim(`· ${short(agentPaths.dir())}/agent.log says why · try again: vswarm agent on`)}`);
 }
 
+const WIN_TASK_ARGS = `-TaskPath '${WIN_AGENT_TASK.path}' -TaskName '${WIN_AGENT_TASK.name}'`;
+
+/** PowerShell with its inputs in environment variables: nothing from a path is parsed as code. */
+const ps = (script: string, env: Record<string, string> = {}) =>
+  exec([powershell(), "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", script], { env: { ...process.env, ...env }, timeoutMs: 30_000 });
+
+/**
+ * Stops the task and waits until its agent no longer answers, so the next one can own the pipe. Stopping the task
+ * ends what it started; an agent that still answers after that (started by hand, or left over) is ended by its
+ * command line, which names this vswarm's cli.ts.
+ */
+async function winTaskStop() {
+  await ps(`Stop-ScheduledTask ${WIN_TASK_ARGS} -ErrorAction SilentlyContinue`);
+  const gone = async () => {
+    for (let i = 0; i < 25; i++) {
+      if (!(await listIdentities(agentPaths.sock(), 500))) return true;
+      await Bun.sleep(200);
+    }
+    return false;
+  };
+  if (await gone()) return;
+  const { CLI } = await import("../setup");
+  await ps(`Get-CimInstance Win32_Process -Filter "Name = 'bun.exe'" | Where-Object { $_.CommandLine -and $_.CommandLine.Contains($env:VSWARM_CLI) -and $_.CommandLine -match ' agent run' -and $_.ProcessId -ne $PID } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force }`, { VSWARM_CLI: CLI });
+  await gone();
+}
+
 export async function agentOff(home = homedir()): Promise<string[]> {
   const gone: string[] = [];
-  if (process.platform === "darwin") {
+  if (WIN) {
+    await winTaskStop();
+    const r = await ps(`$t = Get-ScheduledTask ${WIN_TASK_ARGS} -ErrorAction SilentlyContinue; if ($t) { $t | Unregister-ScheduledTask -Confirm:$false; 'gone' }`);
+    if (r.out.includes("gone")) gone.push(`Task Scheduler ${WIN_AGENT_TASK.path}${WIN_AGENT_TASK.name}`);
+    if (existsSync(winTaskFile())) (rmSync(winTaskFile()), gone.push(winTaskFile()));
+  } else if (process.platform === "darwin") {
     await run(["launchctl", "bootout", `gui/${process.getuid?.() ?? 501}/${LABEL}`], 10_000);
     if (existsSync(plistPath(home))) (rmSync(plistPath(home)), gone.push(plistPath(home)));
-  } else if (process.platform !== "win32") {
+  } else {
     await run(["systemctl", "--user", "disable", "--now", "vswarm-agent.service"], 10_000);
     if (existsSync(unitPath(home))) (rmSync(unitPath(home)), gone.push(unitPath(home)));
     await run(["systemctl", "--user", "daemon-reload"], 10_000);
@@ -1135,11 +1258,10 @@ export async function agentOff(home = homedir()): Promise<string[]> {
 
 /** For doctor: how the agent stands, one line each. */
 export async function agentDoctor(): Promise<{ level: "ok" | "warn" | "bad" | "off"; text: string; detail?: string }[]> {
-  if (process.platform === "win32") return [];
   const vaults = listVaults();
   const job = agentJob();
   const installed = job.installed;
-  const answering = existsSync(agentPaths.sock()) ? await listIdentities(agentPaths.sock(), 2000) : undefined;
+  const answering = mayAnswer(agentPaths.sock()) ? await listIdentities(agentPaths.sock(), 2000) : undefined;
   const out: { level: "ok" | "warn" | "bad" | "off"; text: string; detail?: string }[] = [];
   if (!installed && !vaults.length) return [{ level: "off", text: t("cli.agentDoc.off"), detail: `vswarm agent protect <key> · vswarm agent on${job.note ? ` · ${job.note}` : ""}` }];
   if (answering) out.push({ level: "ok", text: t("cli.agentDoc.running"), detail: `${agentPaths.sock()} · ${t("cli.agentDoc.keys", { n: vaults.length })}` });
@@ -1170,7 +1292,6 @@ export async function agentDoctor(): Promise<{ level: "ok" | "warn" | "bad" | "o
 
 /** For uninstall: the service and config block go; --purge is refused while keys are protected (it would delete them). */
 export async function agentUninstall(purge: boolean): Promise<string[]> {
-  if (process.platform === "win32") return [];
   const vaults = listVaults();
   if (purge && vaults.length)
     throw new Error(`${vaults.length} ssh key${vaults.length > 1 ? "s are" : " is"} protected by vswarm agent; --purge would delete ${vaults.length > 1 ? "them" : "it"}. Put ${vaults.length > 1 ? "them" : "it"} back first: ${vaults.map((x) => `vswarm agent unprotect ${x.v.path}`).join(" ; ")}`);
@@ -1288,7 +1409,7 @@ export async function testLogin(host: string, key: string, deps: Pick<ProtectDep
     "ssh", "-F", deps.cfgPath ?? join(deps.home, ".ssh", "config"),
     // A key with a passphrase asks for it on this terminal; nothing else may ask: no server passwords.
     ...(encrypted ? ["-o", "PreferredAuthentications=publickey", "-o", "PasswordAuthentication=no", "-o", "KbdInteractiveAuthentication=no"] : ["-o", "BatchMode=yes"]),
-    "-o", `IdentityAgent=${agent ?? "none"}`, "-o", "IdentitiesOnly=yes", "-o", "ConnectTimeout=10",
+    "-o", `IdentityAgent=${agent ? sshAgentPath(agent) : "none"}`, "-o", "IdentitiesOnly=yes", "-o", "ConnectTimeout=10",
     ...(agent ? ["-o", `IdentityFile=${key}`] : ["-i", key]),
     ...(deps.sshOpts ?? []), host, "true",
   ];
@@ -1408,7 +1529,7 @@ export async function protectKey(file: string, opt: Parameters<typeof protectFlo
   const sock = agentPaths.sock();
   const path = resolve(file);
   const say = deps.say ?? line;
-  const launcher = join(paths.bin(), "vswarm");
+  const launcher = ownLauncher();
   const r = await protectFlow(file, opt, {
     home: homedir(),
     agentOn: async (hosts) => {
@@ -1447,9 +1568,11 @@ export async function agentCommand(action: string, args: string[], opt: AgentCom
   const sock = agentPaths.sock();
   if (action === "run") {
     const t = readJson<AgentConfig>(agentPaths.config())?.upstreamTimeout;
-    const a = await startAgent({ sock, upstream: resolveUpstream(), upstreamSignTimeout: Number.isInteger(t) && t! > 0 ? t! * 1000 : undefined });
+    // Task Scheduler keeps no output (launchd and systemd do): on Windows the agent writes its log itself.
+    const say = WIN ? (s: string) => { try { appendFileSync(agentPaths.log(), s.replace(/\x1b\[[0-9;]*m/g, "") + "\n"); } catch {} } : (s: string) => line(s);
+    const a = await startAgent({ sock, log: say, upstream: resolveUpstream(), upstreamSignTimeout: Number.isInteger(t) && t! > 0 ? t! * 1000 : undefined });
     const up = resolveUpstream();
-    line(`vswarm agent listening on ${a.sock} · ${a.held().length} protected key${a.held().length === 1 ? "" : "s"} · ${up ? `other keys from ${up}` : "no upstream agent"}`);
+    say(`vswarm agent listening on ${a.sock} · ${a.held().length} protected key${a.held().length === 1 ? "" : "s"} · ${up ? `other keys from ${up}` : "no upstream agent"}`);
     const stop = () => {
       a.stop();
       process.exit(0);
@@ -1461,13 +1584,14 @@ export async function agentCommand(action: string, args: string[], opt: AgentCom
 
   if (action === "check") {
     // Run by ssh (Match exec in the agent block): exit 0 lets the login go on, anything else ends it with the reason.
-    const host = opt.host ?? args[0];
-    if (!host) throw new Error("usage: vswarm agent check --host <name> [--hostname <address>] [--port <n>]   (ssh runs this from the agent block)");
+    // Windows leaves the names out when a pattern has wildcards (see agentSshBlock).
+    const host = opt.host ?? args[0] ?? "";
+    if (!host && !WIN) throw new Error("usage: vswarm agent check --host <name> [--hostname <address>] [--port <n>]   (ssh runs this from the agent block)");
     const r = await agentCheck(host, { hostname: opt.hostname, port: opt.port });
     if (r.ok) return;
-    line(`${c.red("✖ vswarm agent:")} ssh to ${host} refused: ${r.why}`);
+    line(`${c.red("✖ vswarm agent:")} ${host ? `ssh to ${host}` : "ssh"} refused: ${r.why}`);
     if (r.todo) line(`  ${c.cyan("→")} ${r.todo}`);
-    await appendAudit("refuse", r.keys.map((k) => listVaults().find((x) => x.v.path === k)?.v.fp ?? k).join(","), `${r.why} · ssh to ${host}, stopped before connecting`).catch(() => {});
+    await appendAudit("refuse", r.keys.map((k) => listVaults().find((x) => x.v.path === k)?.v.fp ?? k).join(","), `${r.why} · ssh${host ? ` to ${host}` : ""}, stopped before connecting`).catch(() => {});
     process.exitCode = 1;
     return;
   }
@@ -1494,8 +1618,8 @@ export async function agentCommand(action: string, args: string[], opt: AgentCom
       if (!cfg.allKeys) line(c.dim("  ssh offers only the protected keys and each host's own IdentityFile · keys that live only in another agent: agent on --all-keys"));
     } else {
       line(c.dim(`  ${opt.global ? "" : "no host patterns given and no ssh gate to take them from; "}to send every ssh client through the agent, in your shell's rc file:`));
-      line(`    export SSH_AUTH_SOCK=${JSON.stringify(sock)}`);
-      line(c.dim(`  or per host in ~/.ssh/config:  IdentityAgent "${sock}"`));
+      line(WIN ? `    [Environment]::SetEnvironmentVariable('SSH_AUTH_SOCK', '${sock}', 'User')   ${c.dim("(PowerShell, once; new terminals use it)")}` : `    export SSH_AUTH_SOCK=${JSON.stringify(sock)}`);
+      line(c.dim(`  or per host in ~/.ssh/config:  IdentityAgent "${sshAgentPath(sock)}"`));
     }
     line(c.dim(`  keys it does not hold go to ${resolveUpstream() ?? "no other agent (none found in SSH_AUTH_SOCK)"} · vswarm agent status · vswarm agent off`));
     if (!listVaults().length) line(c.dim("  next: vswarm agent protect ~/.ssh/<production key>"));
@@ -1510,7 +1634,7 @@ export async function agentCommand(action: string, args: string[], opt: AgentCom
   }
 
   if (action === "status") {
-    const ids = existsSync(sock) ? await listIdentities(sock, 2000) : undefined;
+    const ids = mayAnswer(sock) ? await listIdentities(sock, 2000) : undefined;
     const job = agentJob();
     line(ids ? `${c.green("●")} agent running ${c.dim(sock)}` : `${c.dim("○")} agent not running ${c.dim(job.installed ? "(installed; see " + agentPaths.log() + ")" : "· vswarm agent on")}`);
     if (job.note) line(c.dim(`  ${job.note}`));
@@ -1519,7 +1643,7 @@ export async function agentCommand(action: string, args: string[], opt: AgentCom
     const cfgText = existsSync(cfgPath) ? readFileSync(cfgPath, "utf8") : "";
     const block = cfgText.match(blockRegex(AGENT_START, AGENT_END))?.[0];
     const hosts = agentHosts(cfgText);
-    const elsewhere = block && !block.includes(`"${sock}"`) ? " (to another vswarm's agent)" : "";
+    const elsewhere = block && !block.includes(`"${sshAgentPath(sock)}"`) ? " (to another vswarm's agent)" : "";
     line(c.dim(`  hosts routed here by ~/.ssh/config${GLOBAL_TAG()}: ${hosts.length ? hosts.join(", ") + elsewhere : "none"}`));
     const global = (await readPolicy()).warn;
     line(c.dim(`  policy: WARN ${global === "allow" ? "allowed" : "refused"} · vswarm policy`));
@@ -1572,7 +1696,7 @@ export async function agentCommand(action: string, args: string[], opt: AgentCom
     const cfgPath = join(homedir(), ".ssh", "config");
     const { pruneHosts } = await import("./probe");
     const keep = await pruneHosts(agentHosts(readText(cfgPath) ?? ""), { cfgText: readText(cfgPath) ?? "", ask: opt.yes ?? (async () => false), what: "agent" });
-    if (keep) await agentOn(keep, { launcher: [join(paths.bin(), "vswarm")] });
+    if (keep) await agentOn(keep, { launcher: [ownLauncher()] });
     return;
   }
 

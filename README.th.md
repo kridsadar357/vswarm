@@ -23,7 +23,7 @@ vswarm ทำงานเสริมกับ Socket, osquery, EDR และ de
 
 ## ติดตั้ง
 
-ใช้ได้ทั้ง macOS และ Linux ต้องมี git และ [Bun](https://bun.sh) (ตัวติดตั้งใช้ Bun ที่มีอยู่ หรือลง Bun รุ่นที่กำหนดไว้หลังตรวจ SHA-256) บน Linux ถ้าจะใช้ `vswarm try` ต้องลง bubblewrap และ strace ด้วย (`sudo apt install bubblewrap strace`) ส่วน Windows 10/11 มีรุ่นทดลองที่ตรวจเครื่องได้ (Run key, task, service, WMI, PowerShell profile …) ส่วน `try` และ `gate` ตอนนี้ให้ใช้ใน WSL ดู[Windows (รุ่นทดลอง)](docs/guide.th.md#windows-รุ่นทดลอง)
+ใช้ได้ทั้ง macOS และ Linux ต้องมี git และ [Bun](https://bun.sh) (ตัวติดตั้งใช้ Bun ที่มีอยู่ หรือลง Bun รุ่นที่กำหนดไว้หลังตรวจ SHA-256) บน Linux ถ้าจะใช้ `vswarm try` ต้องลง bubblewrap และ strace ด้วย (`sudo apt install bubblewrap strace`) ส่วน Windows 10/11 มีรุ่นทดลองที่ตรวจเครื่องได้ (Run key, task, service, WMI, PowerShell profile …) พร้อม watch, ssh gate, install guard และ ssh agent ส่วน `try` รันใน AppContainer ซึ่งโปรเจกต์ Node ที่มีสคริปต์ติดตั้งควรลองใน WSL แทน ดู[Windows (รุ่นทดลอง)](docs/guide.th.md#windows-รุ่นทดลอง)
 
 บน Linux vswarm ตรวจ systemd unit, XDG autostart, `/etc/ld.so.preload` และ process จาก `/proc`
 - `vswarm try` ใช้ bubblewrap: ซ่อน home ทุกคน ซ่อน `/run` (socket ของ Docker, D-Bus, keyring) ระบบเป็นอ่านอย่างเดียว และมี network กับ pid ของตัวเอง

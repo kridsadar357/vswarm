@@ -35,8 +35,9 @@ osquery, EDR and device trust (Teleport, Kolide); it does not replace them.
 macOS and Linux. Needs git, and [Bun](https://bun.sh) (the installer uses yours, or installs a pinned Bun release
 after checking its SHA-256); on Linux, `vswarm try` also needs bubblewrap and strace
 (`sudo apt install bubblewrap strace`). Windows 10/11: a preview that checks the machine (Run keys, tasks, services,
-WMI, PowerShell profiles, …) with watch, the ssh gate and the install guard, installed with `install.ps1`; `try` stays
-in WSL for now, see [Windows (preview)](docs/guide.md#windows-preview).
+WMI, PowerShell profiles, …) with watch, the ssh gate, the install guard and the ssh agent, installed with
+`install.ps1`; `try` runs in an AppContainer there, where Node projects with install scripts are better tried in WSL,
+see [Windows (preview)](docs/guide.md#windows-preview).
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/kridsadar357/vswarm/main/install.sh | sh

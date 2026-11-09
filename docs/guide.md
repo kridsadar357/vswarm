@@ -643,8 +643,17 @@ starts). The first time it is installed, macOS shows a "Background Items Added" 
 that is this LaunchAgent, and it is expected; `agent on` and `watch on` say so once. `vswarm agent off` removes the
 service and the config block; protected keys stay in the vault and cannot sign
 until you turn it on again or unprotect them. `vswarm doctor` reports it, `vswarm uninstall` turns it off, and
-`uninstall --purge` refuses while keys are protected. Not on Windows yet: OpenSSH uses a named pipe there
-(`\\.\pipe\openssh-ssh-agent`), and vswarm does not rely on Bun's named-pipe servers yet; use it inside WSL.
+`uninstall --purge` refuses while keys are protected.
+
+On Windows the agent is a named pipe, `\\.\pipe\vswarm-agent-<id>`, started at logon by the Task Scheduler task
+`\vswarm\agent` (through `conhost --headless`, so no window shows; started again a minute after it stops) and writing
+its own `agent.log`. The block in `~/.ssh/config` names it as `IdentityAgent "//./pipe/vswarm-agent-<id>"`, the form
+the OpenSSH that ships with Windows reads, and runs the check through `cmd.exe` with the launcher's path escaped. With a
+wildcard in a host pattern the check is run without the host name (cmd.exe would read `&` or `|` in it), so it covers
+every protected key. Keys it does not hold go to Windows' own agent (`\\.\pipe\openssh-ssh-agent`) unless you name
+another. Confirm-on-use is a Yes/No box that says No after 30 seconds. Git for Windows brings its own ssh, which does not
+read a Windows pipe: for git over ssh to a protected host, `git config --global core.sshCommand
+C:/Windows/System32/OpenSSH/ssh.exe`.
 
 **What it closes, and what it does not.**
 - Closed: going around the config (any client, any route, the block deleted), and key files copied off the disk
@@ -968,12 +977,21 @@ An ordinary project:
 
 ![vswarm try on a clean project](img/try-clean.png)
 
-| | macOS | Linux |
-| --- | --- | --- |
-| walls | Seatbelt (`sandbox-exec`) | bubblewrap: every home hidden, `/run` hidden, system read-only, own network and pid namespace |
-| what it tried | the sandbox's deny log | strace |
-| home | a fake one, no tokens in the environment | the same |
-| network | only through the vswarm proxy, every host recorded | the same |
+| | macOS | Linux | Windows |
+| --- | --- | --- | --- |
+| walls | Seatbelt (`sandbox-exec`) | bubblewrap: every home hidden, `/run` hidden, system read-only, own network and pid namespace | AppContainer: your profile and the rest of the disk closed, Windows and Program Files read-only, the program folders of toolchains in your profile read-only (not their logins: `.cargo\credentials.toml` and an npmrc stay closed), no console of yours (a shell opens in a window of its own), a job object around every process it starts |
+| what it tried | the sandbox's deny log | strace | not recorded: Windows keeps no log of what the container was refused |
+| home | a fake one, no tokens in the environment | the same | the same (`USERPROFILE`, `APPDATA`, `TEMP` in the box) |
+| network | only through the vswarm proxy, every host recorded | the same | none; with `--net registries` or `all`, only the vswarm proxy (see below) |
+
+On Windows the sandbox reaches the vswarm proxy on loopback only with a loopback exemption, which an administrator
+gives once: `try --net registries` asks Windows for it (its own approval prompt; or `CheckNetIsolation LoopbackExempt -a
+-p=<SID>`, which `try` prints). With it, services listening on this computer's localhost are reachable from the box too:
+an AppContainer has no per-port rule. The bigger limit is Node: an AppContainer may not create named pipes, which is how
+`child_process` talks to the programs it starts, so `npm install` with install scripts and most build tools fail in the
+box. That code then did not run (nothing reached your files), but the run is inconclusive; for those projects, run
+`vswarm try` inside WSL. What Windows does give: a program cannot leave the job (a detached `spawn` is refused), and what
+it leaves running is listed and stopped when the command ends.
 
 Services already listening on your machine (databases, the Docker API, your dev servers) are out of reach too: on macOS
 each listening port is denied, on Linux the sandbox has its own network; `vswarm try … --localhost` lifts that when
@@ -1380,8 +1398,8 @@ Chrome/Edge/Brave extensions, AI agent configs (Claude Desktop and VS Code in `%
 credential files. All of it comes from one read-only PowerShell pass per check
 ([windows-snapshot.ps1](../src/sec/collect/windows-snapshot.ps1)); a part it cannot read is shown as a gap.
 
-Working: everything except `try`, `ca`, `cert`, `canary`, `agent` and `shot`, which stop with exit 4; use those inside
-WSL. `agents --inspect` needs `--no-sandbox` there (no sandbox on Windows yet), and starts `npx`, `uvx` and other
+Working: everything except `ca`, `cert`, `canary` and `shot`, which stop with exit 4; use those inside WSL.
+`agents --inspect` needs `--no-sandbox` there (its sandbox is not on Windows yet), and starts `npx`, `uvx` and other
 `.cmd` commands through `cmd.exe` with each word quoted. What differs from macOS and Linux:
 
 - `watch` is a scheduled task `\vswarm\watch` that runs the launcher every hour (or `--every` minutes) through
@@ -1398,7 +1416,10 @@ WSL. `agents --inspect` needs `--no-sandbox` there (no sandbox on Windows yet), 
   checked, as in bash and zsh.
 - `respond` locks, keeps evidence and prints the PowerShell commands that would remove what it found
   (`Remove-ItemProperty`, `Disable-ScheduledTask`, `Set-Service`, `Remove-CimInstance`); it never runs them itself.
-- `uninstall` removes the task, the gate, the guard, the launcher and the PATH entry.
+- `agent` is a named pipe run by the task `\vswarm\agent`; see [vswarm agent](#vswarm-agent).
+- `try` runs the code in an AppContainer. Node programs that start other programs through pipes fail there (npm
+  install scripts, most build tools); see [§9](#9-run-code-you-do-not-trust-try).
+- `uninstall` removes the tasks, the gate, the guard, the agent's block, the launcher and the PATH entry.
 
 ### Limits
 

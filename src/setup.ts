@@ -10,7 +10,7 @@ import { dq, exec, shq } from "./sec/ctx";
 import { blockRegex, files, forgetKey, loadBaseline, lockState, readBaseline, recordManaged, removeBlock, stateKey } from "./sec/store";
 import { GUARD_END, GUARD_START, guardBlock, loadGuardConfig, psGuardBlock, saveGuardConfig, type GuardConfig } from "./sec/pkg";
 import { fingerprints, PIN, secureUpdate } from "./sec/update";
-import { GATE_END, GATE_START } from "./sec/sshblocks";
+import { cmdWord, GATE_END, GATE_START } from "./sec/sshblocks";
 import { cells, colorDepth, dateOf, palette, verdictMark, width, wrap } from "./sec/print";
 import { t, type Key } from "./i18n";
 
@@ -469,19 +469,9 @@ export async function doctor(): Promise<boolean> {
 }
 
 // ── ssh gate
-export { GATE_START };
+export { cmdWord, GATE_START };
 
 /** The ~/.ssh/config block: hosts matching the patterns connect only when preflight passes. */
-/**
- * One path for cmd.exe, which runs Match exec on Windows OpenSSH. ssh's own tokenizer allows no quotes inside the
- * exec string, so spaces and cmd's special characters are escaped with ^ instead; % (ssh and cmd both expand it)
- * and quotes are refused.
- */
-export function cmdWord(p: string): string {
-  if (/["%\r\n]/.test(p)) throw new Error(`cannot put ${p} in ~/.ssh/config: it contains % or a double quote`);
-  return p.replace(/[ &|<>^()]/g, "^$&");
-}
-
 export function sshGate(patterns: string[], launcher: string[], opt: { cert?: { key: string; cert: string }; win?: boolean } = {}): string {
   const win = opt.win ?? WIN;
   // Both end up on one line of ~/.ssh/config: a space, quote or newline in a pattern would change what the line means.
@@ -786,6 +776,12 @@ export async function uninstall(args: string[]) {
   if (existsSync(sshCfg) && readFileSync(sshCfg, "utf8").includes(GATE_START)) await gate(["remove"]);
   if (await guardOn()) await guard(["off"]);
   for (const t of await (await import("./sec/cloudgate")).cloudUninstall()) ok(t);
+  // Windows: what vswarm try let its sandbox read in your toolchains' folders.
+  if (WIN) {
+    const { TRY_DIR } = await import("./sec/try");
+    const gone = await (await import("./sec/try/windows")).revokeToolchains(join(TRY_DIR(), "acl.json"));
+    if (gone.length) ok(`the try sandbox's access removed from ${gone.length} folder${gone.length > 1 ? "s" : ""}`);
+  }
   if (args.includes("--purge")) {
     // The sealing key goes too, or a reinstall would find its incident log "deleted" and stay locked.
     await forgetKey();

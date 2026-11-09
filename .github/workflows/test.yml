@@ -50,6 +50,9 @@ jobs:
           $cli = (Resolve-Path src\cli.ts).Path
           function vswarm { bun $cli @args; if ($LASTEXITCODE -and $LASTEXITCODE -ne 3) { throw "vswarm $args exit $LASTEXITCODE" } }
           function sshTry($h) { (cmd /c "ssh -o BatchMode=yes -o ConnectTimeout=3 $h true 2>&1") -join "`n" }
+          # The runner's own background programs come and go (provjobd.exe from a temp folder, talking to GitHub): vswarm
+          # rightly flags them. Accepted until a fresh check passes, so the steps below test vswarm, not the runner.
+          function passNow { $ErrorActionPreference = 'Continue'; for ($i = 0; $i -lt 6; $i++) { bun $cli preflight --quiet --max-age 0 *> $null; if ($LASTEXITCODE -eq 0) { return }; bun $cli accept --all *> $null; Start-Sleep 2 }; throw 'preflight does not pass on this runner' }
           vswarm install --yes
           if (-not (Test-Path $vs)) { throw "no launcher at $vs" }
           vswarm baseline --yes
@@ -71,6 +74,7 @@ jobs:
           if ($o -match 'vswarm') { throw 'the gate touched a host it does not guard' }
           Remove-Item $lock
           vswarm accept --all
+          passNow
           $o = sshTry 'probe-1'; $o
           if ($o -match 'did not pass preflight' -or $o -notmatch 'resolve hostname') { throw 'the gate stopped ssh although preflight passes' }
 
@@ -98,3 +102,57 @@ jobs:
           if (Test-Path $vs) { throw 'uninstall left the launcher behind' }
           if (Select-String -Path $prof -Pattern 'vswarm guard' -Quiet) { throw 'uninstall left the guard behind' }
           if (Select-String -Path (Join-Path $HOME '.ssh\config') -Pattern 'vswarm gate' -Quiet) { throw 'uninstall left the gate behind' }
+      # vswarm agent on Windows, end to end, in the default data folder: its Task Scheduler task starts the agent
+      # without the step's environment, so a VSWARM_HOME here would leave the task's agent on another pipe.
+      - name: Windows agent
+        if: runner.os == 'Windows'
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $cli = (Resolve-Path src\cli.ts).Path
+          function vswarm { bun $cli @args; if ($LASTEXITCODE -and $LASTEXITCODE -ne 3) { throw "vswarm $args exit $LASTEXITCODE" } }
+          $lock = Join-Path $HOME '.vswarm\sec\lock'
+          # The runner's own background programs come and go (provjobd.exe from a temp folder, talking to GitHub): vswarm
+          # rightly flags them. Accepted until a fresh check passes, so the steps below test vswarm, not the runner.
+          function passNow { $ErrorActionPreference = 'Continue'; for ($i = 0; $i -lt 6; $i++) { bun $cli preflight --quiet --max-age 0 *> $null; if ($LASTEXITCODE -eq 0) { return }; bun $cli accept --all *> $null; Start-Sleep 2 }; throw 'preflight does not pass on this runner' }
+          vswarm install --no-path --yes
+          vswarm baseline --yes
+          vswarm accept --all
+          passNow
+          vswarm agent on "agent-*"
+          $t = Get-ScheduledTask -TaskPath '\vswarm\' -TaskName 'agent'
+          "$($t.Actions[0].Execute) $($t.Actions[0].Arguments)"
+          $st = (bun $cli agent status 2>&1) -join "`n"; $st
+          if ($st -notmatch 'agent running') { throw 'the agent task did not start the agent' }
+          $pipe = [regex]::Match($st, '\\\\\.\\pipe\\vswarm-agent-[0-9a-f]+').Value
+          if (-not $pipe) { throw 'agent status does not name the pipe' }
+          $g = (ssh -G agent-1) -join "`n"
+          if ($g -notmatch 'identityagent //\./pipe/vswarm-agent-') { throw "ssh does not send agent-1 to the agent" }
+          $kd = Join-Path $env:RUNNER_TEMP 'agent-keys'; New-Item -ItemType Directory -Force $kd | Out-Null
+          $k = Join-Path $kd 'ci_ed25519'
+          ssh-keygen -q -t ed25519 -N '""' -C ci-agent -f $k
+          $env:SSH_AUTH_SOCK = $pipe
+          ssh-add $k
+          Move-Item $k "$k.away"
+          $l = (ssh-add -l) -join "`n"; $l
+          if ($l -notmatch 'ci-agent') { throw 'the agent does not list the key it was given' }
+          $msg = Join-Path $kd 'msg.txt'; Set-Content $msg 'deploy to production'
+          passNow
+          $ErrorActionPreference = 'Continue'
+          ssh-keygen -Y sign -f "$k.pub" -n file $msg 2>&1 | Out-Host
+          if ($LASTEXITCODE -ne 0 -or -not (Test-Path "$msg.sig")) { throw 'the agent did not sign while the machine passes' }
+          Remove-Item "$msg.sig"
+          Set-Content -Path $lock -Value '{"incident":"ci","at":0,"reason":"CI"}'
+          ssh-keygen -Y sign -f "$k.pub" -n file $msg 2>&1 | Out-Host
+          if ($LASTEXITCODE -eq 0 -or (Test-Path "$msg.sig")) { throw 'the agent signed while an incident was open' }
+          $ErrorActionPreference = 'Stop'
+          Remove-Item $lock
+          Remove-Item Env:SSH_AUTH_SOCK
+          $log = (bun $cli agent log 2>&1) -join "`n"; $log
+          if ($log -notmatch 'refused') { throw 'the refusal is not in the audit log' }
+
+          $diff = (bun $cli diff) -join "`n"
+          if ($diff -match 'vswarm\\agent') { throw "the scan reported vswarm's own agent task" }
+          vswarm uninstall
+          if (Get-ScheduledTask -TaskPath '\vswarm\' -TaskName 'agent' -ErrorAction SilentlyContinue) { throw 'uninstall left the agent task behind' }
+          if (Select-String -Path (Join-Path $HOME '.ssh\config') -Pattern 'vswarm agent' -Quiet) { throw 'uninstall left the agent block behind' }
