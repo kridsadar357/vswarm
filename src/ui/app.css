@@ -77,7 +77,7 @@ button { font: inherit; color: inherit; }
 .top { position: sticky; top: 0; z-index: 5; background: color-mix(in srgb, var(--bg) 82%, transparent); backdrop-filter: saturate(1.4) blur(12px); -webkit-backdrop-filter: saturate(1.4) blur(12px); border-bottom: 1px solid var(--line); }
 .top__in { max-width: 1120px; margin: 0 auto; padding: 12px 24px; display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .brand { display: flex; align-items: center; gap: 10px; min-width: 0; }
-.brand__mark svg { width: 28px; height: 28px; display: block; }
+.brand__mark { width: 32px; height: 32px; display: block; border-radius: 8px; }
 .brand__name { font-weight: 700; letter-spacing: -.01em; font-size: 18px; }
 .brand__host { color: var(--ink-3); font-size: 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .brand__host:not(:empty)::before { content: "·"; margin-right: 10px; }

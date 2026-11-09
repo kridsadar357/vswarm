@@ -421,7 +421,6 @@
 
   // ── start
 
-  $("brand-mark").append(icon("safe"));
   async function start() {
     if (REPORT) {
       const data = JSON.parse(embedded.textContent);

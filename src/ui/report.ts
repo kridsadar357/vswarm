@@ -28,6 +28,9 @@ export function reportHtml(dash: Dash): string {
     .replace('<meta charset="utf-8">', `<meta charset="utf-8">\n<meta http-equiv="Content-Security-Policy" content="${csp}">`);
   // Function replacements: a $ in the script or style must stay a $.
   html = html.replace('<link rel="stylesheet" href="app.css">', () => `<style>${css}</style>`);
+  // The logo travels inside the file, as the one image the policy above allows (data:).
+  const logo = `data:image/png;base64,${readFileSync(join(DIR, "logo.png")).toString("base64")}`;
+  html = html.replaceAll('"logo.png"', `"${logo}"`);
   html = html.replace('<script src="app.js" defer></script>', () => `<script id="vswarm-data" type="application/json">${scriptJson({ dash, i18n })}</script>\n<script>${js}</script>`);
   return html;
 }
