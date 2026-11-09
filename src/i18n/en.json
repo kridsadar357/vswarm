@@ -748,6 +748,7 @@
   "cli.doc.noChangeYet": "no change seen yet",
   "cli.doc.realtimeOff": "real-time watch off",
   "cli.doc.realtimeOffHow": "only the hourly check runs · vswarm watch on again adds it",
+  "cli.doc.launcherBroken": "the vswarm command cannot run: the Bun or the copy of vswarm it points to has moved",
   "cli.doc.gate": "production door (ssh gate) in place",
   "cli.doc.gateOff": "no production door (ssh gate)",
   "cli.doc.guard": "install guard on",

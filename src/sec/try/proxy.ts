@@ -51,18 +51,45 @@ export function allowedBy(mode: "none" | "registries" | "all") {
   return (host: string) => mode === "all" || (mode === "registries" && REGISTRIES.some((r) => host === r || host.endsWith("." + r)));
 }
 
+/**
+ * Bun's sockets take what they can and return how much: the rest is the caller's to send when the socket drains. A
+ * download through the proxy (an npm tarball) would otherwise lose bytes whenever the sandboxed side reads slowly.
+ */
+type Out = { backlog?: Buffer; endWhenDrained?: boolean };
+function send(sock: { write(b: Buffer): number }, out: Out, data: Buffer) {
+  if (!data.length) return;
+  if (out.backlog?.length) {
+    out.backlog = Buffer.concat([out.backlog, data]);
+    return;
+  }
+  const n = sock.write(data);
+  if (n < data.length) out.backlog = data.subarray(Math.max(n, 0));
+}
+function drained(sock: { write(b: Buffer): number; end(): void }, out: Out) {
+  const b = out.backlog;
+  out.backlog = undefined;
+  if (b) send(sock, out, b);
+  if (!out.backlog && out.endWhenDrained) sock.end();
+}
+/** Ends a socket once everything written to it has gone out. */
+function endAfter(sock: { end(): void }, out: Out) {
+  if (out.backlog?.length) out.endWhenDrained = true;
+  else sock.end();
+}
+
 /** Listens on 127.0.0.1, or on a unix socket (Linux: the sandbox has its own network and reaches it through a file). */
 export function startProxy(allow: (host: string) => boolean, opt: { unix?: string; localhost?: boolean; resolve?: Resolve } = {}): Proxy {
   const hits: ProxyHit[] = [];
-  type State = { buf: Buffer; up?: any; open: boolean; closed: boolean; pending: Buffer[] };
+  // toUp: bytes on their way to the server; toClient: to the sandboxed code.
+  type State = { buf: Buffer; up?: any; open: boolean; closed: boolean; pending: Buffer[]; toUp: Out; toClient: Out };
   const handlers = {
       open(s: import("bun").Socket<State>) {
-        s.data = { buf: Buffer.alloc(0), open: false, closed: false, pending: [] };
+        s.data = { buf: Buffer.alloc(0), open: false, closed: false, pending: [], toUp: {}, toClient: {} };
       },
       data(s: import("bun").Socket<State>, chunk: Buffer) {
         const st = s.data;
         if (st.up) {
-          if (st.open) st.up.write(chunk);
+          if (st.open) send(st.up, st.toUp, Buffer.from(chunk));
           else st.pending.push(Buffer.from(chunk));
           return;
         }
@@ -124,20 +151,21 @@ export function startProxy(allow: (host: string) => boolean, opt: { unix?: strin
                 up.end();
                 return;
               }
-              if (tunnel) s.write("HTTP/1.1 200 Connection Established\r\n\r\n");
-              else {
-                // Plain HTTP: forward the request as it came (origin servers accept absolute-form).
-                up.write(Buffer.concat([st.buf.subarray(0, end + 4)]));
-              }
-              if (rest.length && tunnel) up.write(rest);
-              for (const p of st.pending) up.write(p);
+              if (tunnel) send(s, st.toClient, Buffer.from("HTTP/1.1 200 Connection Established\r\n\r\n"));
+              // Plain HTTP: the request as it came, header and body (origin servers accept absolute-form); a tunnel:
+              // what came after its header. Then what arrived while this connection was opening. One write, and what
+              // the socket did not take yet goes out when it drains: a write can be partial, and the rest was lost.
+              send(up, st.toUp, Buffer.concat([tunnel ? rest : st.buf, ...st.pending]));
               st.pending = [];
             },
+            drain(up) {
+              drained(up, st.toUp);
+            },
             data(up, d) {
-              up.data.client.write(d);
+              send(up.data.client, st.toClient, Buffer.from(d));
             },
             close(up) {
-              up.data.client.end();
+              endAfter(up.data.client, st.toClient);
             },
             error(up) {
               up.data?.client.end();
@@ -145,10 +173,13 @@ export function startProxy(allow: (host: string) => boolean, opt: { unix?: strin
           },
         }).catch(() => s.end("HTTP/1.1 502 Bad Gateway\r\n\r\n"));
       },
+      drain(s: import("bun").Socket<State>) {
+        if (s.data) drained(s, s.data.toClient);
+      },
       close(s: import("bun").Socket<State>) {
         if (!s.data) return;
         s.data.closed = true;
-        if (s.data.up && s.data.open) s.data.up.end();
+        if (s.data.up && s.data.open) endAfter(s.data.up, s.data.toUp);
       },
       error() {},
   } satisfies import("bun").SocketHandler<State>;

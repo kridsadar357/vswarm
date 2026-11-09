@@ -748,6 +748,7 @@
   "cli.doc.noChangeYet": "ยังไม่เห็นการเปลี่ยนแปลง",
   "cli.doc.realtimeOff": "ยังไม่ได้ตรวจทันทีเมื่อมีการเปลี่ยนแปลง",
   "cli.doc.realtimeOffHow": "ตรวจแค่ทุกชั่วโมง · สั่ง vswarm watch on อีกครั้งเพื่อเพิ่ม",
+  "cli.doc.launcherBroken": "คำสั่ง vswarm รันไม่ได้: Bun หรือตัว vswarm ที่มันชี้ไปถูกย้ายหรือลบไปแล้ว",
   "cli.doc.gate": "ตั้งด่าน ssh ไว้แล้ว",
   "cli.doc.gateOff": "ยังไม่ได้ตั้งด่าน ssh",
   "cli.doc.guard": "ตรวจก่อนติดตั้ง package อยู่",

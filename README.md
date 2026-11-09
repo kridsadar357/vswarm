@@ -11,7 +11,9 @@ Check your own machine before it touches production.</p>
   <a href="https://github.com/kridsadar357/vswarm/actions/workflows/test.yml"><img src="https://github.com/kridsadar357/vswarm/actions/workflows/test.yml/badge.svg" alt="tests"></a>
   <a href="https://github.com/kridsadar357/vswarm/releases/latest"><img src="https://img.shields.io/github/v/release/kridsadar357/vswarm?label=release" alt="latest release"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache--2.0-blue" alt="Apache-2.0"></a>
-  <img src="https://img.shields.io/badge/macOS%20%7C%20Linux%20%7C%20Windows-supported-555" alt="macOS, Linux, Windows">
+  <img src="https://img.shields.io/badge/status-beta-orange" alt="beta">
+  <img src="https://img.shields.io/badge/macOS%20%7C%20Linux-supported-555" alt="macOS, Linux">
+  <img src="https://img.shields.io/badge/Windows-preview-orange" alt="Windows preview">
   <a href="SECURITY.md#signed-releases"><img src="https://img.shields.io/badge/releases-signed-2ea44f" alt="signed releases"></a>
 </p>
 
@@ -22,6 +24,10 @@ Check your own machine before it touches production.</p>
   <a href="docs/guide.md">Guide</a> ·
   <a href="README.th.md">ภาษาไทย</a>
 </p>
+
+> **Beta.** vswarm is young and still changing. Try it on a machine you can fix before you put it in front of your
+> production access, and remove it with `vswarm uninstall`, not by deleting `~/.vswarm`
+> ([why](#what-it-cant-do)). False alarms and rough edges: [tell us](https://github.com/kridsadar357/vswarm/issues/new/choose).
 
 Your servers are patched, behind a VPN, with MFA on the console. They still let in anyone holding your ssh key or your
 AWS session. So attackers stopped going for the server. They go for your laptop:
@@ -223,7 +229,10 @@ detected 103/103 (100%) · benign look-alikes quiet 39/39 · false alarms 0
 ```
 
 That covers the cases in [`src/sec/selftest-cases.ts`](src/sec/selftest-cases.ts), which we wrote, not every attack
-there is. If you have seen a technique it misses, adding a case is the most useful contribution you can make.
+there is. The look-alikes are ours too: "false alarms 0" means none on those 39, not none on your machine. A new
+LaunchAgent or Homebrew tap that you added yourself is still reported, and a high one stops production access until
+you mark it as yours (`vswarm ok <n>`). If you have seen a technique it misses, or it flagged something normal, a
+selftest case is the most useful contribution you can make.
 
 The package-name check alone, measured against every malicious npm and PyPI name in OSV: it stops 8.0% of PyPI's and
 1.9% of npm's by name, with about 1% false positives. Most malicious packages have names that look like nothing, which
@@ -273,7 +282,12 @@ SHA256:icVOFCVDfJzfuqeKqZRicZ5TtRp0jZ4g5qfuA9PUe2g
 - It won't see rootkits, firmware implants, or code that ran once and left nothing.
 - A credential that was already stolen and is used from somewhere else is invisible to the laptop.
 - A baseline taken on an infected machine treats the infection as normal.
-- Windows is a preview: `ca`, `cert`, `canary` and `shot` are not there yet.
+- Windows is a preview: `ca`, `cert` and `canary` are not there yet, `respond` lists what to clean up instead of
+  doing it, and `guard --sandbox` and the MCP sandbox (`agents --inspect`) are macOS and Linux only.
+- **Remove it with `vswarm uninstall`.** Deleting `~/.vswarm` by hand leaves vswarm's blocks in `~/.ssh/config` and
+  your shell rc. ssh to gated hosts then stops with "vswarm itself cannot run" until you reinstall or delete those
+  blocks; installs carry on unchecked, with a warning. A key you moved into the agent is then only in
+  `~/.ssh/<key>.vswarm-backup`, which `vswarm agent restore` opens with the recovery code you were given.
 
 <details>
 <summary>Everything it checks</summary>

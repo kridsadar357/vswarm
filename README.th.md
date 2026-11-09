@@ -11,7 +11,9 @@
   <a href="https://github.com/kridsadar357/vswarm/actions/workflows/test.yml"><img src="https://github.com/kridsadar357/vswarm/actions/workflows/test.yml/badge.svg" alt="tests"></a>
   <a href="https://github.com/kridsadar357/vswarm/releases/latest"><img src="https://img.shields.io/github/v/release/kridsadar357/vswarm?label=release" alt="latest release"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache--2.0-blue" alt="Apache-2.0"></a>
-  <img src="https://img.shields.io/badge/macOS%20%7C%20Linux%20%7C%20Windows-supported-555" alt="macOS, Linux, Windows">
+  <img src="https://img.shields.io/badge/status-beta-orange" alt="beta">
+  <img src="https://img.shields.io/badge/macOS%20%7C%20Linux-supported-555" alt="macOS, Linux">
+  <img src="https://img.shields.io/badge/Windows-preview-orange" alt="Windows preview">
   <a href="SECURITY.md#signed-releases"><img src="https://img.shields.io/badge/releases-signed-2ea44f" alt="signed releases"></a>
 </p>
 
@@ -22,6 +24,10 @@
   <a href="docs/guide.th.md">คู่มือ</a> ·
   <a href="README.md">English</a>
 </p>
+
+> **Beta:** vswarm ยังใหม่และยังเปลี่ยนอยู่เรื่อยๆ ลองบนเครื่องที่แก้เองได้ก่อนจะเอาไปกั้นหน้า production และถ้าจะเอาออก
+> ให้ใช้ `vswarm uninstall` อย่าลบ `~/.vswarm` เอง ([เหตุผล](#สิ่งที่ทำไม่ได้)) เจอการเตือนผิดหรือจุดที่ยังไม่ดี
+> [บอกเราได้ที่นี่](https://github.com/kridsadar357/vswarm/issues/new/choose)
 
 server สมัยนี้ลง patch ครบ อยู่หลัง VPN เปิด MFA ทุกอย่าง แต่ก็ยังยอมให้ใครก็ได้ที่ถือ ssh key หรือ session AWS ของเราเข้าไป
 ผู้โจมตีเลยไม่เจาะ server แล้ว เขามาที่โน้ตบุ๊กของเราแทน:
@@ -215,7 +221,9 @@ detected 103/103 (100%) · benign look-alikes quiet 39/39 · false alarms 0
 ```
 
 ตัวเลขนี้นับเฉพาะกรณีใน [`src/sec/selftest-cases.ts`](src/sec/selftest-cases.ts) ที่เราเขียนเอง ไม่ใช่ทุกการโจมตีที่มีในโลก
-ถ้าเคยเจอเทคนิคที่มันจับไม่ได้ การเพิ่ม case เข้าไปคือการช่วยที่มีค่าที่สุด
+ของหน้าตาคล้ายก็เราเขียนเองเหมือนกัน "false alarms 0" จึงหมายถึงไม่เตือนผิดใน 39 กรณีนั้น ไม่ได้แปลว่าเครื่องคุณจะไม่โดนเตือนผิดเลย
+LaunchAgent หรือ Homebrew tap ใหม่ที่คุณลงเองก็ยังถูกแจ้ง และถ้าระดับสูงจะกั้นการเข้า production จนกว่าจะยืนยันว่าเป็นของคุณ (`vswarm ok <เลข>`)
+ถ้าเคยเจอเทคนิคที่มันจับไม่ได้ หรือมันเตือนของปกติ การเพิ่มกรณีทดสอบคือการช่วยที่มีค่าที่สุด
 
 ส่วนการตรวจชื่อ package อย่างเดียว วัดกับชื่อ package อันตรายทั้งหมดของ npm และ PyPI ใน OSV: ดูจากชื่ออย่างเดียวหยุดได้ 8.0% ของ PyPI
 และ 1.9% ของ npm โดยเตือนผิดราว 1% package อันตรายส่วนใหญ่ชื่อไม่คล้ายอะไรเลย guard จึงเช็ค OSV, อายุ, ยอดดาวน์โหลด และสิ่งที่ install
@@ -259,7 +267,12 @@ SHA256:icVOFCVDfJzfuqeKqZRicZ5TtRp0jZ4g5qfuA9PUe2g
 - มองไม่เห็น rootkit, ของที่ฝังใน firmware หรือโค้ดที่รันครั้งเดียวแล้วไม่ทิ้งร่องรอย
 - credential ที่ถูกขโมยไปแล้วและถูกใช้จากที่อื่น โน้ตบุ๊กมองไม่เห็น
 - ถ้าบันทึก baseline ตอนเครื่องติดอยู่แล้ว สิ่งที่ติดจะถูกนับเป็นเรื่องปกติ
-- Windows ยังเป็นรุ่นทดลอง: ยังไม่มี `ca`, `cert`, `canary` และ `shot`
+- Windows ยังเป็นรุ่นทดลอง: ยังไม่มี `ca`, `cert` และ `canary`, `respond` บอกรายการที่ต้องเก็บกวาดแต่ไม่ลงมือเอง และ
+  `guard --sandbox` กับ sandbox ของ MCP (`agents --inspect`) มีแค่บน macOS กับ Linux
+- **เอาออกด้วย `vswarm uninstall` เท่านั้น** ถ้าลบ `~/.vswarm` เอง บล็อกของ vswarm จะค้างอยู่ใน `~/.ssh/config` และ shell rc
+  ssh ไป host ที่ตั้งด่านไว้จะหยุดพร้อมข้อความ "vswarm itself cannot run" จนกว่าจะติดตั้งใหม่หรือลบบล็อกนั้น ส่วนการลง package
+  จะทำต่อได้แต่ไม่ถูกตรวจและมีคำเตือน key ที่ย้ายเข้า agent ไว้จะเหลือแค่ใน `~/.ssh/<key>.vswarm-backup` ซึ่งเปิดได้ด้วย
+  `vswarm agent restore` กับ recovery code ที่ได้ตอนย้าย
 
 <details>
 <summary>ทุกคำสั่ง</summary>

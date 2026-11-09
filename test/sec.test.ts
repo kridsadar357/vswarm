@@ -372,7 +372,8 @@ describe("text that reaches a shell or a terminal", () => {
 
   test.skipIf(WIN)("generated shell: the install guard and the Linux inner script quote the paths they carry", () => {
     const g = guardBlock("/Users/a b/.vswarm/bin/vswarm");
-    expect(g).toContain(`'/Users/a b/.vswarm/bin/vswarm' pkg npm -- "$@"`);
+    expect(g).toContain(`'/Users/a b/.vswarm/bin/vswarm' pkg "$@"`);
+    expect(g).toContain(`__vswarm_pkg npm -- "$@"`);
     const box = { dir: "/h/u/try x", work: "/h/u/try x/work", home: "/h/u/try x/home", tmp: "/h/u/try x/tmp", netlog: "" };
     const [, , script] = inner(box, "/usr/bin/bun", ["node", "a.js"], "/usr/bin/strace");
     expect(script).toContain(`-o '/h/u/try x/tmp/trace.log' --`);

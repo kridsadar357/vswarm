@@ -978,6 +978,7 @@ vswarm รันด้วยสิทธิ์ของเรา บนเคร
 | `strace is not installed` | `sudo apt install strace` (ไม่มีก็ใช้ได้ แต่จะไม่เห็นการพยายามเปิดไฟล์) |
 | ติดตั้ง Bun ไม่ได้: `unzip is required` | `sudo apt install unzip` |
 | ssh เข้า host ที่ใส่ด่านไม่ได้ ทั้งที่เครื่องปกติ | `vswarm why` บอกว่าเจออะไร พร้อม `vswarm fix <n>` หรือ `vswarm ok <n>` ใต้แต่ละข้อ |
+| `vswarm: not connecting: vswarm itself cannot run` · `vswarm cannot run: Bun or vswarm itself is no longer where it was installed` · `vswarm guard: vswarm cannot run, so this install was not checked` | โฟลเดอร์ของ vswarm ถูกลบหรือ Bun ถูกย้าย แต่บล็อกของมันยังอยู่ใน `~/.ssh/config` และ shell rc ติดตั้งใหม่ (ด่านจะกลับมาทำงานเหมือนเดิม) หรือลบบล็อกระหว่าง `# >>> vswarm … >>>` กับ `# <<< vswarm … <<<` ออกจากไฟล์เหล่านั้น ถ้าเคยใช้ `vswarm agent protect` ให้กู้ key ด้วย `vswarm agent restore ~/.ssh/<key>.vswarm-backup` และ recovery code `vswarm doctor` จะบอกถ้า launcher รันไม่ได้ ครั้งหน้าให้เอาออกด้วย `vswarm uninstall` |
 | ssh ถามรหัสผ่านตอนเข้า host ที่ส่งไปใช้ agent | เป็นบล็อกของ agent จากก่อน 2.8: สั่ง `vswarm agent on` อีกครั้ง แล้วการปฏิเสธจะขึ้นใน terminal และจบด้วย `Permission denied` |
 | `vswarm agent: ssh to … refused: preflight warns, and … signs on PASS only` | กุญแจที่ protect ไว้ด้วย 2.7 หรือเก่ากว่ายังเซ็นเฉพาะ PASS สั่ง `vswarm agent policy <กุญแจ> --inherit` (ใช้นโยบายกลาง) หรือ `--allow-warn` |
 | `Your baseline is older than these checks` | vswarm เพิ่มการตรวจใหม่ ดูรายการ (เช่น `vswarm agents`) แล้ว `vswarm baseline` |

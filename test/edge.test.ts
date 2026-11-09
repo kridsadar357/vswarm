@@ -1234,6 +1234,14 @@ describe("hardening: sandbox, MCP, updates", () => {
     for (const name of ['(global-name "com.apple.coreservices.launchservicesd")', '(global-name "com.apple.screencapture.interactive")', '(global-name-prefix "com.apple.ScreenCaptureKit")']) expect(p).toContain(name);
   });
 
+  test.skipIf(process.platform !== "darwin" || !existsSync("/usr/bin/sandbox-exec"))("sandbox profile on this Mac: other programs' temp files cannot be listed or read", async () => {
+    const box = { dir: "/nonexistent/b", work: "/nonexistent/b/work", home: "/nonexistent/b/home", tmp: "/nonexistent/b/tmp", netlog: "/nonexistent/b/n" };
+    const sb = profile("/nonexistent-home", box, 1, [], []);
+    const runs = async (cmd: string[]) => (await Bun.spawn(["/usr/bin/sandbox-exec", "-p", sb, ...cmd], { cwd: "/", stdout: "ignore", stderr: "ignore" }).exited) === 0;
+    for (const dir of ["/tmp/", "/private/tmp", "/var/tmp/", tmpdir()]) expect(await runs(["/bin/ls", dir])).toBe(false);
+    expect(await runs(["/bin/ls", "/usr/bin"])).toBe(true);
+  });
+
   test.skipIf(process.platform !== "darwin" || !existsSync("/usr/bin/sandbox-exec"))("sandbox profile on this Mac: a denied listening port is refused on IPv4 and IPv6, the proxy and other ports stay reachable", async () => {
     // Several ports in a row: Seatbelt honoured a single-filter deny for some port numbers and not others.
     const listeners: { stop(force?: boolean): void }[] = [];
@@ -1313,6 +1321,31 @@ describe("hardening: sandbox, MCP, updates", () => {
     } finally {
       proxy.stop();
       upstream.stop(true);
+    }
+  }, 10_000);
+
+  test("proxy: a large download arrives whole (the socket's partial writes are finished when it drains)", async () => {
+    const big = Buffer.alloc(24 * 1024 * 1024, 7);
+    const server = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => new Response(big) });
+    const proxy = startProxy(() => true, { localhost: true });
+    try {
+      const r = await fetch(`http://127.0.0.1:${server.port}/big`, { proxy: `http://127.0.0.1:${proxy.port}`, signal: AbortSignal.timeout(20_000) });
+      expect((await r.arrayBuffer()).byteLength).toBe(big.length);
+    } finally {
+      proxy.stop();
+      server.stop(true);
+    }
+  }, 30_000);
+
+  test("proxy: a plain HTTP POST reaches the server with its body", async () => {
+    const server = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: async (r) => new Response(`got ${r.method} ${await r.text()}`) });
+    const proxy = startProxy(() => true, { localhost: true });
+    try {
+      const r = await fetch(`http://127.0.0.1:${server.port}/x`, { method: "POST", body: "hello", proxy: `http://127.0.0.1:${proxy.port}`, signal: AbortSignal.timeout(8000) });
+      expect(await r.text()).toBe("got POST hello");
+    } finally {
+      proxy.stop();
+      server.stop(true);
     }
   }, 10_000);
 

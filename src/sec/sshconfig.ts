@@ -8,7 +8,7 @@
 import { homedir } from "node:os";
 import { isAbsolute, join, resolve } from "node:path";
 import { readText } from "./ctx";
-import { AGENT_END, AGENT_START, GATE_END, GATE_START } from "./sshblocks";
+import { AGENT_END, AGENT_START, blockHosts, GATE_END, GATE_START } from "./sshblocks";
 import { removeBlock } from "./store";
 
 export interface Block {
@@ -138,13 +138,7 @@ export function namedHosts(text: string): string[] {
 
 /** The host patterns of vswarm's ssh gate block and of its agent block, as written. */
 export function ownHosts(text: string): { gate: string[]; agent: string[] } {
-  const inBlock = (start: string, end: string) => {
-    const i = text.indexOf(start);
-    const j = i < 0 ? -1 : text.indexOf(end, i);
-    return i < 0 || j < 0 ? "" : text.slice(i, j);
-  };
-  const first = (b: string) => /Match originalhost (\S+)/.exec(b)?.[1].split(",") ?? [];
-  return { gate: first(inBlock(GATE_START, GATE_END)), agent: first(inBlock(AGENT_START, AGENT_END)) };
+  return { gate: blockHosts(text, GATE_START, GATE_END), agent: blockHosts(text, AGENT_START, AGENT_END) };
 }
 
 /**

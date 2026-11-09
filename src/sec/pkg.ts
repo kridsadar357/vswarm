@@ -846,19 +846,23 @@ const EXEC_SUBS = ["exec", "x", "dlx"];
 export function guardBlock(launcher: string, opt: { run?: boolean } = {}): string {
   const q = shq(launcher);
   const run = (tool: string) => (SFW.has(tool) ? `__vswarm_run ${tool} "$@"` : `command ${tool} "$@"`);
-  const checked = (tool: string, subs: string) => `${subs}) ${q} pkg ${tool} -- "$@" || return $?; ${run(tool)}; return $?;;`;
+  const checked = (tool: string, subs: string) => `${subs}) __vswarm_pkg ${tool} -- "$@" || return $?; ${run(tool)}; return $?;;`;
   const fn = (tool: string, subs?: string) => {
-    if (subs === undefined) return `function ${tool} { ${q} pkg ${tool} -- "$@" && command ${tool} "$@"; }`;
+    if (subs === undefined) return `function ${tool} { __vswarm_pkg ${tool} -- "$@" && command ${tool} "$@"; }`;
     if (!opt.run || !RUN_TOOLS.includes(tool)) return `function ${tool} { case "$1" in ${checked(tool, subs)} esac; command ${tool} "$@"; }`;
     const all = subs.split("|");
     const exec = all.filter((s) => EXEC_SUBS.includes(s));
     const installs = all.filter((s) => !EXEC_SUBS.includes(s)).join("|");
-    return `function ${tool} { case "$1" in ${exec.length ? `${checked(tool, exec.join("|"))} ` : ""}${installs}) ${q} pkg --run ${tool} -- "$@"; return $?;; esac; command ${tool} "$@"; }`;
+    return `function ${tool} { case "$1" in ${exec.length ? `${checked(tool, exec.join("|"))} ` : ""}${installs}) __vswarm_pkg --run ${tool} -- "$@"; return $?;; esac; command ${tool} "$@"; }`;
   };
   return [
     GUARD_START,
     "# Package installs are checked by vswarm first. Skip once: command npm …   Turn off: vswarm guard off",
     // Socket Firewall, when present, checks every download of the install too (VSWARM_SFW=off to skip it).
+    // vswarm itself gone (its folder removed, Bun moved): installs go ahead unchecked, with a line saying so, instead of
+    // every npm install failing with "no such file". 126/127 also come from pkg when the tool is missing; asking the
+    // launcher for its version tells the two apart. With --run, vswarm would have run the install: it runs here.
+    `function __vswarm_pkg { ${q} pkg "$@"; local r=$?; if [ $r -ge 126 ] && [ $r -le 127 ] && ! ${q} --version >/dev/null 2>&1; then echo "vswarm guard: vswarm cannot run, so this install was not checked. Reinstall vswarm, or remove the vswarm guard block from your shell rc" >&2; if [ "$1" = --run ]; then shift; local t=$1; shift 2; command "$t" "$@"; return $?; fi; return 0; fi; return $r; }`,
     `function __vswarm_run { if [ "\${VSWARM_SFW:-}" != off ] && command -v sfw >/dev/null 2>&1; then sfw "$@"; else command "$@"; fi; }`,
     ...Object.entries(INSTALLS).map(([t, s]) => fn(t, s)),
     fn("npx"),
@@ -897,6 +901,7 @@ export function psGuardBlock(bun: string, cli: string, opt: { ignoreScripts?: bo
     "  if (-not $real) { Write-Error \"${tool}: not found on PATH\"; return }",
     "  $first = if ($a.Count) { [string]$a[0] } else { '' }",
     "  if ($first -notmatch $installs) { & $real @a; return }",
+    `  if (-not (Test-Path -LiteralPath ${q(bun)}) -or -not (Test-Path -LiteralPath ${q(cli)})) { Write-Warning 'vswarm guard: vswarm cannot run (removed, or Bun moved), so this install was not checked. Reinstall vswarm, or remove the vswarm guard block from your PowerShell profile'; & $real @a; return }`,
     `  & ${q(bun)} ${q(cli)} pkg $tool '--' @a`,
     "  if ($LASTEXITCODE -ne 0) { return }",
     ...scriptsOff,

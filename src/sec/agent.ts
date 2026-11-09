@@ -33,7 +33,7 @@ import { notify as desktopNotify, powershell } from "./schedule";
 import { keyFromWire, fingerprint, parsePublicLine, publicLine, readPrivate, Reader, signedFor, signWith, Writer, type SignedFor, type SshKey } from "./sshkey";
 import { activeStore, appendAudit, blockRegex, lockState, readAudit, recordManaged, recordManagedFile, removeBlock } from "./store";
 import type { Verdict } from "./types";
-import { AGENT_END, AGENT_START, cmdWord } from "./sshblocks";
+import { AGENT_END, AGENT_START, blockHosts, cmdWord, GATE_END, GATE_START, refusedLine } from "./sshblocks";
 import { effective, readPolicy, type KeyPolicy, type WarnPolicy } from "./policy";
 import { blocks, expandPath, hostView, listMatch, literal, namedHosts, ownHosts } from "./sshconfig";
 import { keyEncrypted } from "./secrets";
@@ -1006,9 +1006,7 @@ export function agentSshBlock(patterns: string[], sock: string, opt: AgentBlockO
     ...(opt.launcher
       ? [
         `Match originalhost ${pats} !exec "${opt.launcher.map(win ? cmdWord : shq).join(" ")} agent check${names}"`,
-        win
-          ? `    ProxyCommand cmd.exe /d /c "echo vswarm agent: not connecting (the reason is above); run: vswarm why 1>&2 & exit 1"`
-          : `    ProxyCommand /bin/sh -c 'echo "vswarm agent: not connecting (the reason is above) · vswarm why" >&2; exit 1'`,
+        refusedLine(opt.launcher.map(win ? cmdWord : shq).join(" "), win ? "vswarm agent: not connecting: the machine did not pass" : "vswarm agent: not connecting (the reason is above)", win),
       ]
       : []),
     `Match originalhost ${pats}`,
@@ -1037,13 +1035,12 @@ export function setAgentBlock(cfgPath: string, block: string | null): { changed:
 
 /** Host patterns of the ssh gate block, when there is one. */
 export function gatedHosts(cfg: string): string[] {
-  return /Match originalhost (\S+) !exec "[^"]* (?:preflight|cert) --quiet/.exec(cfg)?.[1].split(",") ?? [];
+  return blockHosts(cfg, GATE_START, GATE_END);
 }
 
 /** Host patterns of the agent block, when there is one. */
 export function agentHosts(cfg: string): string[] {
-  const block = cfg.match(blockRegex(AGENT_START, AGENT_END))?.[0] ?? "";
-  return /Match originalhost (\S+)/.exec(block)?.[1].split(",") ?? [];
+  return blockHosts(cfg, AGENT_START, AGENT_END);
 }
 
 /** The fingerprints known_hosts lists for a host (plain or hashed names, [host]:port for another port). */

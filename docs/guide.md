@@ -1359,6 +1359,7 @@ the keychain or keyring and check again.
 | `strace is not installed` | `sudo apt install strace` (try works without it, but cannot see file attempts) |
 | Bun install: `unzip is required` | `sudo apt install unzip` |
 | ssh to a gated host fails on a machine you think is fine | `vswarm why` shows why, with `vswarm fix <n>` or `vswarm ok <n>` for each finding |
+| `vswarm: not connecting: vswarm itself cannot run` · `vswarm cannot run: Bun or vswarm itself is no longer where it was installed` · `vswarm guard: vswarm cannot run, so this install was not checked` | vswarm's folder was deleted or Bun moved, and its blocks are still in `~/.ssh/config` and your shell rc. Reinstall (the gates work again as they were), or take the blocks between `# >>> vswarm … >>>` and `# <<< vswarm … <<<` out of those files. Keys you protected with `vswarm agent protect`: `vswarm agent restore ~/.ssh/<key>.vswarm-backup` with the recovery code. `vswarm doctor` says when the launcher cannot run. Next time, remove vswarm with `vswarm uninstall` |
 | ssh asks for a password on a host routed to the agent | an agent block from before 2.8: run `vswarm agent on` again, and the refusal is said on the terminal and ends in `Permission denied` |
 | `vswarm agent: ssh to … refused: preflight warns, and … signs on PASS only` | a key protected with 2.7 or earlier keeps PASS only; `vswarm agent policy <key> --inherit` (follow the policy) or `--allow-warn` |
 | `Your baseline is older than these checks` | vswarm added checks; review them (e.g. `vswarm agents`), then `vswarm baseline` |

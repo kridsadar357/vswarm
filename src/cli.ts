@@ -196,6 +196,9 @@ async function main() {
   const offline = has(args, "--offline");
   const json = has(args, "--json");
   if (process.platform === "win32" && NOT_ON_WINDOWS.has(cmd)) throw new Error(notOnWindows(cmd));
+  // After an update, once: what the old version's update could not do (setup.ts). Not on the paths ssh and installs
+  // wait for.
+  if (!["preflight", "agent", "cert", "pkg", "cmdgate", "complete", "__complete"].includes(cmd)) (await import("./setup")).afterUpdate();
 
   switch (cmd) {
     case "scan":

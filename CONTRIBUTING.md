@@ -38,9 +38,13 @@ bun src/cli.ts scan --all
 
 ## Releasing (maintainers)
 
-1. Bump `version` in `package.json` and `src/home.ts`, commit, push `main`, wait for CI.
-2. `scripts/release.sh vX.Y.Z notes.md` signs the tag with `~/.ssh/vswarm_release` (or `VSWARM_SIGNING_KEY`),
-   verifies it against `trust/allowed_signers`, pushes it and creates the GitHub release.
+Releases are batched: not more than one a week, except a security fix.
+
+1. Bump `version` in `package.json`, move the "not released yet" entry in `CHANGELOG.md` under `## X.Y.Z (date)`,
+   commit, push `main`, and wait for CI to pass on that commit.
+2. `scripts/release.sh vX.Y.Z notes.md` refuses unless the tree is clean and pushed, CI passed for that exact commit,
+   and the type check, `bun test` and the selftest pass locally. Then it signs the tag with `~/.ssh/vswarm_release`
+   (or `VSWARM_SIGNING_KEY`), verifies it against `trust/allowed_signers`, pushes it and creates the GitHub release.
 
 The signing key never leaves the maintainer's machine; use a passphrase or a hardware key (`ssh-keygen -t ed25519-sk`).
 Adding or replacing a key is a change to `trust/allowed_signers` in a release signed by a key users already trust.

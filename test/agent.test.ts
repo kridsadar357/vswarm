@@ -572,7 +572,7 @@ describe("vswarm agent: how it is wired in", () => {
   test("the agent block: a check before each login, the protected keys by name, no password prompts; the flags leave them out", () => {
     const block = agentSshBlock(["prod-*", "db1"], "/s/agent.sock", { launcher: ["/v/vswarm"], keys: ["/h/.ssh/prod"], win: false });
     expect(block).toContain('Match originalhost prod-*,db1 !exec "/v/vswarm agent check --host %n --hostname %h --port %p"');
-    expect(block).toContain("    ProxyCommand /bin/sh -c 'echo \"vswarm agent: not connecting (the reason is above) · vswarm why\" >&2; exit 1'");
+    expect(block).toContain(`    ProxyCommand /bin/sh -c "if /v/vswarm --version >/dev/null 2>&1; then echo 'vswarm agent: not connecting (the reason is above) · vswarm why' >&2; else echo 'vswarm: not connecting: vswarm itself cannot run`);
     // The key by its own path, not its .pub: ssh reads the .pub beside it, and never takes a public key for a private one.
     expect(block).toContain('Match originalhost prod-*,db1\n    IdentityAgent "/s/agent.sock"\n    IdentityFile "/h/.ssh/prod"\n    IdentitiesOnly yes\n    PasswordAuthentication no\n    KbdInteractiveAuthentication no\n');
     expect(agentHosts(block)).toEqual(["prod-*", "db1"]);
@@ -587,7 +587,7 @@ describe("vswarm agent: how it is wired in", () => {
     const pipe = "\\\\.\\pipe\\vswarm-agent-0123456789abcdef";
     const block = agentSshBlock(["orca-prod", "db1"], pipe, { launcher: ["C:\\Users\\A B\\.vswarm\\bin\\vswarm.cmd"], keys: ["C:\\Users\\A B\\.ssh\\prod"], win: true });
     expect(block).toContain('Match originalhost orca-prod,db1 !exec "C:\\Users\\A^ B\\.vswarm\\bin\\vswarm.cmd agent check --host %n --hostname %h --port %p"');
-    expect(block).toContain('    ProxyCommand cmd.exe /d /c "echo vswarm agent: not connecting (the reason is above); run: vswarm why 1>&2 & exit 1"');
+    expect(block).toContain('    ProxyCommand cmd.exe /d /c "echo vswarm agent: not connecting: the machine did not pass, or vswarm itself cannot run; run: vswarm why 1>&2 & exit 1"');
     expect(block).toContain('    IdentityAgent "//./pipe/vswarm-agent-0123456789abcdef"\n    IdentityFile "C:/Users/A B/.ssh/prod"');
     expect(agentHosts(block)).toEqual(["orca-prod", "db1"]);
     // A wildcard lets any name through %n, and cmd.exe would read & or | in it: the check then goes without names.

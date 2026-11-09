@@ -5,7 +5,7 @@
 //   4 contain   unload and quarantine login jobs and programs, strip added startup lines (each one asked)
 //   5 report    a report for your team and drafts for the package registries (you send them; nothing is sent)
 
-import { chmodSync, copyFileSync, existsSync, mkdirSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, copyFileSync, existsSync, mkdirSync, readFileSync, readlinkSync, realpathSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { basename, join } from "node:path";
 import { dq, fileHash, redact, run, shq, type Ctx } from "./ctx";
 import { commandExe, winContainment } from "./collect/windows";
@@ -171,7 +171,15 @@ function containment(f: Finding, ctx: Ctx, inc: Incident): { what: string; act?:
     case "conn":
       if (!i.path || !existsSync(i.path)) return [];
       return [
-        ...(i.kind !== "bin" && i.meta?.pid ? [{ what: `stop process ${i.meta.pid} (${i.name})`, act: async () => ((await run(["kill", "-9", String(i.meta!.pid)])) !== undefined ? `killed ${i.meta!.pid}` : "kill failed") }] : []),
+        ...(i.kind !== "bin" && i.meta?.pid ? [{
+          what: `stop process ${i.meta.pid} (${i.name})`,
+          act: async () => {
+            // The number was taken at the check; by now it may belong to another program. Stopped only if it still runs i.path.
+            const pid = Number(i.meta!.pid);
+            if (!(await runsProgram(pid, i.path!))) return `process ${pid} no longer runs ${i.path}; not stopped`;
+            return (await run(["kill", "-9", String(pid)])) !== undefined ? `killed ${pid}` : "kill failed";
+          },
+        }] : []),
         { what: `move ${i.path} to quarantine`, act: () => moveAway(i.path!) },
       ];
     case "rc":
@@ -308,3 +316,26 @@ export async function respond(ctx: Ctx, check: Check, ask: Ask, opt: { yes?: boo
   line(`  ${c.cyan("vswarm baseline")} ${c.dim("then")} ${c.cyan("vswarm unlock")}`);
   return inc;
 }
+
+/** Whether process `pid` is running the program at `path` right now (Linux: /proc/<pid>/exe; macOS: lsof). */
+export async function runsProgram(pid: number, path: string): Promise<boolean> {
+  if (!Number.isInteger(pid) || pid <= 1) return false;
+  if (process.platform === "linux") {
+    try {
+      return readlinkSync(`/proc/${pid}/exe`).replace(/ \(deleted\)$/, "") === path;
+    } catch {
+      return false;
+    }
+  }
+  // macOS: the first text segment lsof lists is the program itself (ps shows a name the program may have changed).
+  const exe = (await run(["lsof", "-a", "-p", String(pid), "-d", "txt", "-Fn"]))?.split("\n").find((l) => l.startsWith("n"))?.slice(1);
+  return !!exe && (exe === path || realpathOr(exe) === realpathOr(path));
+}
+
+const realpathOr = (p: string) => {
+  try {
+    return realpathSync(p);
+  } catch {
+    return p;
+  }
+};

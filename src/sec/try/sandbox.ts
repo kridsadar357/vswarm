@@ -58,7 +58,7 @@ export function profile(realHome: string, box: Box, proxyPort: number, extraRead
   // at start-up (bun drops its whole environment when it cannot), and a listing shows names, not contents.
   const above: string[] = [];
   for (const start of [box.dir, ...(project ? [project.dir] : [])])
-    for (let a = start; a !== "/" && a !== "."; a = dirname(a)) if (a.startsWith(realHome + "/") || a.startsWith("/private/var/folders")) above.push(a);
+    for (let a = start; a !== "/" && a !== "."; a = dirname(a)) if (a.startsWith(realHome + "/") || /^\/private\/(var\/folders|tmp|var\/tmp)\//.test(a + "/")) above.push(a);
   const keep = project?.readOnly.length ? `\n(deny file-write*${project.readOnly.map((r) => ` (subpath ${q(r)})`).join("")})` : "";
   return `(version 1)
 (deny default)
@@ -82,9 +82,9 @@ export function profile(realHome: string, box: Box, proxyPort: number, extraRead
   (global-name "com.apple.coreservices.launchservicesd")
   (global-name "com.apple.screencapture.interactive")
   (global-name-prefix "com.apple.ScreenCaptureKit"))
-; files: read the system, not your home (except toolchains) and not other apps' temp files
+; files: read the system, not your home (except toolchains) and not other apps' temp files (not even their names)
 (allow file-read*)
-(deny file-read* (subpath ${q(realHome)}) (subpath "/private/var/folders") (subpath "/Volumes"))
+(deny file-read* (subpath ${q(realHome)}) (subpath "/private/var/folders") (subpath "/private/tmp") (subpath "/private/var/tmp") (subpath "/Volumes"))
 (allow file-read* (literal ${q(realHome)})${above.map((a) => ` (literal ${q(a)})`).join("")}${tools.map((t) => ` (subpath ${q(t)})`).join("")}${mine.map((m) => ` (subpath ${q(m)})`).join("")})
 (allow file-read-metadata)${denyRead.length ? `\n(deny file-read-data${denyRead.map((d) => ` (literal ${q(d)})`).join("")})` : ""}
 (allow file-write*${mine.map((m) => ` (subpath ${q(m)})`).join("")} (literal "/dev/null") (literal "/dev/zero") (literal "/dev/dtracehelper") (regex #"^/dev/tty") (regex #"^/dev/fd/"))${keep}

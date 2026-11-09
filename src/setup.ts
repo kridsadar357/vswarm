@@ -6,11 +6,11 @@ import { ReadStream } from "node:tty";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { ensureHome, GLOBAL_TAG, HOME, paths, VERSION } from "./home";
-import { dq, exec, shq } from "./sec/ctx";
-import { blockRegex, files, forgetKey, loadBaseline, lockState, readBaseline, recordManaged, removeBlock, stateKey } from "./sec/store";
+import { dq, exec, run as quietRun, shq } from "./sec/ctx";
+import { blockRegex, files, forgetKey, loadBaseline, lockState, readBaseline, recordManaged, removeBlock, stateKey, stripManaged } from "./sec/store";
 import { GUARD_END, GUARD_START, guardBlock, loadGuardConfig, psGuardBlock, saveGuardConfig, type GuardConfig } from "./sec/pkg";
 import { fingerprints, PIN, secureUpdate } from "./sec/update";
-import { cmdWord, GATE_END, GATE_START } from "./sec/sshblocks";
+import { AGENT_END, AGENT_START, blockHosts, cmdWord, GATE_END, GATE_START, refusedLine } from "./sec/sshblocks";
 import { cells, colorDepth, dateOf, palette, verdictMark, width, wrap } from "./sec/print";
 import { t, type Key } from "./i18n";
 
@@ -116,15 +116,19 @@ export function launcherPath(): string {
   return join(paths.bin(), WIN ? "vswarm.cmd" : "vswarm");
 }
 
+/** The launcher's text: runs vswarm with the Bun that installed it, or says plainly that one of the two has moved. */
+export function launcherText(bun: string, cli: string, win = WIN): string {
+  // Bun or the checkout gone (moved, upgraded to another path, the folder removed): a sentence that says so, and exit
+  // 127, the code a shell gives for a missing program. The ssh blocks and the install guard read it as "cannot run".
+  const gone = "vswarm cannot run: Bun or vswarm itself is no longer where it was installed. Reinstall: https://github.com/kridsadar357/vswarm#install";
+  if (win) return `@echo off\r\nif not exist "${bun}" goto gone\r\nif not exist "${cli}" goto gone\r\n"${bun}" "${cli}" %*\r\nexit /b %errorlevel%\r\n:gone\r\necho ${gone} 1>&2\r\nexit /b 127\r\n`;
+  return `#!/bin/sh\n# vswarm launcher, written by \`vswarm install\`\n[ -x ${dq(bun)} ] && [ -f ${dq(cli)} ] || { echo ${dq(gone)} >&2; exit 127; }\nexec ${dq(bun)} ${dq(cli)} "$@"\n`;
+}
+
 function writeLauncher() {
   mkdirSync(paths.bin(), { recursive: true });
-  const bun = process.execPath;
-  if (WIN) {
-    writeFileSync(launcherPath(), `@echo off\r\n"${bun}" "${CLI}" %*\r\n`);
-  } else {
-    writeFileSync(launcherPath(), `#!/bin/sh\n# vswarm launcher, written by \`vswarm install\`\nexec ${dq(bun)} ${dq(CLI)} "$@"\n`);
-    chmodSync(launcherPath(), 0o755);
-  }
+  writeFileSync(launcherPath(), launcherText(process.execPath, CLI));
+  if (!WIN) chmodSync(launcherPath(), 0o755);
 }
 
 /**
@@ -390,6 +394,13 @@ export async function doctor(): Promise<boolean> {
     warn(t("cli.doc.noLauncher"), "vswarm install");
     good = false;
   }
+  // The launcher names a Bun and a checkout by path; when either moved, the ssh blocks, the install guard and the
+  // background jobs that call it stop working. This vswarm runs, so ask the launcher itself. (The Windows launcher is a
+  // .cmd, which only cmd.exe runs; it says the same thing itself when called.)
+  if (!WIN && existsSync(launcherPath()) && (await quietRun([launcherPath(), "--version"])) === undefined) {
+    bad(t("cli.doc.launcherBroken"), `${launcherPath()} · vswarm install`);
+    good = false;
+  }
   // The key that seals vswarm's own files, and where it is.
   const k = await stateKey();
   if (k.tampered) {
@@ -488,9 +499,7 @@ export function sshGate(patterns: string[], launcher: string[], opt: { cert?: { 
     `# Hosts below connect only after \`vswarm preflight\` passes. Remove with: vswarm gate remove`,
     // originalhost is the name you typed (ssh vrfix-prod), before any HostName substitution.
     `Match originalhost ${patterns.join(",")} !exec "${q} ${opt.cert ? "cert" : "preflight"} --quiet${tail}"`,
-    win
-      ? `    ProxyCommand cmd.exe /d /c "echo vswarm: not connecting: this machine did not pass preflight; run: vswarm why 1>&2 & exit 1"`
-      : `    ProxyCommand /bin/sh -c 'echo "vswarm: not connecting: this machine did not pass preflight (the reason is above) · vswarm why" >&2; exit 1'`,
+    refusedLine(q, win ? "vswarm: not connecting: this machine did not pass preflight" : "vswarm: not connecting: this machine did not pass preflight (the reason is above)", win),
     // With certificates: log in with the fresh session key and its certificate first.
     ...(opt.cert ? [`Match originalhost ${patterns.join(",")}`, `    IdentityFile ${opt.cert.key}`, `    CertificateFile ${opt.cert.cert}`] : []),
     GATE_END,
@@ -574,7 +583,7 @@ export async function gate(args: string[], home = homedir()) {
 }
 
 /** Host patterns of the ssh gate block, when there is one. */
-const gatedHostsOf = (cfg: string) => /Match originalhost (\S+) !exec "[^"]* (?:preflight|cert) --quiet/.exec(cfg)?.[1].split(",") ?? [];
+const gatedHostsOf = (cfg: string) => blockHosts(cfg, GATE_START, GATE_END);
 
 /**
  * For doctor and gate status: each host the gate and agent blocks name one by one, probed (DNS, then its ssh port;
@@ -710,6 +719,62 @@ export function adoptManagedBlocks() {
 }
 
 /**
+ * Once per new version, on the copy the launcher runs: what `vswarm update` cannot do for itself, since the update
+ * runs in the old version's code. Today: the launcher's own checks, and the ssh blocks' refusal line. Never from a
+ * checkout or a test run (the launcher names another copy, or the test isolation is on).
+ */
+export function afterUpdate(): void {
+  if (process.env.VSWARM_ISOLATED_ROOT) return;
+  const stamp = join(HOME, "version");
+  try {
+    if (!existsSync(launcherPath()) || !readFileSync(launcherPath(), "utf8").includes(CLI)) return;
+    if (existsSync(stamp) && readFileSync(stamp, "utf8").trim() === VERSION) return;
+    writeLauncher();
+    refreshSshBlocks();
+    writeFileSync(stamp, VERSION + "\n");
+  } catch {}
+}
+
+/** The refusal lines vswarm wrote under its ssh blocks before 2.9.1, which blamed the machine when vswarm itself could not run. */
+const OLD_REFUSALS: [RegExp, string, string][] = [
+  [/!exec "(.+) (?:preflight|cert) --quiet[^"]*"\n    ProxyCommand \/bin\/sh -c 'echo "vswarm: not connecting: this machine did not pass preflight \(the reason is above\) · vswarm why" >&2; exit 1'/, "vswarm: not connecting: this machine did not pass preflight (the reason is above)", "unix"],
+  [/!exec "(.+) agent check[^"]*"\n    ProxyCommand \/bin\/sh -c 'echo "vswarm agent: not connecting \(the reason is above\) · vswarm why" >&2; exit 1'/, "vswarm agent: not connecting (the reason is above)", "unix"],
+  [/!exec "(.+) (?:preflight|cert) --quiet[^"]*"\r?\n    ProxyCommand cmd\.exe \/d \/c "echo vswarm: not connecting: this machine did not pass preflight; run: vswarm why 1>&2 & exit 1"/, "vswarm: not connecting: this machine did not pass preflight", "win"],
+  [/!exec "(.+) agent check[^"]*"\r?\n    ProxyCommand cmd\.exe \/d \/c "echo vswarm agent: not connecting \(the reason is above\); run: vswarm why 1>&2 & exit 1"/, "vswarm agent: not connecting: the machine did not pass", "win"],
+];
+
+/**
+ * After an update: the ssh blocks vswarm wrote, still exactly as written, get today's refusal line. A block someone
+ * edited is left alone (and stays visible to scans). Returns whether ~/.ssh/config changed; a backup is kept.
+ */
+export function refreshSshBlocks(cfgPath = join(homedir(), ".ssh", "config")): boolean {
+  if (!existsSync(cfgPath)) return false;
+  const old = readFileSync(cfgPath, "utf8");
+  let next = old;
+  for (const [start, end] of [[GATE_START, GATE_END], [AGENT_START, AGENT_END]]) {
+    const block = next.match(blockRegex(start, end))?.[0];
+    if (!block || stripManaged(block).trim()) continue;
+    let fresh = block;
+    for (const [re, refusal, os] of OLD_REFUSALS) {
+      const m = re.exec(fresh);
+      if (!m) continue;
+      const line = m[0].slice(0, m[0].indexOf("\n") + 1);
+      try {
+        fresh = fresh.replace(m[0], line + refusedLine(m[1], refusal, os === "win"));
+      } catch {}
+    }
+    if (fresh !== block) {
+      next = next.replace(block, fresh);
+      recordManaged(fresh.trim() + "\n");
+    }
+  }
+  if (next === old) return false;
+  writeFileSync(`${cfgPath}.bak-vswarm-${Date.now()}`, old, { mode: 0o600 });
+  writeFileSync(cfgPath, next, { mode: 0o600 });
+  return true;
+}
+
+/**
  * Whether install changes PATH. Elsewhere it does unless --no-path; on Windows only with --path or a yes on the
  * terminal (no terminal: no), since there it is a registry value every new program inherits.
  */
@@ -830,6 +895,7 @@ export async function update(args: string[] = []) {
   writeLauncher();
   writeCompletions();
   adoptManagedBlocks();
+  if (refreshSshBlocks()) ok("~/.ssh/config: vswarm's blocks now say when vswarm itself cannot run (backup kept)");
   ok("launcher and completions refreshed\n");
 }
 

@@ -13,6 +13,7 @@
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { blockHosts, GATE_END, GATE_START } from "./sshblocks";
 import { HOME } from "../home";
 import { exec, readText, type Ctx } from "./ctx";
 import { allowNames, normName } from "./intel";
@@ -215,7 +216,7 @@ export async function requirements(p: Policy, ctx: Ctx, baselineAt?: number): Pr
   const want = p.gate?.ssh ?? [];
   if (want.length) {
     const cfg = readText(join(ctx.home, ".ssh", "config")) ?? "";
-    const line = /# >>> vswarm gate >>>[\s\S]*?Match originalhost (\S+)/.exec(cfg)?.[1]?.split(",") ?? [];
+    const line = blockHosts(cfg, GATE_START, GATE_END);
     const missing = want.filter((h) => !line.includes(h));
     if (missing.length) add("gate", `ssh to ${missing.join(", ")} should go through the gate`, "vswarm gate ssh --team");
   }
