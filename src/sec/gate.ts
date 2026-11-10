@@ -3,6 +3,7 @@
 
 import { realCtx, type Ctx } from "./ctx";
 import { check } from "./engine";
+import { agentSaysSo } from "./human";
 import { readPolicy, type PolicyState } from "./policy";
 import { t } from "../i18n";
 import { c, line, summary, VERDICT } from "./print";
@@ -62,15 +63,27 @@ export interface GateAnswer {
 }
 
 /**
+ * After a refusal, when an AI agent says it ran the command (human.ts agentSaysSo): a line for the agent, which reads
+ * this output, so it hands the refusal to the user instead of trying another way in.
+ */
+export function toAgent(env: Record<string, string | undefined> = process.env) {
+  if (agentSaysSo(env)) line(c.amber(t("cli.pre.agent")));
+}
+
+/**
  * The verdict and what the policy makes of it. A WARN the policy refuses is said on stderr with the way out, so the
  * person at the terminal sees why ssh, aws or kubectl stopped.
  */
 export async function gateVerdict(opt: Parameters<typeof verdictNow>[0] & { strict?: boolean } = {}): Promise<GateAnswer> {
   const policy = await readPolicy();
   const verdict = await verdictNow({ ...opt, policy });
-  if (verdict === "block") return { verdict, allowed: false, code: 3, policy };
+  if (verdict === "block") {
+    toAgent();
+    return { verdict, allowed: false, code: 3, policy };
+  }
   if (verdict === "warn" && (opt.strict || policy.warn === "refuse")) {
     line(c.amber(t("cli.pre.refused", { by: opt.strict ? "--strict" : t("cli.pre.policyWord") })) + c.dim(`${t("cli.pre.refusedHow")}${opt.strict ? "" : t("cli.pre.allowAgain")}`));
+    toAgent();
     return { verdict, allowed: false, code: 2, policy };
   }
   return { verdict, allowed: true, code: 0, policy };

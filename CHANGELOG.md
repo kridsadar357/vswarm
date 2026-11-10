@@ -20,7 +20,8 @@ plain words (English and Thai).
   once the machine is clean. `watch` checks in the background; `canary` plants decoy credentials.
 - **AI agents:** commands that weaken protection (`ok`, `baseline`, `unlock`, `policy warn allow`, taking a gate, the
   guard or the watch away, `uninstall` and others) ask a person first: on the terminal they are at, or in a desktop
-  dialog an agent cannot answer. An agent that hits a gate is told to hand it to the user.
+  dialog an agent cannot answer. An agent that hits a gate is told to hand it to the user. `vswarm mcp` lets an
+  agent read the state, explain a refusal and ask the person a Yes/No question; it cannot unlock or accept anything.
 - **Seeing it:** the terminal reads like a checkpoint slip, with the vswarm worm beside the verdict; `vswarm ui` and
   `report --html` show the same in a page.
 - **Updates are signed** and checked against the key pinned on your machine.

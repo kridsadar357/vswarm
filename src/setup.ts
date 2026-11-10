@@ -227,6 +227,7 @@ export const COMMANDS: [string, string][] = [
   ["watch", "check in the background and notify"],
   ["secrets", "long-lived credentials on this machine"],
   ["agents", "MCP servers, hooks and permissions of AI agents"],
+  ["mcp", "MCP server for AI agents: read vswarm's state, ask you"],
   ["preflight", "gate before production access (ssh/aws/kubectl)"],
   ["ui", "open the dashboard in your browser"],
   ["why", "each finding with the command to fix or accept it"],

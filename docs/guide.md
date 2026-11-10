@@ -469,6 +469,34 @@ This stops an agent from being talked into switching vswarm off. It is not a wal
 as you and means harm: such a program can edit `~/.ssh/config` or your shell rc itself. vswarm recognises its own
 blocks by hash, so the next check reports a gate or the guard changed by hand.
 
+When a gate refuses and the agent says it is running, the refusal ends with a line for the agent: vswarm stopped this
+on purpose, do not try another way in (another host name, an API token, a different tool), tell the user.
+
+### vswarm mcp
+
+An MCP server (stdio) for coding agents, so they can read what vswarm sees instead of guessing from a refusal. Add it
+once:
+
+```sh
+claude mcp add vswarm -- vswarm mcp     # Claude Code
+codex mcp add vswarm -- vswarm mcp      # Codex
+gemini mcp add vswarm vswarm mcp        # Gemini CLI
+```
+
+| Tool | What it does |
+|---|---|
+| `status` | The verdict and why, what the gates hold, numbered findings with the command for you, which protections are on. Reads the last check. |
+| `check` | A fresh check, then the same as `status`. |
+| `why` | One finding by number: what it is in plain words, why it matters, what to do, which command you run. |
+| `explain_refusal` | Why a gate said no right now, and what you have to do about it. |
+| `ask_human` | A Yes/No question in a desktop dialog, marked as the agent's, No by default; at most one every 20 seconds. |
+
+None of them marks a finding as yours, unlocks, or changes a policy or a gate: an agent that wants one of those done
+is told to hand you the command, and the command asks you itself. Your answer to `ask_human` is for the agent only and
+approves nothing in vswarm. What the tools return has credentials masked and the home folder as `~`; gated hosts are
+given by number, not by name, since what an agent reads also reaches its model's provider. File, package and server
+names in it are marked as data, because an attacker can choose them.
+
 ## 6. Gate production access: preflight and gate
 
 ### vswarm preflight

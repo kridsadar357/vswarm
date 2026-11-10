@@ -115,6 +115,7 @@ export const HELP: [Key, [string, Key][]][] = [
     ["vswarm watch on", "cli.help.watch"],
     ["vswarm secrets", "cli.help.secrets"],
     ["vswarm agents", "cli.help.agents"],
+    ["vswarm mcp", "cli.help.mcp"],
     ["vswarm guard on [--ignore-scripts] [--sandbox] [--strict]", "cli.help.guard"],
     ["vswarm pkg check npm|pip <name>[@v] [--sandbox]", "cli.help.pkgCheck"],
     ["vswarm try <folder|git URL|zip> [-- cmd]", "cli.help.try"],
@@ -198,7 +199,7 @@ export async function main() {
   if (process.platform === "win32" && NOT_ON_WINDOWS.has(cmd)) throw new Error(notOnWindows(cmd));
   // After an update, once: what the old version's update could not do (setup.ts). Not on the paths ssh and installs
   // wait for.
-  if (!["preflight", "agent", "cert", "pkg", "cmdgate", "complete", "__complete"].includes(cmd)) (await import("./setup")).afterUpdate();
+  if (!["preflight", "agent", "cert", "pkg", "cmdgate", "mcp", "complete", "__complete"].includes(cmd)) (await import("./setup")).afterUpdate();
 
   switch (cmd) {
     case "scan":
@@ -279,6 +280,14 @@ export async function main() {
     case "secrets": {
       noMoreOptions(cmd, args);
       return secretsCommand();
+    }
+
+    case "mcp": {
+      // For AI agents: read-only tools and a question for the person (src/sec/serve.ts). Typed at a terminal, how to add it.
+      noMoreOptions(cmd, args);
+      if (args.length) throw new Error("usage: vswarm mcp (an AI agent starts it; it takes no arguments)");
+      if (process.stdin.isTTY) return line(t("cli.mcp.howto"));
+      return (await import("./sec/serve")).serve();
     }
 
     case "preflight": {

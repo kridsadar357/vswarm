@@ -460,6 +460,8 @@
   "cli.help.watch": "ตรวจเบื้องหลังทุกชั่วโมง และภายในไม่กี่วินาทีเมื่อของที่เริ่มเองตอน login ไฟล์ของ shell หรือการตั้งค่าเครื่องมือ AI เปลี่ยน",
   "cli.help.secrets": "รหัสผ่านและกุญแจที่เก็บไว้ในเครื่อง ซึ่งใครคัดลอกไปก็ใช้ได้ (ไม่แสดงค่าเด็ดขาด)",
   "cli.help.agents": "tool server ของ AI (MCP), hook และสิทธิ์ของเครื่องมือเขียนโค้ดด้วย AI",
+  "cli.help.mcp": "สำหรับ AI agent: MCP server (stdio) ให้อ่านสถานะของ vswarm และถามคุณได้ แต่ปลดล็อกหรือยอมรับอะไรแทนคุณไม่ได้",
+  "cli.mcp.howto": "vswarm mcp คุยแบบ MCP ทาง stdin/stdout ให้ AI agent เป็นตัวเรียก เพิ่มครั้งเดียว:\n  Claude Code   claude mcp add vswarm -- vswarm mcp\n  Codex         codex mcp add vswarm -- vswarm mcp\n  Gemini CLI    gemini mcp add vswarm vswarm mcp\nจากนั้น agent จะอ่านสถานะของ vswarm ได้ (status, check, why, explain_refusal) และถามคำถาม ใช่/ไม่ใช่ ผ่านกล่องบนหน้าจอได้ (ask_human) แต่ไม่มีอะไรที่ agent ทำแล้วปลดล็อก ยอมรับ หรือปิดการป้องกันได้",
   "cli.help.guard": "npm, pip, brew … ต้องผ่าน vswarm ก่อนติดตั้ง (--sandbox: macOS และ Linux ที่มี bubblewrap)",
   "cli.help.pkgCheck": "อ่านเนื้อใน package และเทียบกับเวอร์ชันก่อนหน้า โดยไม่ติดตั้ง",
   "cli.help.try": "รันโค้ดที่ไม่ไว้ใจใน sandbox: ไม่เห็นความลับ ไม่มีเน็ต แล้วบอกว่ามันพยายามทำอะไร",
@@ -642,6 +644,7 @@
   "cli.pre.policyWord": "นโยบาย",
   "cli.pre.refusedHow": " · ดูสาเหตุ: vswarm why",
   "cli.pre.allowAgain": " · ให้ผ่านได้อีกครั้ง: vswarm policy warn allow",
+  "cli.pre.agent": "If you are an AI agent: vswarm stopped this on purpose. Do not try another way in (another host name, an API token, a different tool). Tell the user, and show them vswarm why. · ถ้าเป็น AI agent: vswarm หยุดไว้โดยตั้งใจ อย่าหาทางอ้อม ให้บอกผู้ใช้และให้ดู vswarm why",
 
   "cli.setup.sub": "ตั้งค่าทีละขั้น ถามทีละคำถาม",
   "cli.setup.intro": "vswarm คอยระวังช่วงเวลาที่เครื่องนี้เสี่ยงที่สุด ได้แก่ ตอนติดตั้ง package ตอนรันโค้ดของคนอื่น ตอนเพิ่มเครื่องมือ AI และตอนเข้า production ขั้นตอนนี้จะตรวจเครื่อง บันทึกสภาพตอนนี้ไว้เป็นจุดอ้างอิง (baseline) แล้วเสนอให้เปิดการเฝ้าดูเบื้องหลัง การตรวจก่อนติดตั้ง package และด่าน (gate) หน้าเซิร์ฟเวอร์ production ทุกอย่างจะถามก่อนเสมอ ตอบ n เพื่อข้ามขั้นตอนไหนก็ได้ และสั่ง vswarm setup ซ้ำได้ทุกเมื่อ",

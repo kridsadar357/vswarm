@@ -113,7 +113,9 @@ export function fixFor(f: Finding, opt: { n: number; self: string[]; home?: stri
       },
     };
   }
-  return { what: t("cli.fix.none"), exact: [], manual: [f.fix ?? t("cli.fix.lookAt"), accept] };
+  // Saying it is yours is no way out for a known-malicious package, vswarm's own files (engine.ts STATE_RULE) or a team requirement.
+  const okable = !["malicious", "pkg-malicious", "vswarm-state", "team-require"].includes(f.rule);
+  return { what: t("cli.fix.none"), exact: [], manual: [f.fix ?? t("cli.fix.lookAt"), ...(okable ? [accept] : [])] };
 }
 
 /** Shows the plan, asks, runs. Returns the exit code. */

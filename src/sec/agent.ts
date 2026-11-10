@@ -603,7 +603,8 @@ export const AGENT_MAX_AGE = 30_000;
 export const UPSTREAM_SIGN_TIMEOUT = 60_000;
 
 /** Asks on the desktop: a dialog on macOS and Windows, SSH_ASKPASS or zenity on Linux. No way to ask means no. */
-export async function askOnDesktop(question: string, title = "vswarm agent"): Promise<boolean> {
+/** The last argument names the No and Yes buttons where the dialog can name them (macOS, zenity); No is the default. */
+export async function askOnDesktop(question: string, title = "vswarm agent", [no, yes]: [string, string] = ["Refuse", "Allow"]): Promise<boolean> {
   if (WIN) {
     // Yes/No, No the default, gone after the timeout (-1). The question is passed in the environment, never parsed.
     const r = await exec([powershell(), "-NoProfile", "-NonInteractive", "-Command", `if ((New-Object -ComObject WScript.Shell).Popup($env:VSWARM_Q, ${CONFIRM_TIMEOUT}, $env:VSWARM_T, 4 + 48 + 256) -eq 6) { 'allow' }`],
@@ -612,8 +613,8 @@ export async function askOnDesktop(question: string, title = "vswarm agent"): Pr
   }
   if (process.platform === "darwin") {
     const q = (s: string) => `"${s.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
-    const out = await run(["osascript", "-e", `display dialog ${q(question)} buttons {"Refuse", "Allow"} default button "Refuse" cancel button "Refuse" with title ${q(title)} giving up after ${CONFIRM_TIMEOUT}`], (CONFIRM_TIMEOUT + 5) * 1000);
-    return !!out && out.includes("button returned:Allow") && !out.includes("gave up:true");
+    const out = await run(["osascript", "-e", `display dialog ${q(question)} buttons {${q(no)}, ${q(yes)}} default button ${q(no)} cancel button ${q(no)} with title ${q(title)} giving up after ${CONFIRM_TIMEOUT}`], (CONFIRM_TIMEOUT + 5) * 1000);
+    return !!out && out.includes(`button returned:${yes}`) && !out.includes("gave up:true");
   }
   const askpass = process.env.SSH_ASKPASS;
   if (askpass && existsSync(askpass)) {
@@ -621,7 +622,7 @@ export async function askOnDesktop(question: string, title = "vswarm agent"): Pr
     return r.code === 0;
   }
   if (Bun.which("zenity")) {
-    const r = await exec(["zenity", "--question", `--title=${title}`, `--text=${question}`, `--timeout=${CONFIRM_TIMEOUT}`], { timeoutMs: (CONFIRM_TIMEOUT + 5) * 1000 }).catch(() => ({ code: 1 }));
+    const r = await exec(["zenity", "--question", `--title=${title}`, `--text=${question}`, `--ok-label=${yes}`, `--cancel-label=${no}`, `--timeout=${CONFIRM_TIMEOUT}`], { timeoutMs: (CONFIRM_TIMEOUT + 5) * 1000 }).catch(() => ({ code: 1 }));
     return r.code === 0;
   }
   return false;

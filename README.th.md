@@ -152,6 +152,10 @@ sandbox ที่ใช้: Seatbelt บน macOS, bubblewrap กับ strace �
 
 นิยามของ tool ถูกจำไว้ ถ้า server เปลี่ยนทีหลัง (rug pull) scan ครั้งถัดไปจะบอก
 
+agent ของคุณถาม vswarm เองได้ด้วย: `vswarm mcp` เป็น MCP server ที่ให้ agent อ่านสถานะ อธิบายว่าทำไมถูกปฏิเสธ และถามคุณแบบ
+ใช่/ไม่ใช่ได้ ส่วนคำสั่งที่ลดการป้องกัน (`ok`, `unlock`, `policy warn allow`, การถอดด่าน, `uninstall` และอื่นๆ) จะถามคุณเสมอ
+ผ่านกล่องที่ agent กดตอบเองไม่ได้ ดู[คู่มือ](docs/guide.th.md#เมื่อ-ai-agent-เรียกใช้-vswarm)
+
 ### ตอนจะเข้า production
 
 ```bash
@@ -286,6 +290,7 @@ vswarm secrets               # credential อายุยาวในเคร�
 vswarm guard on · pkg        # ตรวจการติดตั้ง · ตรวจ package ด้วยมือ
 vswarm try                   # รันโค้ดที่ไม่ไว้ใจใน sandbox
 vswarm agents [--inspect]    # AI agent และ MCP server
+vswarm mcp                   # MCP server ให้ agent ของคุณ (อ่านอย่างเดียว และถามคุณได้)
 vswarm preflight · gate      # ตรวจก่อนเข้า production · ตั้งด่านหน้า ssh, aws, kube, gcloud, az
 vswarm agent                 # ssh agent ที่เซ็นเฉพาะตอนเครื่องผ่าน
 vswarm ca · cert             # SSH certificate อายุ 15 นาที

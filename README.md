@@ -156,6 +156,11 @@ VS Code, Gemini CLI and Codex. `--inspect` starts each server in the sandbox and
 
 The tool definitions are pinned. If a server changes them later (a "rug pull"), the next scan says so.
 
+Your agents can also ask vswarm themselves: `vswarm mcp` is an MCP server that lets them read the state, explain a
+refusal and ask you a Yes/No question. Commands that weaken protection (`ok`, `unlock`, `policy warn allow`, removing a
+gate, `uninstall` and others) always ask you, in a dialog an agent cannot answer. See the
+[guide](docs/guide.md#when-an-agent-runs-vswarm).
+
 ### Going to production
 
 ```bash
@@ -322,6 +327,7 @@ vswarm secrets               # long-lived credentials on the machine (never prin
 vswarm guard on · pkg        # check installs · check a package by hand
 vswarm try                   # run untrusted code in a sandbox
 vswarm agents [--inspect]    # AI agents and MCP servers
+vswarm mcp                   # an MCP server for your agents (read-only, plus ask you)
 vswarm preflight · gate      # check before production · put that check in front of ssh, aws, kube, gcloud, az
 vswarm agent                 # an ssh agent that signs only while the machine passes
 vswarm ca · cert             # 15-minute SSH certificates

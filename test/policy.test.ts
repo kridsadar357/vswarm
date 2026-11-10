@@ -170,6 +170,8 @@ describe("findings by number", () => {
       expect(await plan.run!()).toContain("nothing removed");
     });
     expect(fixFor({ id: "x", rule: "launch-new", severity: "high", title: "t", detail: [], fix: "remove it" }, { n: 3, self: ["vswarm"] }).manual).toEqual(["remove it", "or, if it is expected: vswarm ok 3"]);
+    // No "vswarm ok" where ok refuses: a known-malicious package.
+    expect(fixFor({ id: "malicious:npm:x@1", rule: "malicious", severity: "critical", title: "t", detail: [], fix: "vswarm respond" }, { n: 1, self: ["vswarm"] }).manual).toEqual(["vswarm respond"]);
   });
 
   test("removeLines takes out whole lines only, and says which were not there", () => {

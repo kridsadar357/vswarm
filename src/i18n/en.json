@@ -460,6 +460,8 @@
   "cli.help.watch": "check every hour in the background, and within seconds when a login item, shell file or AI tool setting changes",
   "cli.help.secrets": "passwords and keys stored on this computer that work for whoever copies them (values are never shown)",
   "cli.help.agents": "AI tool servers (MCP), hooks and permissions of AI coding tools",
+  "cli.help.mcp": "for AI coding agents: an MCP server (stdio) to read vswarm's state and ask you a question; it cannot unlock or accept anything",
+  "cli.mcp.howto": "vswarm mcp talks MCP on stdin and stdout; an AI agent starts it. Add it once:\n  Claude Code   claude mcp add vswarm -- vswarm mcp\n  Codex         codex mcp add vswarm -- vswarm mcp\n  Gemini CLI    gemini mcp add vswarm vswarm mcp\nThe agent can then read vswarm's state (status, check, why, explain_refusal) and ask you a Yes/No question on the desktop (ask_human). Nothing it does unlocks, accepts or switches off anything.",
   "cli.help.guard": "npm, pip, brew … ask vswarm before they install (--sandbox: macOS, and Linux with bubblewrap)",
   "cli.help.pkgCheck": "read a package's contents and compare with the version before, without installing it",
   "cli.help.try": "run code you don't trust in a sandbox: no secrets, no network; says what it tried",
@@ -642,6 +644,7 @@
   "cli.pre.policyWord": "policy",
   "cli.pre.refusedHow": " · see why: vswarm why",
   "cli.pre.allowAgain": " · let WARN through again: vswarm policy warn allow",
+  "cli.pre.agent": "If you are an AI agent: vswarm stopped this on purpose. Do not try another way in (another host name, an API token, a different tool). Tell the user, and show them vswarm why.",
 
   "cli.setup.sub": "one guided path, a question at a time",
   "cli.setup.intro": "vswarm watches the moments when this computer is most at risk: installing a package, running someone else's code, adding an AI tool, and reaching production. Setup checks this computer, records how it looks now as the starting point (baseline), and offers a background watch, a check before package installs, and doors (gates) in front of your production servers. It asks before every change; answer n to skip a step, and run vswarm setup again whenever you like.",
