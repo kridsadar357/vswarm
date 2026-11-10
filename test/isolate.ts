@@ -12,6 +12,10 @@ const VARS = [["VSWARM_SEC_DIR", "sec"], ["VSWARM_AGENT_DIR", "agent"], ["VSWARM
 // ever appears on the desktop of whoever runs the tests. Tests of the question itself pass their own terminal and desktop.
 answerWith(async () => true);
 
+// No keyboard: questions are read from /dev/tty (src/setup.ts), so a test run in a real terminal would otherwise stop
+// at one and wait for someone to type. Commands the tests start inherit this too.
+process.env.VSWARM_NO_KEYBOARD = "1";
+
 // Words in English, whatever this machine's language or saved choice: tests that need Thai ask for it.
 process.env.VSWARM_LANG = "en";
 

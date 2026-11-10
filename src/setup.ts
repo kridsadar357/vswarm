@@ -42,7 +42,10 @@ const step = (s: string) => console.log(`\n  ${c.bold(s)}`);
 // ── Questions on the terminal
 // Keys are read from /dev/tty, not stdin: under `curl … | sh` stdin is the script, and Bun gets no keys
 // from a stdin that was redirected from /dev/tty.
+// VSWARM_NO_KEYBOARD (set by the tests, test/isolate.ts): no keyboard at all, as under a pipe or in CI. It can only
+// take a question away, and a question with no one to answer it gets its default, or for a weakening command a no.
 function keyboard(): (NodeJS.ReadStream & { setRawMode(m: boolean): void }) | undefined {
+  if (process.env.VSWARM_NO_KEYBOARD) return;
   if (!WIN) {
     try {
       return new ReadStream(openSync("/dev/tty", "r")) as any;
