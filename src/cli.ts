@@ -181,7 +181,7 @@ function usage() {
   console.log();
 }
 
-async function main() {
+export async function main() {
   const [cmd = "help", ...args] = process.argv.slice(2);
   // Thai (and every other word that is not ASCII) on a Windows console: UTF-8 for this run (src/i18n).
   useWindowsUtf8();

@@ -47,7 +47,8 @@ jobs:
           $ErrorActionPreference = 'Stop'
           $env:VSWARM_HOME = Join-Path $env:RUNNER_TEMP 'vswarm home'
           $vs = Join-Path $env:VSWARM_HOME 'bin\vswarm.cmd'
-          $cli = (Resolve-Path src\cli.ts).Path
+          # Commands that weaken protection ask a person; nobody is at this runner, so test\ci-person.ts answers.
+          $cli = (Resolve-Path test\ci-person.ts).Path
           function vswarm { bun $cli @args; if ($LASTEXITCODE -and $LASTEXITCODE -ne 3) { throw "vswarm $args exit $LASTEXITCODE" } }
           function sshTry($h) { (cmd /c "ssh -o BatchMode=yes -o ConnectTimeout=3 $h true 2>&1") -join "`n" }
           # The runner's own background programs come and go (provjobd.exe from a temp folder, talking to GitHub): vswarm
@@ -109,7 +110,8 @@ jobs:
         shell: powershell
         run: |
           $ErrorActionPreference = 'Stop'
-          $cli = (Resolve-Path src\cli.ts).Path
+          # Commands that weaken protection ask a person; nobody is at this runner, so test\ci-person.ts answers.
+          $cli = (Resolve-Path test\ci-person.ts).Path
           function vswarm { bun $cli @args; if ($LASTEXITCODE -and $LASTEXITCODE -ne 3) { throw "vswarm $args exit $LASTEXITCODE" } }
           $lock = Join-Path $HOME '.vswarm\sec\lock'
           # The runner's own background programs come and go (provjobd.exe from a temp folder, talking to GitHub): vswarm
