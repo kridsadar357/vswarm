@@ -138,9 +138,9 @@ describe("the rule: an agent free to run anything, and production keys without a
 
 describe("vswarm hook claude as a program", () => {
   const run = async (event: unknown) => {
-    const p = Bun.spawn(["bun", join(import.meta.dir, "../src/cli.ts"), "hook", "claude"], { stdin: "pipe", stdout: "pipe", stderr: "pipe", env: { ...process.env } });
-    p.stdin.write(JSON.stringify(event));
-    p.stdin.end();
+    // The event goes in as a Blob, not written to a stdin pipe: Bun 1.3 on Windows
+    // has crashed (segfault) in this test when the test wrote to the child's pipe.
+    const p = Bun.spawn(["bun", join(import.meta.dir, "../src/cli.ts"), "hook", "claude"], { stdin: new Blob([JSON.stringify(event)]), stdout: "pipe", stderr: "pipe", env: { ...process.env } });
     const out = await new Response(p.stdout).text();
     return { code: await p.exited, out };
   };
