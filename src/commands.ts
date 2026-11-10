@@ -18,6 +18,24 @@ export async function selfCommand(): Promise<string[]> {
   return existsSync(launcherPath()) ? [launcherPath()] : [process.execPath, join(import.meta.dir, "cli.ts")];
 }
 
+/**
+ * How to start this very vswarm, for something that will run it later on its own (an agent's hook or MCP server):
+ * the launcher when it runs this version, this checkout otherwise. `older` is the launcher's version when it is not
+ * this one (an install from before, which may not know the command).
+ */
+export async function runningSelf(): Promise<{ self: string[]; older?: string }> {
+  const self = await selfCommand();
+  if (self.length > 1) return { self };
+  const { run } = await import("./sec/ctx");
+  const { VERSION } = await import("./home");
+  const v = (await run([self[0], "version"], 15_000))?.trim();
+  if (v === VERSION) return { self };
+  return { self: [process.execPath, join(import.meta.dir, "cli.ts")], older: v || "unknown" };
+}
+
+/** A command as a shell line: words with spaces or quotes single-quoted. */
+export const shellLine = (words: string[]) => words.map((w) => (/[\s"'$`\\]/.test(w) ? `'${w.replace(/'/g, "'\\''")}'` : w)).join(" ");
+
 /** Whether vswarm fix has an automatic fix for a finding. */
 export async function fixable(): Promise<(f: Finding, n: number) => boolean> {
   const { fixFor } = await import("./sec/fix");

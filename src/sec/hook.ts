@@ -14,6 +14,7 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
+import { shellLine } from "../commands";
 
 /** Programs that reach production or deploy. Some count only with certain words after them. */
 const PROD: Record<string, RegExp | true> = {
@@ -105,7 +106,10 @@ export function hookInstalled(file = settingsFile()): boolean {
   }
 }
 
-/** Adds the hook (once) to Claude Code's user settings, keeping everything else in the file. Returns the backup, if any. */
+/**
+ * Adds the hook to Claude Code's user settings, keeping everything else in the file; a vswarm hook already there with
+ * another command (an older install, a moved checkout) is replaced. Returns the backup, if any.
+ */
 export function installHook(self: string[], file = settingsFile(), backup?: (f: string) => string): { changed: boolean; backup?: string } {
   let j: any = {};
   if (existsSync(file)) {
@@ -115,10 +119,13 @@ export function installHook(self: string[], file = settingsFile(), backup?: (f: 
       throw new Error(`${file} is not valid JSON; fix it first, vswarm will not overwrite it`);
     }
   }
-  if (hookInstalled(file)) return { changed: false };
-  const command = [...self.map((w) => (/[\s"'$`\\]/.test(w) ? `'${w.replace(/'/g, "'\\''")}'` : w)), "hook", "claude"].join(" ");
+  const command = `${shellLine(self)} hook claude`;
+  const pre: any[] = Array.isArray(j.hooks?.PreToolUse) ? j.hooks.PreToolUse : [];
+  const ours = pre.flatMap((m: any) => (m?.hooks ?? []).filter(isOurs));
+  if (ours.length === 1 && ours[0].command === command) return { changed: false };
+  const others = pre.map((m: any) => ({ ...m, hooks: (m?.hooks ?? []).filter((h: any) => !isOurs(h)) })).filter((m: any) => m.hooks.length);
   j.hooks ??= {};
-  j.hooks.PreToolUse = [...(Array.isArray(j.hooks.PreToolUse) ? j.hooks.PreToolUse : []), { matcher: "Bash", hooks: [{ type: "command", command, timeout: 60 }] }];
+  j.hooks.PreToolUse = [...others, { matcher: "Bash", hooks: [{ type: "command", command, timeout: 60 }] }];
   const copy = existsSync(file) && backup ? backup(file) : undefined;
   mkdirSync(dirname(file), { recursive: true });
   writeFileSync(file, `${JSON.stringify(j, null, 2)}\n`, { mode: 0o600 });
@@ -152,10 +159,13 @@ export async function hookCommand(args: string[]) {
   }
   if (agent !== "claude" || args.length !== 2) throw new Error(USAGE);
   const { backupCopy } = await import("./fix");
+  const { launcherPath } = await import("../setup");
   const keep = (f: string) => backupCopy(f, "claude-settings");
   if (action === "install") {
-    const { selfCommand } = await import("../commands");
-    const r = installHook(await selfCommand(), settingsFile(), keep);
+    const { runningSelf } = await import("../commands");
+    const { self, older } = await runningSelf();
+    const r = installHook(self, settingsFile(), keep);
+    if (older) line(c.amber(`  The installed vswarm (${launcherPath().replace(homedir(), "~")}) is ${older}, not this one, and may not know this command: the hook runs this copy instead. After you reinstall, run vswarm hook install claude again.`));
     if (!r.changed) return line(`${c.green("✔")} already there`);
     line(`${c.green("✔")} Claude Code now asks vswarm before shell commands that reach production or weaken vswarm`);
     if (r.backup) line(c.dim(`  backup ${r.backup.replace(homedir(), "~")}`));

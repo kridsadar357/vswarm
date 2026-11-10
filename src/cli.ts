@@ -289,7 +289,14 @@ export async function main() {
       // For AI agents: read-only tools and a question for the person (src/sec/serve.ts). Typed at a terminal, how to add it.
       noMoreOptions(cmd, args);
       if (args.length) throw new Error("usage: vswarm mcp (an AI agent starts it; it takes no arguments)");
-      if (process.stdin.isTTY) return line(t("cli.mcp.howto"));
+      if (process.stdin.isTTY) {
+        // The command an agent should start: plain `vswarm` only when that is on the PATH and is this version.
+        const { runningSelf, shellLine } = await import("./commands");
+        const { self, older } = await runningSelf();
+        const onPath = self.length === 1 && Bun.which("vswarm") === self[0];
+        if (older) line(c.amber(t("cli.mcp.older", { v: older })));
+        return line(t("cli.mcp.howto", { cmd: onPath ? "vswarm" : shellLine(self) }));
+      }
       return (await import("./sec/serve")).serve();
     }
 

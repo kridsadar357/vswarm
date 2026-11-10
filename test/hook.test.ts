@@ -81,6 +81,16 @@ describe("in and out of Claude Code's settings", () => {
     expect(copies).toHaveLength(2);
   });
 
+  test("a vswarm hook with another command (an older install) is replaced, not added twice", () => {
+    const f = join(root, "older.json");
+    writeFileSync(f, JSON.stringify({ hooks: { PreToolUse: [{ matcher: "Bash", hooks: [{ type: "command", command: "/Users/u/.vswarm/bin/vswarm hook claude" }] }] } }));
+    expect(installHook(["/opt/bun", "/src/vswarm/src/cli.ts"], f).changed).toBe(true);
+    const pre = JSON.parse(readFileSync(f, "utf8")).hooks.PreToolUse;
+    expect(pre).toHaveLength(1);
+    expect(pre[0].hooks[0].command).toBe("/opt/bun /src/vswarm/src/cli.ts hook claude");
+    expect(installHook(["/opt/bun", "/src/vswarm/src/cli.ts"], f).changed).toBe(false);
+  });
+
   test("a settings file that is not JSON is left alone", () => {
     const f = join(root, "broken.json");
     writeFileSync(f, "{ not json");
