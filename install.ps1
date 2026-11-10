@@ -70,7 +70,8 @@
 
   if (Test-Path (Join-Path $App '.git')) {
     Say "updating $App"
-    Need-Git -C $App fetch --quiet --tags --force origin
+    # --prune-tags: a tag removed from the repository goes here too, so an older install cannot pick a withdrawn one.
+    Need-Git -C $App fetch --quiet --tags --force --prune --prune-tags origin
   } else {
     Say "downloading vswarm into $App"
     New-Item -ItemType Directory -Force -Path $Data | Out-Null

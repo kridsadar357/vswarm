@@ -70,7 +70,7 @@ export type UpdateResult =
  * the answer is not "updated" (or "unsigned-repo", which the caller handles).
  */
 export async function secureUpdate(root: string, current: string, pin = PIN()): Promise<UpdateResult> {
-  const f = await git(root, ["fetch", "--quiet", "--tags", "--force", "origin"]);
+  const f = await git(root, ["fetch", "--quiet", "--tags", "--force", "--prune", "--prune-tags", "origin"]);
   if (f.code !== 0) throw new Error(`git fetch: ${f.err}`);
   const all = (await git(root, ["tag", "-l", "v*", "--sort=-v:refname"])).out.split("\n").filter(Boolean);
   // Pre-releases are for people already running one.

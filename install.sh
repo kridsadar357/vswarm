@@ -100,7 +100,8 @@ fi
 
 if [ -d "$APP/.git" ]; then
   say "updating $APP"
-  git -C "$APP" fetch --quiet --tags --force origin
+  # --prune-tags: a tag removed from the repository goes here too, so an older install cannot pick a withdrawn one.
+  git -C "$APP" fetch --quiet --tags --force --prune --prune-tags origin
 else
   say "downloading vswarm into $APP"
   mkdir -p "$(dirname "$APP")"
