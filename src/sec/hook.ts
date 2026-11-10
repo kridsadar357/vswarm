@@ -24,8 +24,8 @@ const PROD: Record<string, RegExp | true> = {
   netlify: /\bdeploy\b/, ansible: true, "ansible-playbook": true, doctl: true,
 };
 
-/** vswarm commands that weaken protection (the ones human.ts asks about). */
-const WEAKEN = /\bvswarm\s+(?:ok|accept|baseline|unlock|uninstall|setup)\b|\bvswarm\s+policy\s+warn\s+allow\b|\bvswarm\s+(?:gate|guard|watch|agent|team|canary|feed|trust|hook)\b[^;&|\n]*\b(?:remove|off|unprotect|leave|pin|--off|--allow-warn)\b/;
+/** vswarm commands that weaken protection (the ones human.ts asks about), installed or run from a checkout (cli.ts). */
+const WEAKEN = /(?:\bvswarm|\bcli\.ts)\s+(?:ok|accept|baseline|unlock|uninstall|setup)\b|(?:\bvswarm|\bcli\.ts)\s+policy\s+warn\s+allow\b|(?:\bvswarm|\bcli\.ts)\s+(?:gate|guard|watch|agent|team|canary|feed|trust|hook)\b[^;&|\n]*\b(?:remove|off|unprotect|leave|pin|--off|--allow-warn)\b/;
 /** Writing to vswarm's own files or the ssh config (where the gate is) by hand. */
 const BY_HAND = /(?:\.vswarm\b|\.ssh\/config\b|vswarm-gate|vswarm agent)/;
 const WRITES = /(?:>>?|\btee\b|\bsed\s+-i|\bperl\s+-[a-z]*i|\brm\b|\bmv\b|\bcp\b|\btruncate\b|\bchmod\b|\bln\b|\bpython3?\b|\bnode\b)/;

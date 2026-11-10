@@ -25,7 +25,7 @@ describe("what a command line is", () => {
   });
 
   test("weakening vswarm: its own commands, and its files or the ssh gate edited by hand; looking is fine", () => {
-    for (const l of ["vswarm ok 3", "vswarm accept --all", "vswarm unlock", "vswarm policy warn allow", "vswarm gate remove", "vswarm gate aws prod --off", "vswarm guard off", "vswarm hook remove claude", "sed -i '' '/vswarm gate/d' ~/.ssh/config", "rm -rf ~/.vswarm/sec", "echo x >> ~/.ssh/config"])
+    for (const l of ["vswarm ok 3", "vswarm accept --all", "vswarm unlock", "vswarm policy warn allow", "vswarm gate remove", "vswarm gate aws prod --off", "vswarm guard off", "vswarm hook remove claude", "bun src/cli.ts ok 3", "bun ~/develop/vswarm/src/cli.ts policy warn allow", "sed -i '' '/vswarm gate/d' ~/.ssh/config", "rm -rf ~/.vswarm/sec", "echo x >> ~/.ssh/config"])
       expect(classify(l)?.kind).toBe("weaken");
     for (const l of ["vswarm why", "vswarm scan --json", "vswarm policy", "cat ~/.ssh/config", "ls ~/.vswarm", "vswarm gate status"])
       expect(classify(l)?.kind).not.toBe("weaken");
