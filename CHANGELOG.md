@@ -32,5 +32,6 @@ plain words (English and Thai).
 - **Platforms:** macOS and Linux; Windows is a preview.
 
 Development builds before this release were numbered 2.1.0 to 2.9.0. Their tags and release pages were removed when
-numbering restarted at 0.1.0. A copy still on a 2.x build refuses 0.1.0 as older: reinstall it once (`vswarm
-uninstall`, then the install command in the README).
+numbering restarted at 0.1.0. A copy still on a 2.x build refuses 0.1.0 as older through `vswarm update`: run the
+install command in the README once more, over it. Do not uninstall first: that stops the key vault and takes the
+gates out, so ssh with a protected key stops working until they are set up again.

@@ -7,7 +7,7 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, st
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import {
-  AGENT_MAX_AGE, agentCall, agentCheck, agentDoctor, agentHosts, agentJob, agentJobFiles, agentSshBlock, agentUninstall, backgroundItemNote, captureKey, gatedHosts, hostNames, keyPolicyOf, knownHostKeys, leftOnDisk, listIdentities, listVaults, MSG, pipeFor, protect, protectFlow, restore, setAgentBlock, setKeyPolicy, sshAgentPath, startAgent,
+  AGENT_MAX_AGE, agentCall, agentCheck, agentDoctor, agentHosts, agentJob, agentJobFiles, agentSshBlock, agentUninstall, keysNeedAgent, backgroundItemNote, captureKey, gatedHosts, hostNames, keyPolicyOf, knownHostKeys, leftOnDisk, listIdentities, listVaults, MSG, pipeFor, protect, protectFlow, restore, setAgentBlock, setKeyPolicy, sshAgentPath, startAgent,
   unprotect, UPSTREAM_SIGN_TIMEOUT, winAgentAction, type AgentOptions,
 } from "../src/sec/agent";
 import type { Ctx } from "../src/sec/ctx";
@@ -508,6 +508,9 @@ describe("vswarm agent: protected keys", () => {
       expect(a.held().length).toBe(1);
       expect(listVaults().length).toBe(1);
       await expect(agentUninstall(true)).rejects.toThrow("unprotect");
+      // Without --purge too: without the agent, ssh could not use the key; reinstalling needs no uninstall.
+      await expect(agentUninstall(false)).rejects.toThrow("ssh cannot use it");
+      expect(() => keysNeedAgent(false)).toThrow("run the install command again");
       const u = await unprotect(k);
       expect(u.fp).toBe(r.fp);
       expect(readFileSync(k).equals(original)).toBe(true);

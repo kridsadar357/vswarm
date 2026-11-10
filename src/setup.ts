@@ -835,9 +835,10 @@ export async function install(args: string[]) {
 }
 
 export async function uninstall(args: string[]) {
+  // Refused before anyone is asked and before anything is removed: protected keys need the agent to sign.
+  const { agentUninstall, keysNeedAgent } = await import("./sec/agent");
+  keysNeedAgent(args.includes("--purge"));
   await (await import("./sec/human")).weaken("uninstall", args);
-  // Refused before anything is removed: --purge would delete keys that live only in the agent's vault.
-  const { agentUninstall } = await import("./sec/agent");
   const agentGone = await agentUninstall(args.includes("--purge"));
   banner("uninstall");
   for (const f of agentGone) ok(`removed ${f}`);

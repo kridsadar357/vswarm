@@ -1288,16 +1288,23 @@ export async function agentDoctor(): Promise<{ level: "ok" | "warn" | "bad" | "o
   return out;
 }
 
-/** For uninstall: the service and config block go; --purge is refused while keys are protected (it would delete them). */
+/** For uninstall: the service and config block go; refused while keys are protected (ssh could not use them). */
 export async function agentUninstall(purge: boolean): Promise<string[]> {
-  const vaults = listVaults();
-  if (purge && vaults.length)
-    throw new Error(`${vaults.length} ssh key${vaults.length > 1 ? "s are" : " is"} protected by vswarm agent; --purge would delete ${vaults.length > 1 ? "them" : "it"}. Put ${vaults.length > 1 ? "them" : "it"} back first: ${vaults.map((x) => `vswarm agent unprotect ${x.v.path}`).join(" ; ")}`);
+  keysNeedAgent(purge);
   const cfg = join(homedir(), ".ssh", "config");
   const routed = existsSync(cfg) && readFileSync(cfg, "utf8").includes(AGENT_START);
   const gone = agentInstalled() || routed ? await agentOff() : [];
   if (purge) await (await activeStore()).store.remove(WRAP_NAME).catch(() => {});
   return gone;
+}
+
+/** Throws when keys are in the vault: uninstalling would leave ssh unable to use them. */
+export function keysNeedAgent(purge: boolean) {
+  const vaults = listVaults();
+  // Without the agent nothing can sign with a protected key, so ssh with it stops working, even if the vault stays:
+  // refused before anything is removed. Reinstalling or updating needs no uninstall.
+  if (vaults.length)
+    throw new Error(`${vaults.length} ssh key${vaults.length > 1 ? "s are" : " is"} protected by vswarm agent; without vswarm, ssh cannot use ${vaults.length > 1 ? "them" : "it"}${purge ? `, and --purge would delete ${vaults.length > 1 ? "them" : "it"}` : ""}. Put ${vaults.length > 1 ? "them" : "it"} back first: ${vaults.map((x) => `vswarm agent unprotect ${x.v.path}`).join(" ; ")}. To reinstall or move to a newer vswarm, do not uninstall: run the install command again.`);
 }
 
 // ── the command

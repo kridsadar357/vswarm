@@ -22,7 +22,8 @@ unless they prefer not to be.
 
 Before v0.1.0, development builds were tagged v2.1.0 to v2.9.0. Those tags and their release pages were removed when
 numbering restarted at 0.1.0. A copy still on a 2.x build refuses 0.1.0, because updates never go to a lower version.
-Reinstall it once: `vswarm uninstall`, then the install command in the README.
+Run the install command in the README once more, over it; it moves the copy to 0.1.0 and keeps your gates, keys and
+settings. Do not uninstall first.
 
 **What is checked:** releases are git tags signed with the maintainer's SSH key. The
 installer checks the newest tag's signature against the key that tag lists before installing it, and `vswarm install`
