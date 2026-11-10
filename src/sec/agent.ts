@@ -1030,7 +1030,8 @@ export function setAgentBlock(cfgPath: string, block: string | null): { changed:
   const next = block ? `${block}\n\n${rest}${rest ? "\n" : ""}` : rest ? `${rest}\n` : "";
   if (next === old) return { changed: false };
   let backup: string | undefined;
-  if (old) writeFileSync((backup = `${cfgPath}.bak-vswarm-${Date.now()}`), old, { mode: 0o600 });
+  // A config that held only vswarm's block needs no copy: nothing of the person's is in it.
+  if (old && rest) writeFileSync((backup = `${cfgPath}.bak-vswarm-${Date.now()}`), old, { mode: 0o600 });
   mkdirSync(dirname(cfgPath), { recursive: true, mode: 0o700 });
   writeFileSync(cfgPath, next, { mode: 0o600 });
   if (block) recordManaged(block + "\n");

@@ -366,7 +366,8 @@ describe("gcloud: the credential's command runs preflight", () => {
     const gone = await cloudUninstall(e.where);
     expect(gone.join("\n")).toContain("gcloud configuration prod restored");
     expect(readFileSync(file, "utf8")).toBe(iniSet(original, "auth", "credential_file_override", src));
-    expect(readFileSync(join(cfg, "rc"), "utf8")).not.toContain("vswarm cmdgate");
+    // The rc held only vswarm's wrappers, so it went with them.
+    expect(existsSync(join(cfg, "rc"))).toBe(false);
     expect(loadCloudGates().gcloud).toEqual({});
   }));
 
@@ -379,7 +380,7 @@ describe("gcloud: the credential's command runs preflight", () => {
     expect(readFileSync(rc, "utf8")).toContain("cmdgate az 'Prod-*' --");
     expect(await quiet(() => gateAz(["status"], where))).toContain("Prod-*");
     await quiet(() => gateAz(["--off"], where));
-    expect(readFileSync(rc, "utf8")).not.toContain("cmdgate");
+    expect(existsSync(rc)).toBe(false);
   }));
 });
 

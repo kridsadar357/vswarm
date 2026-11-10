@@ -201,6 +201,11 @@ export function setBlock(file: string, body: string | null, start = BLOCK_START,
   const rest = removeBlock(old, start, end);
   const next = body === null ? rest : rest.trimEnd() + (rest.trim() ? "\n\n" : "") + block;
   if (next === old) return false;
+  // A file that held nothing but vswarm's block goes with it, as it was before (an empty profile, or none).
+  if (body === null && !next.trim()) {
+    rmSync(file, { force: true });
+    return true;
+  }
   mkdirSync(dirname(file), { recursive: true });
   // Windows PowerShell 5.1 reads a UTF-8 file without a BOM as ANSI: new profiles, and non-ASCII paths, get a BOM.
   const ps1 = file.toLowerCase().endsWith(".ps1");
@@ -588,15 +593,19 @@ export async function gate(args: string[], home = homedir()) {
   if (dropped.length) await (await import("./sec/human")).weaken("gate", action === "remove" ? ["remove"] : ["ssh", ...args]);
   // ssh uses the first value it sees for most options, so the gate goes first in the file.
   const block = action === "ssh" ? sshGate(args, existsSync(launcherPath()) ? [launcherPath()] : [process.execPath, CLI], { cert }) : undefined;
-  const next = block ? `${block}\n\n${rest}\n` : `${rest}\n`;
-  const backup = `${cfgPath}.bak-vswarm-${Date.now()}`;
-  if (old) writeFileSync(backup, old, { mode: 0o600 });
-  mkdirSync(dirname(cfgPath), { recursive: true, mode: 0o700 });
-  writeFileSync(cfgPath, next, { mode: 0o600 });
+  const next = block ? `${block}\n\n${rest}${rest ? "\n" : ""}` : `${rest}\n`;
+  // A config that held only vswarm's gate needs no copy: nothing of the person's is in it.
+  const backup = old && rest.trim() ? `${cfgPath}.bak-vswarm-${Date.now()}` : undefined;
+  if (backup) writeFileSync(backup, old, { mode: 0o600 });
+  if (!block && !rest.trim()) rmSync(cfgPath, { force: true });
+  else {
+    mkdirSync(dirname(cfgPath), { recursive: true, mode: 0o700 });
+    writeFileSync(cfgPath, next, { mode: 0o600 });
+  }
   // Only the block vswarm wrote is its own; a look-alike block someone else put in the file stays visible to scans.
   if (block) recordManaged(block + "\n");
   ok(action === "ssh" ? t("cli.gate.added", { list: args.join(", ") }) : t("cli.gate.removed"), cfgPath);
-  if (old) console.log(`  ${c.dim(t("cli.gate.backup", { file: backup }))}`);
+  if (backup) console.log(`  ${c.dim(t("cli.gate.backup", { file: backup }))}`);
   if (action === "ssh") console.log(`  ${c.dim(t("cli.gate.test", { find: WIN ? "findstr /i" : "grep -i" }))}`);
 }
 

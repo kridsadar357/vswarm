@@ -2,7 +2,7 @@
 // tampered blocks, broken registries. Nothing here touches the real home: every test gets a folder of its own.
 import { describe, expect, test } from "bun:test";
 import { reset } from "./isolate";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, sep } from "node:path";
 import { VERSION } from "../src/home";
@@ -517,6 +517,15 @@ describe("vswarm's own blocks and the lock", () => {
       await gate(["remove"], home);
       expect(readFileSync(join(home, ".ssh/config"), "utf8").trim()).toBe(`Host work\n    HostName 10.0.0.5\n${forged}`.trim());
       expect(existsSync(join(home, ".ssh"))).toBe(true);
+      // A config that held only the gate goes with it, and there is no copy of it to leave behind.
+      const cfgPath = join(home, ".ssh/config");
+      rmSync(cfgPath);
+      for (const f of readdirSync(join(home, ".ssh"))) if (f.startsWith("config.bak-vswarm-")) rmSync(join(home, ".ssh", f));
+      await gate(["ssh", "prod-*"], home);
+      expect(readFileSync(cfgPath, "utf8").trimEnd().endsWith("# <<< vswarm gate <<<")).toBe(true);
+      await gate(["remove"], home);
+      expect(existsSync(cfgPath)).toBe(false);
+      expect(readdirSync(join(home, ".ssh")).filter((f) => f.startsWith("config.bak-vswarm-"))).toEqual([]);
     });
   }, 30_000);
 

@@ -3,7 +3,7 @@
 // vendor tasks and services, the stock SCM WMI subscription). Nothing here runs PowerShell or touches the real home.
 import { describe, expect, test } from "bun:test";
 import { reset } from "./isolate";
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -558,6 +558,9 @@ describe("windows: ssh gate and install guard", () => {
       const fresh = join(d, "new", "profile.ps1");
       setBlock(fresh, block, GUARD_START, GUARD_END);
       expect(readKept(fresh).enc).toBe("utf8bom");
+      // Taking the block out of a profile that held nothing else removes the file, as it was before.
+      expect(setBlock(fresh, null, GUARD_START, GUARD_END)).toBe(true);
+      expect(existsSync(fresh)).toBe(false);
       // A plain UTF-8 profile that now holds non-ASCII text gets the BOM too.
       const plain = join(d, "plain.ps1");
       writeFileSync(plain, "Set-Alias ll ls\n");
