@@ -269,6 +269,7 @@ export async function teamCommand(action: string, args: string[], opt: { fingerp
     return;
   }
   if (action === "leave") {
+    await (await import("./human")).weaken("team", ["leave"]);
     teamLeave();
     line(`${c.green("✔")} this machine follows no team policy now`);
     return;

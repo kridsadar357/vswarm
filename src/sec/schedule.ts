@@ -493,6 +493,7 @@ export async function watchCommand(action: string, opt: { every: number }) {
     return;
   }
   if (action === "off") {
+    await (await import("./human")).weaken("watch", ["off"]);
     for (const f of await watchOff()) line(`${c.green("✔")} ${t("cli.watch.removed", { file: f.replace(homedir(), "~") })}`);
     return;
   }

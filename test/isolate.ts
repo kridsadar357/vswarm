@@ -4,8 +4,13 @@
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { answerWith } from "../src/sec/human";
 
 const VARS = [["VSWARM_SEC_DIR", "sec"], ["VSWARM_AGENT_DIR", "agent"], ["VSWARM_BACKUP_DIR", "backups"], ["VSWARM_TRY_DIR", "try"], ["VSWARM_CA_DIR", "ca"], ["VSWARM_GATE_DIR", "gate"]] as const;
+
+// Commands that weaken protection ask a person (src/sec/human.ts); in a test process the test answers, so no dialog
+// ever appears on the desktop of whoever runs the tests. Tests of the question itself pass their own terminal and desktop.
+answerWith(async () => true);
 
 // Words in English, whatever this machine's language or saved choice: tests that need Thai ask for it.
 process.env.VSWARM_LANG = "en";

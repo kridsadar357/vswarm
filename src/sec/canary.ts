@@ -141,7 +141,9 @@ export async function canaryCommand(action: string, args: string[], opt: { ask: 
     return;
   }
   if (action === "remove") {
-    const r = removeCanary(args[0] ?? "");
+    if (!args[0]) throw new Error("usage: vswarm canary remove <id|all>");
+    await (await import("./human")).weaken("canary", ["remove", args[0]]);
+    const r = removeCanary(args[0]);
     for (const k of r.removed) line(`${c.green("✔")} removed ${k.kind} canary ${k.label} from ${k.where.replace(homedir(), "~")}`);
     for (const p of r.problems) line(`${c.red("✖")} ${p.replace(homedir(), "~")}`);
     if (r.problems.length) process.exitCode = 1;

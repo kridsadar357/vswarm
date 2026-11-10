@@ -79,6 +79,7 @@ export async function baselineCommand(opt: { auto?: boolean; acceptHigh?: boolea
     line(c.dim(`  ${t("cli.baseline.notRecorded")}`));
     return "declined";
   }
+  await (await import("./sec/human")).weaken("baseline");
   await saveBaseline(forBaseline(r.scan));
   line(`  ${c.green("✔")} ${t("cli.baseline.done")} ${c.dim(files.baseline())}`);
   para(t("cli.baseline.after"), 2, c.dim, "  ");
@@ -119,6 +120,7 @@ export async function okCommand(args: string[], all: boolean) {
   if (bad.length) throw new Error(t("cli.err.noFinding", { list: bad.join(", "), n: last.findings.length }));
   const pick = all ? last.findings : last.findings.filter((f, i) => args.includes(f.id) || args.includes(String(i + 1)));
   if (!pick.length) throw new Error(t("cli.err.okWhich"));
+  await (await import("./sec/human")).weaken("ok", all ? ["--all"] : args);
   await acceptFindings(pick);
 }
 

@@ -446,6 +446,29 @@ Between inspections, `scan`, `preflight` and `watch` compare the servers with th
 
 ![vswarm agents --inspect](img/agents-inspect.png)
 
+### When an agent runs vswarm
+
+Coding agents run commands on your machine, vswarm included. When one hits a gate (ssh, aws, kubectl to production) it
+reads the refusal like you would and usually runs `vswarm why` next. That is fine: looking is always allowed.
+
+What an agent cannot do on its own is weaken protection. These ask a person first, right before they change anything:
+`ok` / `accept`, `baseline`, `setup`, `unlock`, `policy warn allow`, `gate remove` or a gate with `--off` (or one that
+leaves out a host it covers now), `guard off`, `watch off`, `agent off`, `agent unprotect`, `agent policy --allow-warn`,
+`team leave`, `canary remove`, `trust pin` over keys already pinned, and `uninstall`.
+
+- On a terminal you are at, vswarm asks there (`[y/N]`).
+- Anywhere else, or when a coding agent says it is running (Claude Code, Codex, Gemini CLI and others set a variable),
+  a dialog appears on the desktop. A program typing into a pipe or a terminal of its own cannot answer it.
+- Nobody to ask (no terminal, no desktop): not done, and the message tells an agent to hand it to you.
+
+There is no flag or variable that skips this, since anything you could set an agent could set too. A run whose home
+and vswarm folders all point elsewhere (a test, a scratch scan) changes nothing that protects you and is not asked
+about; the real home comes from the system's user database, not from `HOME`.
+
+This stops an agent from being talked into switching vswarm off. It is not a wall against a program that already runs
+as you and means harm: such a program can edit `~/.ssh/config` or your shell rc itself. vswarm recognises its own
+blocks by hash, so the next check reports a gate or the guard changed by hand.
+
 ## 6. Gate production access: preflight and gate
 
 ### vswarm preflight

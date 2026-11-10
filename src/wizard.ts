@@ -292,6 +292,8 @@ export async function runSetup(d: SetupDeps): Promise<number> {
 
 /** `vswarm setup [--yes]` on this machine: the real commands behind every step. */
 export async function setupCommand(opt: { auto: boolean; offline?: boolean }): Promise<number> {
+  // Setup can take a starting point and change gates: asked about like any command that could weaken protection.
+  await (await import("./sec/human")).weaken("setup", opt.auto ? ["--yes"] : []);
   const { ask, canAsk, gate, guard, guardOn, yes } = await import("./setup");
   const { realCtx } = await import("./sec/ctx");
   const { check } = await import("./sec/engine");

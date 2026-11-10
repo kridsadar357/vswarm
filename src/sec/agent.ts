@@ -603,16 +603,16 @@ export const AGENT_MAX_AGE = 30_000;
 export const UPSTREAM_SIGN_TIMEOUT = 60_000;
 
 /** Asks on the desktop: a dialog on macOS and Windows, SSH_ASKPASS or zenity on Linux. No way to ask means no. */
-export async function askOnDesktop(question: string): Promise<boolean> {
+export async function askOnDesktop(question: string, title = "vswarm agent"): Promise<boolean> {
   if (WIN) {
     // Yes/No, No the default, gone after the timeout (-1). The question is passed in the environment, never parsed.
-    const r = await exec([powershell(), "-NoProfile", "-NonInteractive", "-Command", `if ((New-Object -ComObject WScript.Shell).Popup($env:VSWARM_Q, ${CONFIRM_TIMEOUT}, 'vswarm agent', 4 + 48 + 256) -eq 6) { 'allow' }`],
-      { env: { ...process.env, VSWARM_Q: question }, timeoutMs: (CONFIRM_TIMEOUT + 5) * 1000 }).catch(() => ({ code: 1, out: "" }));
+    const r = await exec([powershell(), "-NoProfile", "-NonInteractive", "-Command", `if ((New-Object -ComObject WScript.Shell).Popup($env:VSWARM_Q, ${CONFIRM_TIMEOUT}, $env:VSWARM_T, 4 + 48 + 256) -eq 6) { 'allow' }`],
+      { env: { ...process.env, VSWARM_Q: question, VSWARM_T: title }, timeoutMs: (CONFIRM_TIMEOUT + 5) * 1000 }).catch(() => ({ code: 1, out: "" }));
     return r.code === 0 && (r.out ?? "").trim() === "allow";
   }
   if (process.platform === "darwin") {
     const q = (s: string) => `"${s.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
-    const out = await run(["osascript", "-e", `display dialog ${q(question)} buttons {"Refuse", "Allow"} default button "Refuse" cancel button "Refuse" with title "vswarm agent" giving up after ${CONFIRM_TIMEOUT}`], (CONFIRM_TIMEOUT + 5) * 1000);
+    const out = await run(["osascript", "-e", `display dialog ${q(question)} buttons {"Refuse", "Allow"} default button "Refuse" cancel button "Refuse" with title ${q(title)} giving up after ${CONFIRM_TIMEOUT}`], (CONFIRM_TIMEOUT + 5) * 1000);
     return !!out && out.includes("button returned:Allow") && !out.includes("gave up:true");
   }
   const askpass = process.env.SSH_ASKPASS;
@@ -621,7 +621,7 @@ export async function askOnDesktop(question: string): Promise<boolean> {
     return r.code === 0;
   }
   if (Bun.which("zenity")) {
-    const r = await exec(["zenity", "--question", "--title=vswarm agent", `--text=${question}`, `--timeout=${CONFIRM_TIMEOUT}`], { timeoutMs: (CONFIRM_TIMEOUT + 5) * 1000 }).catch(() => ({ code: 1 }));
+    const r = await exec(["zenity", "--question", `--title=${title}`, `--text=${question}`, `--timeout=${CONFIRM_TIMEOUT}`], { timeoutMs: (CONFIRM_TIMEOUT + 5) * 1000 }).catch(() => ({ code: 1 }));
     return r.code === 0;
   }
   return false;
@@ -1624,6 +1624,7 @@ export async function agentCommand(action: string, args: string[], opt: AgentCom
   }
 
   if (action === "off") {
+    await (await import("./human")).weaken("agent", ["off"]);
     for (const g of await agentOff()) line(`${c.green("✔")} removed ${short(g)}`);
     const n = listVaults().length;
     if (n) line(c.amber(`  ${n} protected key${n > 1 ? "s stay" : " stays"} in the vault and cannot sign until vswarm agent on · put ${n > 1 ? "them" : "it"} back: vswarm agent unprotect <key>`));
@@ -1684,6 +1685,7 @@ export async function agentCommand(action: string, args: string[], opt: AgentCom
     const given = [opt.allowWarn, opt.strict, opt.inherit].filter(Boolean).length;
     if (!args[0] || given !== 1) throw new Error("usage: vswarm agent policy <key file | SHA256:fingerprint> --allow-warn | --strict | --inherit");
     const p: KeyPolicy = opt.allowWarn ? "allow" : opt.strict ? "refuse" : "inherit";
+    if (p === "allow") await (await import("./human")).weaken("agent", ["policy", args[0], "--allow-warn"]);
     const r = await setKeyPolicy(args[0], p);
     line(`${c.green("✔")} ${short(r.path)} ${c.dim(r.fp)} ${p === "allow" ? "signs on PASS and WARN" : p === "refuse" ? "signs on PASS only; WARN refuses" : `follows the policy (WARN ${(await readPolicy()).warn === "allow" ? "signs" : "refuses"}; vswarm policy)`}`);
     return;
@@ -1699,6 +1701,7 @@ export async function agentCommand(action: string, args: string[], opt: AgentCom
 
   if (action === "unprotect") {
     if (!args[0]) throw new Error("usage: vswarm agent unprotect <key file | SHA256:fingerprint>");
+    await (await import("./human")).weaken("agent", ["unprotect", args[0]]);
     const r = await unprotect(args[0]);
     line(`${c.green("✔")} ${short(r.path)} is back on disk ${c.dim(`${r.fp} · it no longer needs vswarm, and nothing checks the machine before it is used`)}`);
     return;

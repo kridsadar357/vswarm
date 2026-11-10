@@ -509,6 +509,8 @@ export function sshGate(patterns: string[], launcher: string[], opt: { cert?: { 
 export async function gate(args: string[], home = homedir()) {
   const action = args.shift() ?? "status";
   // Command wrappers and the gcloud / az gates: src/sec/cmdgate.ts, src/sec/cloudgate.ts
+  // Taking a cmd, aws, kube, gcloud or az gate away weakens protection: a person says yes first.
+  if (args.includes("--off") && action !== "status") await (await import("./sec/human")).weaken("gate", [action, ...args]);
   if (action === "cmd") return (await import("./sec/cmdgate")).gateCmd(args);
   if (action === "gcloud") return (await import("./sec/cloudgate")).gateGcloud(args);
   if (action === "az") return (await import("./sec/cloudgate")).gateAz(args);
@@ -568,6 +570,9 @@ export async function gate(args: string[], home = homedir()) {
   if (withCert && !existsSync(join(HOME, "ca", "ca_key"))) throw new Error("no CA yet: vswarm ca init");
   const cert = withCert ? { key: join(HOME, "ca", "session"), cert: join(HOME, "ca", "session-cert.pub") } : undefined;
   const rest = removeBlock(old, GATE_START, GATE_END).trimEnd();
+  // Removing the gate, or leaving out a host it covers now, weakens it: a person says yes first.
+  const dropped = gatedHostsOf(old).filter((h) => action === "remove" || !args.includes(h));
+  if (dropped.length) await (await import("./sec/human")).weaken("gate", action === "remove" ? ["remove"] : ["ssh", ...args]);
   // ssh uses the first value it sees for most options, so the gate goes first in the file.
   const block = action === "ssh" ? sshGate(args, existsSync(launcherPath()) ? [launcherPath()] : [process.execPath, CLI], { cert }) : undefined;
   const next = block ? `${block}\n\n${rest}\n` : `${rest}\n`;
@@ -672,6 +677,7 @@ export async function guard(args: string[]) {
     return;
   }
   if (action !== "on" && action !== "off") throw new Error("usage: vswarm guard on [--ignore-scripts] [--sandbox] [--strict] | off | status");
+  if (action === "off" && (await guardOn())) await (await import("./sec/human")).weaken("guard", ["off"]);
   const launcher = action === "on" ? ensureLauncher() : existsSync(launcherPath()) ? launcherPath() : undefined;
   if (action === "on" && want.sandbox) {
     const why = sandboxRefusal(process.platform, (await import("./sec/try/spawn")).canSandbox());
@@ -823,6 +829,7 @@ export async function install(args: string[]) {
 }
 
 export async function uninstall(args: string[]) {
+  await (await import("./sec/human")).weaken("uninstall", args);
   // Refused before anything is removed: --purge would delete keys that live only in the agent's vault.
   const { agentUninstall } = await import("./sec/agent");
   const agentGone = await agentUninstall(args.includes("--purge"));
@@ -916,6 +923,8 @@ export async function trust(args: string[]) {
     // Pin the keys this checkout ships with. Used by the installer; by hand only after checking the fingerprint.
     const keys = await fingerprints(shipped);
     if (!keys.length) throw new Error(`${shipped} lists no release keys`);
+    // A first pin (the installer) asks nobody; replacing keys already pinned decides which releases this copy takes.
+    if (existsSync(PIN()) && readFileSync(PIN(), "utf8") !== readFileSync(shipped, "utf8")) await (await import("./sec/human")).confirmWeakening("vswarm trust pin");
     mkdirSync(dirname(PIN()), { recursive: true, mode: 0o700 });
     writeFileSync(PIN(), readFileSync(shipped, "utf8"), { mode: 0o600 });
     for (const k of keys) ok(`pinned ${k.fp}`, k.who);

@@ -328,6 +328,7 @@ async function main() {
       const [what, value] = args;
       if (what === undefined) return line(policyLine(await readPolicy()));
       if (what !== "warn" || (value !== "allow" && value !== "refuse")) throw new Error(t("cli.err.policyUsage"));
+      if (value === "allow") await (await import("./sec/human")).weaken("policy", ["warn", "allow"]);
       await savePolicy(value);
       line(`${c.green("✔")} ${policyLine(await readPolicy())}`);
       if (value === "refuse") line(c.dim(`  ${t("cli.policy.nowRefuse")}`));
@@ -430,6 +431,7 @@ async function main() {
         process.exitCode = 3;
         return line(c.amber(t("cli.unlock.log", { why: log.why })));
       }
+      await (await import("./sec/human")).weaken("unlock", force ? ["--force"] : []);
       const r = await clearLock(lock.incident, { reset: !!log.why });
       if (r.kept) line(c.dim(`  ${t("cli.unlock.kept", { file: r.kept })}`));
       return line(`${c.green("✔")} ${t("cli.unlock.done", { incident: lock.incident })}`);
