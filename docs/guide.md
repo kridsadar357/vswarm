@@ -541,7 +541,9 @@ vswarm hook remove claude     # asks you first
   deploy commands of vercel, fly, firebase, wrangler and others, a tool behind `vswarm gate cmd`) while this machine
   does not pass: refused, and the agent is told why and what you have to do.
 - A command that weakens vswarm (`vswarm ok`, `unlock`, `policy warn allow`, a gate or the guard off, or editing
-  `~/.vswarm` or the ssh gate by hand): Claude Code asks you before it runs it.
+  `~/.vswarm` or the ssh gate by hand): refused, and the agent is told to ask you to run it yourself in your own
+  terminal. A refusal rather than a question, because in Claude Code's auto mode a question can be answered for you;
+  a refusal holds in every mode. Listing what you accepted (`ok --list`) only reads and is not refused.
 - Anything else: the hook says nothing, and Claude Code's own permissions decide. It never answers "allow", so it
   cannot skip a question you set up.
 

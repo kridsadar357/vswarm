@@ -465,7 +465,7 @@
   "cli.help.secrets": "รหัสผ่านและกุญแจที่เก็บไว้ในเครื่อง ซึ่งใครคัดลอกไปก็ใช้ได้ (ไม่แสดงค่าเด็ดขาด)",
   "cli.help.agents": "tool server ของ AI (MCP), hook และสิทธิ์ของเครื่องมือเขียนโค้ดด้วย AI",
   "cli.help.mcp": "สำหรับ AI agent: MCP server (stdio) ให้อ่านสถานะของ vswarm และถามคุณได้ แต่ปลดล็อกหรือยอมรับอะไรแทนคุณไม่ได้",
-  "cli.help.hook": "ให้ Claude Code ถาม vswarm ก่อนรันคำสั่ง shell: ถ้าเครื่องไม่ผ่าน คำสั่งที่เข้า production จะถูกปฏิเสธ และคำสั่งที่ลดการป้องกันจะรอให้คุณตอบ",
+  "cli.help.hook": "ให้ Claude Code ถาม vswarm ก่อนรันคำสั่ง shell: ถ้าเครื่องไม่ผ่าน คำสั่งที่เข้า production จะถูกปฏิเสธ และคำสั่งที่ลดการป้องกัน agent จะรันเองไม่ได้ ต้องให้คุณรันเอง",
   "cli.mcp.howto": "vswarm mcp คุยแบบ MCP ทาง stdin/stdout ให้ AI agent เป็นตัวเรียก เพิ่มครั้งเดียว:\n  Claude Code   claude mcp add vswarm -- {cmd} mcp\n  Codex         codex mcp add vswarm -- {cmd} mcp\n  Gemini CLI    gemini mcp add vswarm {cmd} mcp\nจากนั้น agent จะอ่านสถานะของ vswarm ได้ (status, check, why, explain_refusal) และถามคำถาม ใช่/ไม่ใช่ ผ่านกล่องบนหน้าจอได้ (ask_human) แต่ไม่มีอะไรที่ agent ทำแล้วปลดล็อก ยอมรับ หรือปิดการป้องกันได้",
   "cli.mcp.older": "vswarm ที่ติดตั้งไว้เป็นรุ่น {v} ไม่ใช่รุ่นนี้ และยังไม่มีคำสั่ง mcp คำสั่งด้านล่างจึงเรียกตัวนี้แทน ติดตั้งใหม่แล้วค่อยเพิ่มอีกครั้งด้วย vswarm ธรรมดา",
   "cli.help.guard": "npm, pip, brew … ต้องผ่าน vswarm ก่อนติดตั้ง (--sandbox: macOS และ Linux ที่มี bubblewrap)",

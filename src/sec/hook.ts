@@ -4,10 +4,12 @@
 //   a command that reaches production (ssh, aws, kubectl, deploy tools, a gated tool)
 //       and this machine does not pass          → deny, with why and what the person does
 //   a command that weakens vswarm (vswarm ok, unlock, policy warn allow, editing ~/.vswarm or the ssh gate by hand)
-//                                               → ask: Claude Code asks the person before it runs
+//                                               → deny: the person runs it themselves, in their own terminal
 //   anything else                               → nothing: the agent's own permissions decide
 //
-// The hook never answers "allow": it can only make the agent more careful, never skip a question the person set up.
+// Weakening is denied rather than asked about: in Claude Code's auto mode an "ask" can be answered for the person, and
+// a deny holds in every mode. The hook never answers "allow": it can only make the agent more careful, never skip a
+// question the person set up.
 // It is a first line, not the wall: the ssh gate, the vault and the gated tools refuse on their own whatever an
 // agent runs, and this hook gives the agent the reason in words before it tries another way.
 
@@ -43,6 +45,8 @@ export type Verdict = { kind: "prod"; what: string } | { kind: "weaken"; what: s
 
 /** What a command line is to vswarm. `gated` are the tools `vswarm gate cmd` guards (psql, mysql …). */
 export function classify(line: string, gated: string[] = []): Verdict {
+  // Listing what was accepted only reads.
+  line = line.replace(/(?:\bvswarm|\bcli\.ts)\s+(?:ok|accept)\s+--list\b/g, "");
   if (WEAKEN.test(line)) return { kind: "weaken", what: "it weakens vswarm's protection" };
   if (BY_HAND.test(line) && WRITES.test(line)) return { kind: "weaken", what: "it changes vswarm's files or the ssh gate by hand" };
   for (const w of commandsOf(line)) {
@@ -54,7 +58,7 @@ export function classify(line: string, gated: string[] = []): Verdict {
 }
 
 /** Claude Code's PreToolUse answer. */
-const answer = (decision: "deny" | "ask", reason: string) => ({ hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: decision, permissionDecisionReason: reason } });
+const answer = (decision: "deny", reason: string) => ({ hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: decision, permissionDecisionReason: reason } });
 
 /**
  * The hook itself: Claude Code's event in, its answer out (undefined: say nothing). `verdict` is the gate's verdict
@@ -66,7 +70,7 @@ export async function onTool(event: any, opt: { gated?: string[]; gate: () => Pr
   const v = classify(cmd, opt.gated);
   if (!v) return;
   if (v.kind === "weaken")
-    return answer("ask", `vswarm: ${v.what}. That is the person's decision, not the agent's; vswarm will also ask them itself. If the person did not ask for this, do not run it.`);
+    return answer("deny", `vswarm: not run, because ${v.what}. That is the person's decision, not the agent's. Tell the user what you wanted to do and why; if they agree, they run it themselves in their own terminal. Do not try another way to do the same.`);
   if ((await opt.gate()).allowed) return;
   return answer("deny", `${await opt.reason(cmd)}\n\nIf you are an AI agent: vswarm stopped this on purpose. Do not try another way in (another host name, an API token, a different tool). Tell the user.`);
 }

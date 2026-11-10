@@ -27,7 +27,7 @@ describe("what a command line is", () => {
   test("weakening vswarm: its own commands, and its files or the ssh gate edited by hand; looking is fine", () => {
     for (const l of ["vswarm ok 3", "vswarm accept --all", "vswarm unlock", "vswarm policy warn allow", "vswarm gate remove", "vswarm gate aws prod --off", "vswarm guard off", "vswarm hook remove claude", "bun src/cli.ts ok 3", "bun ~/develop/vswarm/src/cli.ts policy warn allow", "sed -i '' '/vswarm gate/d' ~/.ssh/config", "rm -rf ~/.vswarm/sec", "echo x >> ~/.ssh/config"])
       expect(classify(l)?.kind).toBe("weaken");
-    for (const l of ["vswarm why", "vswarm scan --json", "vswarm policy", "cat ~/.ssh/config", "ls ~/.vswarm", "vswarm gate status"])
+    for (const l of ["vswarm why", "vswarm scan --json", "vswarm policy", "cat ~/.ssh/config", "ls ~/.vswarm", "vswarm gate status", "vswarm ok --list", "bun src/cli.ts accept --list"])
       expect(classify(l)?.kind).not.toBe("weaken");
   });
 });
@@ -52,10 +52,11 @@ describe("the answer Claude Code gets", () => {
     expect(await onTool({}, failing)).toBeUndefined();
   });
 
-  test("weakening vswarm: ask, whatever the verdict, without running a check", async () => {
+  test("weakening vswarm: deny (an ask can be answered for the person in auto mode), whatever the verdict, without running a check", async () => {
     let checked = false;
     const r: any = await onTool(ev("vswarm ok --all"), { gate: async () => ((checked = true), { allowed: true }), reason: async () => "" });
-    expect(r.hookSpecificOutput.permissionDecision).toBe("ask");
+    expect(r.hookSpecificOutput.permissionDecision).toBe("deny");
+    expect(r.hookSpecificOutput.permissionDecisionReason).toContain("in their own terminal");
     expect(checked).toBe(false);
   });
 });
@@ -131,11 +132,11 @@ describe("vswarm hook claude as a program", () => {
     return { code: await p.exited, out };
   };
 
-  test("says nothing about an ordinary command, and asks about a weakening one, on stdout only", async () => {
+  test("says nothing about an ordinary command, and denies a weakening one, on stdout only", async () => {
     expect(await run({ tool_name: "Bash", tool_input: { command: "npm test" } })).toEqual({ code: 0, out: "" });
     const r = await run({ tool_name: "Bash", tool_input: { command: "vswarm unlock" } });
     expect(r.code).toBe(0);
-    expect(JSON.parse(r.out).hookSpecificOutput.permissionDecision).toBe("ask");
+    expect(JSON.parse(r.out).hookSpecificOutput.permissionDecision).toBe("deny");
     expect((await run("not an event")).out).toBe("");
   });
 });
