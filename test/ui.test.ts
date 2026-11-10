@@ -156,6 +156,17 @@ describe("vswarm ui: who can talk to it", () => {
     expect(page).not.toMatch(/\sstyle="/);
     const js = readFileSync(join(import.meta.dir, "../src/ui/app.js"), "utf8");
     expect(js).not.toMatch(/innerHTML|outerHTML|insertAdjacentHTML|document\.write|eval\(|new Function/);
+    // replaceChildren and append take nodes, not a list: a list passed whole shows as "[object HTMLDivElement],…".
+    // Every .map( directly inside one must be spread.
+    for (const m of js.matchAll(/\.(?:replaceChildren|append)\(([^;]*?)\);/gs)) {
+      let depth = 0;
+      const args = m[1];
+      for (let i = 0; i < args.length; i++) {
+        if ("([{".includes(args[i])) depth++;
+        else if (")]}".includes(args[i])) depth--;
+        else if (depth === 0 && args.startsWith(".map(", i)) expect(args.slice(Math.max(0, i - 40), i + 5)).toMatch(/\.\.\.[\w.]+\.map\($/);
+      }
+    }
     expect((await fetch(`${base()}/../package.json`)).status).toBe(404);
     expect((await fetch(`${base()}/state.ts`)).status).toBe(404);
   });

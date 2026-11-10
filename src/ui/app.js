@@ -433,7 +433,7 @@
   ];
   function renderTerminal() {
     $("terminal").replaceChildren(el("h3", { id: "h-terminal", text: t("sec.terminal") }), el("p", { class: "sec__sub", text: t("term.intro") }),
-      TERMINAL.map(([k, cmd]) => el("div", { class: "term__row" }, el("span", { text: t(k) }), cmdBox(cmd))));
+      ...TERMINAL.map(([k, cmd]) => el("div", { class: "term__row" }, el("span", { text: t(k) }), cmdBox(cmd))));
   }
 
   function renderAbout() {
