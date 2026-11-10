@@ -185,6 +185,16 @@ function usage() {
   console.log();
 }
 
+/** `vswarm <cmd> --help`: that command's rows from the help, or the whole help for a command it has no row for. */
+function commandHelp(cmd: string) {
+  const rows = HELP.flatMap(([, r]) => r).filter(([line]) => line === `vswarm ${cmd}` || line.startsWith(`vswarm ${cmd} `));
+  if (!rows.length) return usage();
+  for (const [line, key] of rows) {
+    const r = helpRow(line, t(key));
+    console.log(`  ${c.cyan(r.cmd)}${r.gap}${r.desc.map(c.dim).join(`\n${r.pad}`)}`);
+  }
+}
+
 export async function main() {
   const [cmd = "help", ...args] = process.argv.slice(2);
   // Thai (and every other word that is not ASCII) on a Windows console: UTF-8 for this run (src/i18n).
@@ -194,6 +204,8 @@ export async function main() {
   const tail = tailAt >= 0 ? args.splice(tailAt + 1) : [];
   // pkg hands everything after the tool name to that tool, `=` and all.
   if (cmd !== "pkg" && cmd !== "cmdgate") splitEquals(args);
+  // pkg and cmdgate pass every option on to the tool they stand in for (psql -h is a host).
+  if (!["pkg", "cmdgate", "complete", "__complete"].includes(cmd) && args.slice(0, own(args)).some((a) => a === "--help" || a === "-h")) return commandHelp(cmd);
   // The report is what these print: to stdout, so it can be kept (vswarm scan > scan.txt). Gates, questions and
   // progress stay on stderr. Decided before the options are taken off the list.
   if (reportsTo(cmd, args)) toStdout();

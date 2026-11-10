@@ -854,6 +854,12 @@ describe("parsing, CLI and collectors", () => {
     expect((await vswarm({}, "accept", "--list", "--wat=1")).err).toContain("unknown option --wat for vswarm accept");
     expect((await vswarm({}, "canary", "list", "--profile", "p", "--nope")).err).toContain("unknown option --nope for vswarm canary");
     expect((await vswarm({}, "try", "--bogus", "x")).err).toContain("unknown option --bogus for vswarm try");
+    // --help and -h after a command show that command's help instead of being refused as unknown options.
+    for (const cmd of ["try", "mcp", "ui", "baseline", "hook"]) {
+      const help = await vswarm({}, cmd, "--help");
+      expect([cmd, help.code, help.out]).toEqual([cmd, 0, expect.stringContaining(`vswarm ${cmd}`)]);
+    }
+    expect((await vswarm({}, "accept", "-h")).out).toContain("vswarm scan");
     // Behind -- the flags are the command's; behind pkg <tool> they are the package manager's (and = stays as typed).
     const after = await vswarm({}, "try", join(tmp("none"), "missing"), "--", "sh", "--bogus");
     expect(after.err).not.toContain("unknown option");
