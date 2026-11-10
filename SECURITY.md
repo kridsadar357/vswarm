@@ -17,10 +17,12 @@ unless they prefer not to be.
 
 ## Signed releases
 
-**Status:** releases are signed from v2.6.0 on. [`trust/allowed_signers`](trust/allowed_signers) lists the release
-key. The older tags (v2.1.0, v2.2.0) are unsigned; the installer and `vswarm update` skip them and name them. A copy
-installed before v2.6.0 followed `main` without a check; `vswarm update` takes it to the newest signed release and
-pins the key from then on.
+**Status:** every release is signed, starting with v0.1.0, the first public beta.
+[`trust/allowed_signers`](trust/allowed_signers) lists the release key.
+
+Before v0.1.0, development builds were tagged v2.1.0 to v2.9.0. Those tags and their release pages were removed when
+numbering restarted at 0.1.0. A copy still on a 2.x build refuses 0.1.0, because updates never go to a lower version.
+Reinstall it once: `vswarm uninstall`, then the install command in the README.
 
 **What is checked:** releases are git tags signed with the maintainer's SSH key. The
 installer checks the newest tag's signature against the key that tag lists before installing it, and `vswarm install`
@@ -34,16 +36,10 @@ Check the pinned key with `vswarm trust` and compare it with the fingerprint pub
 release key: SHA256:icVOFCVDfJzfuqeKqZRicZ5TtRp0jZ4g5qfuA9PUe2g (ED25519), principal kridsadar357@gmail.com
 ```
 
-**Key change, 9 November 2026 (v2.8.0):** the first release key
-(`SHA256:9WDeb6hMDIq0ry94Hs8t+qW4EegPT0uRkQ0v0w4jpng`, which signed v2.6.0 to v2.7.1) was retired because its
-passphrase was lost. It never left the maintainer's machine and was not compromised, but it can no longer sign, so
-v2.8.0 is signed by the key above and not by the old one. A copy that pinned the old key refuses v2.8.0 by design.
-To move to the new key, check its fingerprint against this page and the release page, then:
-
-```
-curl -fsSL https://raw.githubusercontent.com/kridsadar357/vswarm/main/install.sh | sh   # installs v2.8.0 after checking its signature
-vswarm trust pin                                                                       # pins the key v2.8.0 lists
-```
+**Earlier key, retired 9 November 2026:** the first release key
+(`SHA256:9WDeb6hMDIq0ry94Hs8t+qW4EegPT0uRkQ0v0w4jpng`, which signed development builds 2.6.0 to 2.7.1) was retired
+because its passphrase was lost. It never left the maintainer's machine and was not compromised. Nothing from v0.1.0
+on is signed by it.
 
 Trust on first use is the weak point: an attacker in control of the repository before your first signed install
 could list their own key. Compare the fingerprint through a second channel if that matters to you.

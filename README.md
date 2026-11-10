@@ -245,7 +245,7 @@ vswarm started as a terminal board for watching AI coding agents work. Building 
 a server can be hardened as much as you like, and it still trusts whoever holds a valid key. If the laptop holding
 that key has picked up something it shouldn't have, nothing tells its owner before they connect.
 
-So vswarm 2.0 changed its job to that: check your own machine before it touches production. Everything since
+So vswarm changed its job to that: check your own machine before it touches production. Everything since
 follows the ways attackers actually get onto developer machines.
 
 The aim is a check that a solo developer or a small team will actually keep using: one command, plain words, quiet

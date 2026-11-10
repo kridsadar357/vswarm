@@ -1230,10 +1230,11 @@ catches fewer or flags more.
 
 ## 14. Safe updates: update and trust
 
-Releases are signed from v2.6.0 on. `vswarm update` moves to a new release tag **only if it is signed by the release
+Every release is signed, from v0.1.0 on. `vswarm update` moves to a new release tag **only if it is signed by the release
 key pinned on your machine**, and never to an older version. The first signed release you install or update to pins
 its key (trust on first use). After that, if the repository or the maintainer's account is taken over, installed
-copies refuse the attacker's release. Older unsigned tags are skipped and named.
+copies refuse the attacker's release. Unsigned tags are skipped and named. A copy on a development build from before
+0.1.0 (numbered 2.x) refuses 0.1.0 as older; reinstall it once (`vswarm uninstall`, then the install command).
 
 ```bash
 vswarm update          # the newest correctly signed release

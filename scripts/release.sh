@@ -1,5 +1,5 @@
 #!/usr/bin/env sh
-# Maintainers: check, sign and push a release tag.  scripts/release.sh v2.4.0 [notes-file]
+# Maintainers: check, sign and push a release tag.  scripts/release.sh v0.1.0 [notes-file]
 # Uses the SSH key in VSWARM_SIGNING_KEY (default ~/.ssh/vswarm_release), whose public half must be listed in
 # trust/allowed_signers. Users' `vswarm update` refuses tags that do not verify against the keys they pinned.
 #
