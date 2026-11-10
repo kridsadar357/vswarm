@@ -775,6 +775,8 @@
   "cli.doc.data": "data {dir}",
   "cli.doc.onPath": "vswarm on PATH",
   "cli.doc.newTerminals": "launcher installed, new terminals will have it",
+  "cli.doc.notOnPath": "launcher installed, not on your PATH",
+  "cli.doc.notOnPathHow": "run it as {launcher}, or put it on PATH: vswarm install --path (then open a new terminal)",
   "cli.doc.openNew": "open a new terminal",
   "cli.doc.noLauncher": "launcher not installed",
   "cli.doc.keyMoved": "sealing key moved to a file outside vswarm; treat this computer as suspect",

@@ -227,17 +227,44 @@ export function nameSignals(kind: string, name: string): string[] {
 export interface Signature {
   kind: "script" | "developer-id" | "apple" | "adhoc" | "unsigned" | "other" | "unknown";
   who?: string;
+  /** Windows: the file name the publisher gave it (version info), which a renamed copy keeps. */
+  original?: string;
 }
 
-/** Get-AuthenticodeSignature's answer ("Status|Subject") in the terms the rules use. */
+/** Get-AuthenticodeSignature's answer ("Status|Subject|OriginalFilename") in the terms the rules use. */
 export function authenticode(out: string, script: boolean): Signature {
-  const [status = "", subject = ""] = out.trim().split("|");
+  const [status = "", subject = "", original = ""] = out.trim().split("|");
   // Subject is "CN=Name, O=Org, …"; the CN is who signed it.
   const who = /(?:^|,\s*)CN=("[^"]*"|[^,]*)/.exec(subject)?.[1]?.replace(/"/g, "") || subject || undefined;
-  if (status === "Valid") return { kind: "developer-id", who };
+  if (status === "Valid") return { kind: "developer-id", who, ...(original.trim() ? { original: original.trim() } : {}) };
   if (status === "NotSigned") return { kind: script ? "script" : "unsigned" };
   if (status === "HashMismatch" || status === "NotTrusted" || status === "UnknownError") return { kind: "other", who: who ? `${who} (${status})` : status };
   return { kind: "unknown" };
+}
+
+// Publishers whose installers and updaters run from %TEMP% or a hidden folder as a matter of course (Visual Studio's
+// BackgroundDownload.exe). "Microsoft Windows" is not one: the system's own programs live in System32, and a copy of one
+// elsewhere is a known trick.
+const KNOWN_PUBLISHERS = new Set([
+  "Microsoft Corporation", "Google LLC", "Mozilla Corporation", "JetBrains s.r.o.", "Docker Inc", "GitHub, Inc.", "Oracle America, Inc.",
+  "Adobe Inc.", "Apple Inc.", "NVIDIA Corporation", "Intel Corporation", "Zoom Video Communications, Inc.", "Slack Technologies, LLC", "Dropbox, Inc",
+]);
+// Programs that run whatever they are given (scripts, DLLs, downloads): attackers use them because they are signed.
+const RUNS_ANYTHING = new Set([
+  "powershell.exe", "pwsh.exe", "cmd.exe", "mshta.exe", "rundll32.exe", "regsvr32.exe", "wscript.exe", "cscript.exe", "certutil.exe", "bitsadmin.exe",
+  "msiexec.exe", "installutil.exe", "regasm.exe", "regsvcs.exe", "msbuild.exe", "cmstp.exe", "wmic.exe", "forfiles.exe", "odbcconf.exe", "curl.exe",
+  "msxsl.exe", "hh.exe", "control.exe", "pcalua.exe", "scriptrunner.exe", "dotnet.exe", "node.exe", "python.exe", "pythonw.exe",
+]);
+
+/**
+ * The publisher, when a Windows program is validly signed by one of the publishers above and is not one of the programs
+ * that run anything (by its name here and the name its publisher gave it, so a renamed copy counts too).
+ */
+export function knownPublisher(sig: Signature, path: string): string | undefined {
+  if (sig.kind !== "developer-id" || !sig.who || !KNOWN_PUBLISHERS.has(sig.who)) return;
+  const names = [path.split(/[\\/]/).pop() ?? "", sig.original ?? ""].map((n) => n.toLowerCase().replace(/\.mui$/, ""));
+  if (names.some((n) => RUNS_ANYTHING.has(n))) return;
+  return sig.who;
 }
 
 /** Authenticode on Windows. The path goes in through the environment, so nothing in it is read as PowerShell. */
@@ -245,7 +272,7 @@ async function windowsSignature(path: string): Promise<Signature> {
   if (/\.(cmd|bat|vbs|js)$/i.test(path)) return { kind: "script" };
   try {
     const ps = `${process.env.SystemRoot ?? "C:\\Windows"}\\System32\\WindowsPowerShell\\v1.0\\powershell.exe`;
-    const { out, code } = await exec([ps, "-NoProfile", "-NonInteractive", "-Command", "$s = Get-AuthenticodeSignature -LiteralPath $env:VSWARM_SIGN_PATH; [string]$s.Status + '|' + [string]$s.SignerCertificate.Subject"], {
+    const { out, code } = await exec([ps, "-NoProfile", "-NonInteractive", "-Command", "$s = Get-AuthenticodeSignature -LiteralPath $env:VSWARM_SIGN_PATH; $o = try { (Get-Item -LiteralPath $env:VSWARM_SIGN_PATH).VersionInfo.OriginalFilename } catch { '' }; [string]$s.Status + '|' + [string]$s.SignerCertificate.Subject + '|' + [string]$o"], {
       env: { ...process.env, VSWARM_SIGN_PATH: path }, timeoutMs: 15_000,
     });
     return code === 0 ? authenticode(out, /\.ps1$/i.test(path)) : { kind: "unknown" };

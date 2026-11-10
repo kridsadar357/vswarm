@@ -1,7 +1,7 @@
 // Installing vswarm on a machine: launcher on PATH, shell completions, data folder, a first baseline, and the
 // gate in ~/.ssh/config. Also `doctor` (check the setup), `update` (git pull) and `uninstall`.
 
-import { chmodSync, existsSync, mkdirSync, openSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, openSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { ReadStream } from "node:tty";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -395,7 +395,14 @@ export async function doctor(): Promise<boolean> {
   const norm = (d: string) => (WIN ? d.replace(/[\\/]+$/, "").toLowerCase() : d);
   const onPath = (process.env.PATH ?? "").split(WIN ? ";" : ":").map(norm).includes(norm(paths.bin()));
   if (existsSync(launcherPath()) && onPath) ok(t("cli.doc.onPath"), launcherPath());
-  else if (existsSync(launcherPath())) warn(t("cli.doc.newTerminals"), WIN ? t("cli.doc.openNew") : `export PATH="${paths.bin()}:$PATH"`);
+  else if (existsSync(launcherPath())) {
+    // "New terminals will have it" only when install put it on PATH (Windows installs leave PATH alone unless asked).
+    const added = WIN
+      ? ((await quietRun([(await import("./sec/schedule")).powershell(), "-NoProfile", "-NonInteractive", "-Command", "[Environment]::GetEnvironmentVariable('Path','User')"], 15_000)) ?? "").split(";").map(norm).includes(norm(paths.bin()))
+      : rcFiles().some((r) => (readKept(r.file)?.text ?? "").includes(BLOCK_START));
+    if (added) warn(t("cli.doc.newTerminals"), WIN ? t("cli.doc.openNew") : `export PATH="${paths.bin()}:$PATH"`);
+    else warn(t("cli.doc.notOnPath"), t("cli.doc.notOnPathHow", { launcher: launcherPath() }));
+  }
   else {
     warn(t("cli.doc.noLauncher"), "vswarm install");
     good = false;
@@ -867,6 +874,10 @@ export async function uninstall(args: string[]) {
     rmSync(HOME, { recursive: true, force: true });
     ok("data removed", HOME);
   } else console.log(`  ${c.dim(`· kept ${HOME} (baseline, incidents) · remove it too with --purge`)}`);
+  // Copies of ~/.ssh/config from before each change vswarm made: your history, so said, not deleted.
+  const sshDir = join(homedir(), ".ssh");
+  const copies = existsSync(sshDir) ? readdirSync(sshDir).filter((f) => f.startsWith("config.bak-vswarm-")) : [];
+  if (copies.length) console.log(`  ${c.dim(`· kept ${copies.length} cop${copies.length > 1 ? "ies" : "y"} of ~/.ssh/config from before vswarm changed it (~/.ssh/config.bak-vswarm-*) · delete them when you no longer need them`)}`);
   console.log(`  ${c.dim("· the app folder stays at " + ROOT)}\n`);
 }
 

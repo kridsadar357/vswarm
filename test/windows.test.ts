@@ -304,6 +304,26 @@ describe("windows: rules", () => {
     expect(authenticode("NotSigned|", true)).toEqual({ kind: "script" });
     expect(authenticode("HashMismatch|CN=Contoso", false)).toEqual({ kind: "other", who: "Contoso (HashMismatch)" });
     expect(authenticode("", false)).toEqual({ kind: "unknown" });
+    // The name its publisher gave it rides along, so a renamed copy can be told.
+    expect(authenticode("Valid|CN=Microsoft Corporation, O=Microsoft Corporation|PowerShell.EXE.MUI", false)).toEqual({ kind: "developer-id", who: "Microsoft Corporation", original: "PowerShell.EXE.MUI" });
+  });
+
+  test("a known publisher's installer in temp: said with its signer, not counted; anything that runs anything stays high", async () => {
+    const exe = "C:\\Users\\nok\\AppData\\Local\\Temp\\vs_setup\\BackgroundDownload.exe";
+    const proc = (path: string) => ({ kind: "proc", id: path.toLowerCase(), name: path.split("\\").pop(), path, meta: { pid: 42, where: "runs from a temp folder" } });
+    const scanWith = (...paths: string[]): Scan => ({ version: 1, host: "pc", user: "nok", home: HOME, at: Date.now(), items: paths.map(proc) as any[], texts: {}, gaps: {}, covers: COVERS });
+    const signedAs = (who: string, original?: string) => async () => ({ kind: "developer-id" as const, who, original });
+    const judge = async (s: Scan, sign: Parameters<typeof evaluate>[0]["sign"]) => (await evaluate({ scan: s, malicious: [], secrets: [], sign })).filter((f) => f.rule === "proc-location");
+
+    const ok = await judge(scanWith(exe), signedAs("Microsoft Corporation", "BackgroundDownload.exe"));
+    expect(ok.map((f) => f.severity)).toEqual(["low"]);
+    expect(ok[0].title).toContain("(signed by Microsoft Corporation)");
+    // A copy of a system program, PowerShell renamed, a publisher not on the list, nothing signed: all still high.
+    expect((await judge(scanWith(exe), signedAs("Microsoft Windows")))[0].severity).toBe("high");
+    expect((await judge(scanWith("C:\\Users\\nok\\AppData\\Local\\Temp\\update.exe"), signedAs("Microsoft Corporation", "PowerShell.EXE.MUI")))[0].severity).toBe("high");
+    expect((await judge(scanWith("C:\\Users\\nok\\AppData\\Local\\Temp\\mshta.exe"), signedAs("Microsoft Corporation")))[0].severity).toBe("high");
+    expect((await judge(scanWith(exe), signedAs("Contoso, Ltd.")))[0].severity).toBe("high");
+    expect((await judge(scanWith(exe), async () => ({ kind: "unsigned" })))[0].severity).toBe("high");
   });
 });
 

@@ -4,7 +4,7 @@
 
 import { createHash } from "node:crypto";
 import { redact } from "./ctx";
-import { distance, lookAlike, nameSignals, signature, type Malicious, type Signature } from "./intel";
+import { distance, knownPublisher, lookAlike, nameSignals, signature, type Malicious, type Signature } from "./intel";
 import { argvOf, under } from "./collect/agents";
 import { buildPlace, suspiciousLocation, WIN_PATH } from "./collect/system";
 import { TOOL_CONFIGS } from "./collect/tools";
@@ -260,18 +260,28 @@ export async function evaluate(input: RuleInput): Promise<Finding[]> {
       fix: "Treat this machine as compromised: vswarm respond", item: m.item,
     });
   }
+  // Windows: a program in temp or a hidden folder that a known publisher signed (an installer or updater) is said, not
+  // counted; the signer goes in the finding either way. Asked only for programs placed there, so a check stays fast.
+  const signers = new Map<string, Promise<string | undefined>>();
+  const publisher = (path?: string) => {
+    if (!path || !WIN_PATH.test(path)) return Promise.resolve(undefined);
+    if (!signers.has(path)) signers.set(path, sign(path).then((s) => knownPublisher(s, path)).catch(() => undefined));
+    return signers.get(path)!;
+  };
   for (const i of scan.items) {
     if (i.kind === "proc") {
-      add({ id: `proc:${i.id}`, rule: "proc-location", severity: placeSeverity(String(i.meta?.where ?? "")), title: `Program running from an unusual place: ${i.path}`,
-        detail: [String(i.meta?.where ?? ""), `pid ${i.meta?.pid}`], fix: `Find out what started it (${parentOf(i.meta?.pid)}); if you do not know it, vswarm respond`, item: i });
+      const by = await publisher(i.path);
+      add({ id: `proc:${i.id}`, rule: "proc-location", severity: by ? "low" : placeSeverity(String(i.meta?.where ?? "")), title: `Program running from an unusual place: ${i.path}${by ? ` (signed by ${by})` : ""}`,
+        detail: [String(i.meta?.where ?? ""), `pid ${i.meta?.pid}`, by ? `validly signed by ${by}, as installers and updaters that run from there are` : ""].filter(Boolean), fix: `Find out what started it (${parentOf(i.meta?.pid)}); if you do not know it, vswarm respond`, item: i });
     }
     if (i.kind === "conn") {
       const where = i.meta?.where as string | undefined;
       const fresh = i.path && newBins.has(i.path);
+      const by = where ? await publisher(i.path) : undefined;
       if (where || fresh) {
-        add({ id: `conn:${i.id}`, rule: "conn", severity: where ? placeSeverity(where) : "high",
-          title: `${i.name} is connected to other machines${where ? ` and ${where}` : " and is new since the baseline"}`,
-          detail: [`remotes: ${i.meta?.remotes}`, i.path ?? ""], fix: "If you do not recognise it, disconnect from the network and run vswarm respond", item: i });
+        add({ id: `conn:${i.id}`, rule: "conn", severity: by ? "low" : where ? placeSeverity(where) : "high",
+          title: `${i.name} is connected to other machines${where ? ` and ${where}` : " and is new since the baseline"}${by ? ` (signed by ${by})` : ""}`,
+          detail: [`remotes: ${i.meta?.remotes}`, i.path ?? "", by ? `validly signed by ${by}` : ""].filter(Boolean), fix: "If you do not recognise it, disconnect from the network and run vswarm respond", item: i });
       } else if (i.path && !buildPlace(i.path, home) && (i.meta?.signed === "unsigned" || i.meta?.signed === "adhoc" || i.meta?.loose)) {
         // Implants are rarely signed by a developer; real apps are. Builds of your own and toolchains are left out.
         const how = i.meta?.signed === "unsigned" ? "is not code-signed" : i.meta?.signed === "adhoc" ? "is only ad-hoc signed (by nobody)" : "is a loose program in your home folder that no package manager installed";

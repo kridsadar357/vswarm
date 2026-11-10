@@ -775,6 +775,8 @@
   "cli.doc.data": "ข้อมูล {dir}",
   "cli.doc.onPath": "เรียก vswarm ได้จากทุกที่ (อยู่ใน PATH)",
   "cli.doc.newTerminals": "ติดตั้งแล้ว terminal ที่เปิดใหม่จะเรียกใช้ได้",
+  "cli.doc.notOnPath": "ติดตั้งแล้ว แต่ยังไม่อยู่ใน PATH",
+  "cli.doc.notOnPathHow": "เรียกด้วย path เต็ม {launcher} หรือเพิ่มเข้า PATH: vswarm install --path (แล้วเปิด terminal ใหม่)",
   "cli.doc.openNew": "เปิด terminal ใหม่",
   "cli.doc.noLauncher": "ยังไม่ได้ติดตั้งคำสั่ง vswarm",
   "cli.doc.keyMoved": "กุญแจผนึกถูกย้ายไปเป็นไฟล์โดยไม่ใช่ vswarm ให้ถือว่าเครื่องนี้น่าสงสัย",

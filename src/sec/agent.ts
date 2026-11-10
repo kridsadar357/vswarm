@@ -920,6 +920,8 @@ const unitWord = (s: string) => (/^[A-Za-z0-9_./-]+$/.test(s) ? s : `"${s.replac
 export function agentJobFiles(launcher: string, home = homedir(), platform = process.platform, winUser?: string): Record<string, string> {
   if (platform === "win32") {
     // At your logon, as you, without a time limit, started again a minute after it stops (as KeepAlive and Restart do).
+    // RestartOnFailure covers a failed exit only; a killed process ends with code 0, so the logon trigger also repeats
+    // every minute, and IgnoreNew keeps that from starting a second agent while one runs.
     const a = winAgentAction(launcher);
     const x = (v: string) => xml(v).replace(/"/g, "&quot;");
     // Your SID when known (an Azure AD account's DOMAIN\name may not resolve), else DOMAIN\name.
@@ -928,7 +930,7 @@ export function agentJobFiles(launcher: string, home = homedir(), platform = pro
       [winTaskFile()]: `<?xml version="1.0" encoding="UTF-16"?>
 <Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
   <RegistrationInfo><Description>vswarm agent: ssh keys that sign only while this machine passes</Description></RegistrationInfo>
-  <Triggers><LogonTrigger><Enabled>true</Enabled><UserId>${x(user)}</UserId></LogonTrigger></Triggers>
+  <Triggers><LogonTrigger><Enabled>true</Enabled><UserId>${x(user)}</UserId><Repetition><Interval>PT1M</Interval><StopAtDurationEnd>false</StopAtDurationEnd></Repetition></LogonTrigger></Triggers>
   <Principals><Principal id="Author"><LogonType>InteractiveToken</LogonType><RunLevel>LeastPrivilege</RunLevel></Principal></Principals>
   <Settings>
     <MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>
