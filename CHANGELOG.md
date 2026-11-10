@@ -4,6 +4,24 @@ vswarm is in beta. Every release is a git tag signed by a key in [`trust/allowed
 `vswarm update` takes only those and never goes to a lower version. Full notes for each release are on the
 [releases page](https://github.com/kridsadar357/vswarm/releases).
 
+## 0.1.1
+
+Fixes from the first days of 0.1.0 on real machines, most of them Windows.
+
+- **Fewer false alarms on Windows:** a program in `%TEMP%` or a hidden folder that a well-known publisher validly
+  signed (an installer or updater, such as Visual Studio's `BackgroundDownload.exe`) is listed as LOW with its signer,
+  and no longer blocks. Copies of Windows' own programs and programs that run anything (PowerShell, mshta, rundll32
+  and the like, also when renamed) stay HIGH.
+- **The ssh agent on Windows comes back** within a minute when its process is ended.
+- **`vswarm uninstall` is refused while keys are in the vault**, because ssh could not use them afterwards. To move to
+  a newer vswarm, run the install command over it; nothing needs uninstalling.
+- **`vswarm ui`:** the commands under "Everything else › Done in a terminal" show as rows again, not `[object HTMLDivElement]`.
+- **`vswarm hook`:** only a real write to `~/.vswarm` or `~/.ssh/config` counts as editing them by hand; reading them
+  is no longer refused.
+- **Updates and installs** drop tags the repository removed, so a copy from a 2.x build moves to the newest release.
+- `doctor` says when the launcher is not on PATH and how to add it; `uninstall` says how many copies of
+  `~/.ssh/config` it leaves.
+
 ## 0.1.0 (first public beta)
 
 The first release. vswarm checks a developer's own machine before it touches production, and says what it found in
