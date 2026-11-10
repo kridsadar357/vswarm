@@ -173,6 +173,12 @@ describe("vswarm ui: what leaves the server", () => {
     const d = JSON.parse(text);
     expect(d.status.level).toBe("stop");
     expect(d.cards.find((c: any) => c.rule === "malicious").canAccept).toBe(false);
+    // Each card carries its number in the last check and the one command for it, as the terminal shows them.
+    const launch = d.cards.find((c: any) => c.rule === "launch-new");
+    expect(launch.n).toBe(3);
+    expect(launch.cmd.run).toMatch(/^vswarm (why|fix) 3$/);
+    expect(d.cards.find((c: any) => c.rule === "malicious").cmd.run).toBe("vswarm respond");
+    expect(Array.isArray(d.held)).toBe(true);
   });
 
   test("scrub masks again whatever slipped through", () => {

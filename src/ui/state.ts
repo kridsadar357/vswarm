@@ -9,7 +9,7 @@ import { homedir } from "node:os";
 import { basename, join } from "node:path";
 import { VERSION } from "../home";
 import { lang, saveLang, type Lang } from "../i18n";
-import { AGENT_NAMES, groupOf as termGroup, paramsOf, UI_GROUP } from "../i18n/findings";
+import { actionOf, AGENT_NAMES, groupOf as termGroup, paramsOf, UI_GROUP } from "../i18n/findings";
 import { readJson, readText, redact } from "../sec/ctx";
 import { STATE_RULE } from "../sec/engine";
 import { files, loadAccepted, readAudit, readBaseline, readLast, readLog, lockState, stateKey, type LogEntry } from "../sec/store";
@@ -38,6 +38,10 @@ export interface Card {
   fix?: string;
   p: Record<string, string>;
   canAccept: boolean;
+  /** Its number in the last check (vswarm why / ok / fix <n>). */
+  n: number;
+  /** The one command for it, as the terminal shows it: the fix, a closer look, or marking it as yours. */
+  cmd?: { label: string; run: string };
 }
 
 export interface Event {
@@ -75,6 +79,8 @@ export interface Dash {
     extra: Say[];
   };
   cards: Card[];
+  /** What vswarm's gates do with this state: on Stop the ssh hosts refused and the keys not signing; on Safe the same as open. */
+  held: Say[];
   /** vswarm's notes from the last check (English, technical), shown in a details box. */
   notes: string[];
   timeline: Event[];
@@ -120,8 +126,9 @@ export const groupOf = (f: Pick<Finding, "rule" | "severity">): Group => UI_GROU
 /** What `vswarm accept` takes: never a known-malicious package, vswarm's own files or a team requirement; a critical one neither, from the page. */
 export const acceptable = (f: Finding) => !["malicious", "pkg-malicious", STATE_RULE, "team-require"].includes(f.rule) && f.severity !== "critical";
 
-function cardOf(f: Finding): Card {
-  return { ref: refOf(f.id), group: groupOf(f), rule: f.rule, severity: f.severity, title: f.title, detail: f.detail.filter(Boolean).slice(0, 6), fix: f.fix, p: paramsOf(f), canAccept: acceptable(f) };
+function cardOf(f: Finding, n = 0, fixable = false): Card {
+  const a = n ? actionOf(f, n, fixable) : undefined;
+  return { ref: refOf(f.id), group: groupOf(f), rule: f.rule, severity: f.severity, title: f.title, detail: f.detail.filter(Boolean).slice(0, 6), fix: f.fix, p: paramsOf(f), canAccept: acceptable(f), n, cmd: a && { label: a.label, run: a.cmd } };
 }
 
 // ── the timeline
@@ -183,7 +190,13 @@ export async function dashboard(opt: StateOpt = {}): Promise<Dash> {
   const all = trusted?.findings ?? [];
   const live = all.filter((f) => !accepted[f.id] || !acceptable(f));
   const acceptedSince = all.length - live.length;
-  const cards = live.map(cardOf).sort((a, b) => RANK[b.severity] - RANK[a.severity]);
+  const { fixFor } = await import("../sec/fix");
+  const { selfCommand } = await import("../commands");
+  const self = await selfCommand();
+  const cards = live.map((f) => {
+    const n = all.indexOf(f) + 1;
+    return cardOf(f, n, !!fixFor(f, { n, self: [self.length === 1 ? "vswarm" : self.join(" ")] }).run);
+  }).sort((a, b) => RANK[b.severity] - RANK[a.severity]);
   let verdict: Verdict | undefined = trusted ? (acceptedSince ? verdictOf(live) : trusted.verdict) : undefined;
   if (lock) verdict = "block";
 
@@ -334,6 +347,13 @@ export async function dashboard(opt: StateOpt = {}): Promise<Dash> {
       if (inc?.at) timeline.push({ at: inc.at, tone: "bad", say: { key: "ev.incident", p: { incident: id, n: inc.findings?.length ?? 0 } } });
     }
 
+  const held: Say[] = [];
+  const sshAll = new Set([...ssh, ...agent.agentHosts(sshCfg)]).size;
+  if (level !== "check") {
+    if (sshAll) held.push({ key: level === "stop" ? "held.ssh" : "open.ssh", p: { n: sshAll } });
+    if (vaults.length) held.push({ key: level === "stop" ? "held.keys" : "open.keys", p: { n: vaults.length } });
+  }
+
   timeline.sort((a, b) => b.at - a.at);
   const dash: Dash = {
     v: 1,
@@ -346,6 +366,7 @@ export async function dashboard(opt: StateOpt = {}): Promise<Dash> {
     platform: process.platform,
     status: { level, why, checkedAt: trusted?.at, baselineAt: base.value?.at, items: trusted?.scan.items.length, acceptedSince, extra },
     cards,
+    held,
     notes: opt.notes ?? [],
     timeline: timeline.slice(0, 60),
     tiles,

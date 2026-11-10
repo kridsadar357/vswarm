@@ -29,16 +29,21 @@
 </header>
 <div class="banner" id="banner" hidden></div>
 <main id="main" class="wrap">
-  <section class="hero" id="hero" aria-live="polite">
-    <p class="hero__loading" data-i18n="app.loading">Reading this machine's state…</p>
+  <section class="verdict" id="hero" aria-live="polite">
+    <p class="verdict__loading" data-i18n="app.loading">Reading this machine's state…</p>
   </section>
-  <section class="block" id="findings" aria-labelledby="h-findings"></section>
+  <section id="findings" aria-labelledby="h-findings"></section>
   <div class="cols">
-    <section class="block" id="tiles" aria-labelledby="h-tiles"></section>
-    <section class="block" id="timeline" aria-labelledby="h-timeline"></section>
+    <section id="tiles" aria-labelledby="h-tiles"></section>
+    <section id="timeline" aria-labelledby="h-timeline"></section>
   </div>
-  <section class="block" id="terminal" aria-labelledby="h-terminal"></section>
-  <section class="block" id="about" aria-labelledby="h-about"></section>
+  <details class="more">
+    <summary data-i18n="more.title">Everything else</summary>
+    <div class="more__in">
+      <section id="terminal" aria-labelledby="h-terminal"></section>
+      <section id="about" aria-labelledby="h-about"></section>
+    </div>
+  </details>
 </main>
 <footer class="foot wrap" id="foot"></footer>
 <dialog class="dlg" id="dlg" aria-labelledby="dlg-title">

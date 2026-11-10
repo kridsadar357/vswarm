@@ -262,102 +262,149 @@
   });
   for (const b of document.querySelectorAll("#lang button")) b.addEventListener("click", () => setLang(b.dataset.lang));
 
-  // ── rendering
+  // ── rendering: a checkpoint slip, top to bottom
 
-  function head(id, title, sub) {
-    return el("div", { class: "block__head" }, el("h2", { id, text: title }), sub ? el("p", { text: sub }) : null);
+  function head(id, title, sub, small) {
+    return el("div", { class: `sec__head${small ? " sec__head--small" : ""}` }, el("h2", { id, text: title }), sub ? el("p", { text: sub }) : null);
   }
+  const LOCK = ["M6 11h12v10H6z", "M8.5 11V7.5a3.5 3.5 0 0 1 7 0V11"];
+  const OPEN = ["M6 11h12v10H6z", "M8.5 11V7.5a3.5 3.5 0 0 1 6.8-1.2"];
+  ICONS.lock = LOCK;
+  ICONS.unlock = OPEN;
 
   function renderHero() {
     const s = dash.status;
-    const hero = $("hero");
-    hero.className = `hero hero--${s.level}`;
-    const meta = el("div", { class: "hero__meta" },
-      el("span", {}, icon("clock"), s.checkedAt ? t("status.checked", { at: s.checkedAt }) : t("status.never")),
-      s.items ? el("span", {}, icon("list"), t("status.items", { n: s.items })) : null,
-      s.baselineAt ? el("span", {}, icon("base"), t("status.baseline", { at: s.baselineAt })) : null,
+    const meta = el("p", { class: "verdict__meta" },
+      el("span", { text: s.checkedAt ? t("status.checked", { at: s.checkedAt }) : t("status.never") }),
+      s.items ? el("span", { text: t("status.items", { n: s.items }) }) : null,
+      s.baselineAt ? el("span", { text: t("status.baseline", { at: s.baselineAt }) }) : null,
     );
-    const btn = REPORT ? el("span", { class: "report-note" }, icon("info"), t("app.report", { at: dash.at }))
-      : el("button", { type: "button", class: "btn btn--primary", onclick: runCheck, disabled: busy || stopped }, icon("refresh", busy ? "spin" : ""), busy ? t("btn.checking") : t("btn.check"));
-    hero.replaceChildren(
-      el("div", { class: "hero__badge" }, icon(s.level)),
-      el("div", {},
-        el("p", { class: "hero__kicker", text: t("app.tagline") }),
-        el("h1", { class: "hero__title", text: t(`level.${s.level}`) }),
-        el("p", { class: "hero__why", text: say(s.why) }),
-        s.extra.length ? el("ul", { class: "hero__extra" }, s.extra.map((x) => el("li", { text: say(x) }))) : null,
+    const check = REPORT ? el("p", { class: "report-note", text: t("app.report", { at: dash.at }) })
+      : el("button", { type: "button", class: "btn", onclick: runCheck, disabled: busy || stopped }, icon("refresh", busy ? "spin" : ""), busy ? t("btn.checking") : t("btn.check"));
+    // The way on, in the verdict itself: on Stop the emergency steps, on Check this a pointer to the list below.
+    const next = s.level === "stop" ? el("div", { class: "verdict__next" }, el("p", { text: t("next.stop") }), el("div", {}, cmdBox("vswarm respond")))
+      : s.level === "check" && dash.cards.length ? el("div", { class: "verdict__next" }, el("p", { text: t("next.check") })) : null;
+    const held = dash.held || [];
+    const side = held.length ? el("div", { class: "verdict__side" },
+      el("h2", { text: t(s.level === "stop" ? "held.title" : "open.title") }),
+      el("ul", { class: "held" }, held.map((h) => el("li", {}, icon(s.level === "stop" ? "lock" : "unlock"), el("span", { text: say(h) })))),
+      s.level === "stop" ? el("p", { class: "note", text: t("held.reopen") }) : null,
+    ) : null;
+    $("hero").className = `verdict verdict--${s.level}`;
+    $("hero").replaceChildren(
+      el("div", { class: "tape", "aria-hidden": "true" }),
+      el("div", { class: "verdict__in" },
+        el("div", { class: "verdict__main" },
+          meta,
+          el("h1", { class: "verdict__word", text: t(`level.${s.level}`) }),
+          el("p", { class: "verdict__why", text: say(s.why) }),
+          s.extra.length ? el("ul", { class: "verdict__extra" }, s.extra.map((x) => el("li", { text: say(x) }))) : null,
+          next,
+          el("div", {}, check),
+        ),
+        side,
       ),
-      el("div", { class: "hero__foot" }, meta, btn),
     );
   }
 
-  const SEV_ICON = { critical: "bad", high: "bad", medium: "warn", low: "info", info: "info" };
-  function renderCard(c) {
+  /** The tag and severity line above a finding. */
+  function tags(c) {
+    return el("div", { class: "item__tags" },
+      c.group === "action" ? el("span", { class: "tag tag--urgent", text: t("badge.urgent") }) : el("span", { class: "tag", text: t("badge.yours") }),
+      el("span", { class: "item__sev", text: t(`sev.${c.severity}`) }),
+    );
+  }
+  function techOf(c) {
     const opened = open.has(c.ref);
-    const tech = el("div", { class: "tech", id: `tech-${c.ref}`, hidden: !opened },
-      el("b", { text: c.title }),
-      c.detail.map((d) => el("span", { text: d })),
-      c.fix ? el("span", { text: `→ ${c.fix}` }) : null,
-    );
+    const box = el("div", { class: "tech", id: `tech-${c.ref}`, hidden: !opened, translate: "no" },
+      el("b", { text: c.title }), c.detail.map((d) => el("span", { text: d })), c.fix ? el("span", { text: `→ ${c.fix}` }) : null);
     const toggle = el("button", { type: "button", class: "link", "aria-expanded": String(opened), "aria-controls": `tech-${c.ref}`, text: opened ? t("btn.less") : t("btn.more") });
-    toggle.addEventListener("click", () => {
-      if (open.has(c.ref)) open.delete(c.ref);
-      else open.add(c.ref);
-      render();
-    });
-    const actions = el("div", { class: "card__actions" },
-      !REPORT && c.canAccept && c.group !== "info" ? el("button", { type: "button", class: "btn btn--soft btn--small", onclick: () => markMine(c) }, t("btn.mine")) : null,
-      !c.canAccept && c.group === "action" ? el("span", { class: "card__note", text: t("card.cantMine") }) : null,
-      toggle,
+    toggle.addEventListener("click", () => (open.has(c.ref) ? open.delete(c.ref) : open.add(c.ref), render()));
+    return [box, toggle];
+  }
+  const actLabel = (c) => (c.cmd ? t(c.cmd.label.replace(/^cli\./, "")) : "");
+  const mineBtn = (c) => (!REPORT && c.canAccept ? el("button", { type: "button", class: "btn", onclick: () => markMine(c) }, t("btn.mine")) : null);
+
+  /** A finding that needs action: what, why, how to contain it now and how to respond, its command. */
+  function renderAction(c) {
+    const [tech, toggle] = techOf(c);
+    return el("article", { class: "item item--action" },
+      el("div", { class: "item__n", "aria-hidden": "true", text: String(c.n).padStart(2, "0") }),
+      el("div", { class: "item__body" },
+        tags(c),
+        el("h3", { text: ruleText(c.rule, c.group, "what", c.p) }),
+        el("p", { class: "item__why", text: ruleText(c.rule, c.group, "why", c.p) }),
+        el("div", { class: "plan" },
+          el("div", {}, el("h4", { text: t("plan.contain") }), el("p", { text: ruleText(c.rule, c.group, "todo", c.p) }), c.cmd ? cmdBox(c.cmd.run) : null),
+          el("div", {}, el("h4", { text: t("plan.respond") }), el("p", { text: t("plan.respondText") }), cmdBox("vswarm respond")),
+        ),
+        tech,
+      ),
+      el("div", { class: "item__side" },
+        mineBtn(c),
+        !c.canAccept ? el("p", { class: "item__note", text: t("card.cantMine") }) : null,
+        toggle,
+      ),
     );
-    return el("article", { class: "card" },
-      el("div", { class: "card__top" },
-        el("h4", { text: ruleText(c.rule, c.group, "what", c.p) }),
+  }
+
+  /** A finding worth a look: what and why, "this is mine", and its command. */
+  function renderYours(c) {
+    const [tech, toggle] = techOf(c);
+    return el("article", { class: "item item--yours" },
+      el("div", { class: "item__n", "aria-hidden": "true", text: String(c.n).padStart(2, "0") }),
+      el("div", { class: "item__body" },
+        tags(c),
+        el("h3", { text: ruleText(c.rule, c.group, "what", c.p) }),
+        el("p", { class: "item__why", text: `${ruleText(c.rule, c.group, "why", c.p)} ${ruleText(c.rule, c.group, "todo", c.p)}` }),
+        tech,
       ),
-      el("div", {}, el("span", { class: "chip" }, icon(SEV_ICON[c.severity] || "info"), t(`sev.${c.severity}`))),
-      el("dl", {},
-        el("dt", { text: t("card.why") }), el("dd", { text: ruleText(c.rule, c.group, "why", c.p) }),
-        el("dt", { text: t("card.todo") }), el("dd", { text: ruleText(c.rule, c.group, "todo", c.p) }),
+      el("div", { class: "item__side" },
+        mineBtn(c),
+        c.cmd ? el("span", { class: "label", text: actLabel(c) }) : null,
+        c.cmd ? cmdBox(c.cmd.run) : null,
+        toggle,
       ),
-      tech,
-      actions,
     );
   }
 
   function renderFindings() {
-    const box = $("findings");
-    const parts = [head("h-findings", t("sec.findings"))];
-    const groups = [["action", "stop"], ["yours", "check"], ["info", "info"]];
-    let any = false;
-    for (const [g, ic] of groups) {
-      const cards = dash.cards.filter((c) => c.group === g);
-      if (!cards.length) continue;
-      any = true;
-      const limit = showAll.has(g) ? cards.length : g === "info" ? 3 : 6;
-      parts.push(el("div", { class: `group group--${g}` },
-        el("div", { class: "group__head" }, icon(ic, "group__icon"), el("h3", { text: t(`group.${g}`) }), el("span", { class: "group__count", text: String(cards.length) })),
-        el("p", { class: "group__sub", text: t(`group.${g}.sub`) }),
-        el("div", { class: "cards" }, cards.slice(0, limit).map(renderCard)),
-        cards.length > limit ? el("button", { type: "button", class: "btn btn--ghost btn--small more", onclick: () => (showAll.add(g), render()) }, t("group.more", { n: cards.length - limit })) : null,
-      ));
-    }
-    if (!any) parts.push(el("div", { class: "empty" }, icon(dash.status.checkedAt ? "good" : "info"), dash.status.checkedAt ? t("group.empty") : t("group.emptyNever")));
-    box.replaceChildren(...parts);
+    const action = dash.cards.filter((c) => c.group === "action");
+    const yours = dash.cards.filter((c) => c.group === "yours");
+    const info = dash.cards.filter((c) => c.group === "info");
+    const title = action.length ? t("queue.stop") : t("queue.check");
+    const parts = [head("h-findings", title, action.length + yours.length > 1 ? t("queue.sub") : "")];
+    const limit = showAll.has("yours") ? yours.length : 8;
+    parts.push(...action.map(renderAction), ...yours.slice(0, limit).map(renderYours));
+    if (yours.length > limit) parts.push(el("button", { type: "button", class: "btn btn--quiet", onclick: () => (showAll.add("yours"), render()) }, t("group.more", { n: yours.length - limit })));
+    if (info.length) parts.push(el("details", { class: "fyi" },
+      el("summary", {}, el("span", { class: "item__n", text: `+${info.length}` }), el("span", { text: t("info.more", { n: info.length }) })),
+      el("ul", {}, info.map((c) => el("li", { text: ruleText(c.rule, c.group, "what", c.p) }))),
+    ));
+    if (!action.length && !yours.length && !info.length) parts.push(el("p", { class: "empty", text: dash.status.checkedAt ? t("group.empty") : t("group.emptyNever") }));
+    $("findings").replaceChildren(...parts);
   }
 
+  // What is off or broken first: that is the one to turn on.
+  const TONE_ORDER = { bad: 0, off: 1, warn: 2, info: 3, good: 4 };
   function renderTiles() {
-    const box = $("tiles");
-    const tiles = dash.tiles.map((x) => el("div", { class: `tile tone--${x.tone}` },
-      el("div", { class: "tile__head" },
-        el("span", { class: "tile__icon" }, icon(x.key)),
-        el("span", { class: "tile__title", text: t(`tile.${x.key}.title`) }),
-        el("span", { class: "pill" }, icon(x.tone), t(`tone.${x.tone}`)),
-      ),
-      el("div", { class: "tile__state", text: say(x.say) }),
-      x.lines.length ? el("ul", {}, x.lines.map((l) => el("li", { text: say(l) + (l.p && l.p.confirm ? t("tile.keys.confirm") : "") }))) : null,
-      x.cmd ? cmdBox(x.cmd) : null,
-    ));
-    box.replaceChildren(head("h-tiles", t("sec.tiles")), el("div", { class: "tiles" }, tiles));
+    const tiles = [...dash.tiles].sort((a, b) => TONE_ORDER[a.tone] - TONE_ORDER[b.tone]);
+    const on = dash.tiles.filter((x) => x.tone === "good" || x.tone === "warn" || x.tone === "info").length;
+    const rows = tiles.map((x) => {
+      const bad = x.tone === "off" || x.tone === "bad";
+      return el("li", { class: bad ? "is-off" : "" },
+        el("span", { class: `mark${bad ? "" : x.tone === "warn" ? " mark--warn" : " mark--on"}`, role: "img", "aria-label": t(`tone.${x.tone}`) }),
+        el("span", { class: "shield__name", text: t(`tile.${x.key}.title`) }),
+        el("span", { class: "shield__state", text: say(x.say) }),
+        bad && x.cmd ? cmdBox(x.cmd) : null,
+        x.lines.length ? el("ul", { class: "shield__lines" }, x.lines.map((l) => el("li", { text: say(l) + (l.p && l.p.confirm ? t("tile.keys.confirm") : "") }))) : null,
+      );
+    });
+    $("tiles").replaceChildren(
+      head("h-tiles", t("sec.tiles"), "", true),
+      el("p", { class: "sec__sub", text: `${t("shield.sub", { on, n: dash.tiles.length })}${on < dash.tiles.length ? ` · ${t("shield.first")}` : ""}` }),
+      el("ul", { class: "shield" }, rows),
+    );
   }
 
   function eventText(e) {
@@ -368,16 +415,14 @@
     return t(e.say.key, p);
   }
   function renderTimeline() {
-    const box = $("timeline");
     const all = dash.timeline;
-    const limit = showAll.has("timeline") ? all.length : 10;
-    const list = all.length ? el("ul", { class: "tl" }, all.slice(0, limit).map((e) => el("li", { class: `tone--${e.tone}` },
-      icon(e.tone, "tl__dot"),
+    const limit = showAll.has("timeline") ? all.length : 8;
+    const list = all.length ? el("ol", { class: "tl" }, all.slice(0, limit).map((e) => el("li", { class: `tone--${e.tone}` },
       el("span", { class: "tl__when", text: when(e.at) }),
       el("span", { class: "tl__what", text: eventText(e) }),
-    ))) : el("div", { class: "tl" }, el("p", { class: "tl__empty", text: t("timeline.empty") }));
-    box.replaceChildren(head("h-timeline", t("sec.timeline")), list,
-      all.length > limit ? el("button", { type: "button", class: "btn btn--ghost btn--small more", onclick: () => (showAll.add("timeline"), render()) }, t("group.more", { n: all.length - limit })) : null);
+    ))) : el("p", { class: "tl__empty", text: t("timeline.empty") });
+    $("timeline").replaceChildren(head("h-timeline", t("sec.timeline"), "", true), list,
+      ...[all.length > limit ? el("button", { type: "button", class: "link", onclick: () => (showAll.add("timeline"), render()) }, t("group.more", { n: all.length - limit })) : null].filter(Boolean));
   }
 
   const TERMINAL = [
@@ -387,19 +432,13 @@
     ["term.accept", "vswarm accept --list"], ["term.uninstall", "vswarm uninstall"],
   ];
   function renderTerminal() {
-    $("terminal").replaceChildren(head("h-terminal", t("sec.terminal")), el("div", { class: "term" },
-      el("p", { text: t("term.intro") }),
-      TERMINAL.map(([k, cmd]) => el("div", { class: "term__row" }, el("span", { text: t(k) }), cmdBox(cmd))),
-    ));
+    $("terminal").replaceChildren(el("h3", { id: "h-terminal", text: t("sec.terminal") }), el("p", { class: "sec__sub", text: t("term.intro") }),
+      TERMINAL.map(([k, cmd]) => el("div", { class: "term__row" }, el("span", { text: t(k) }), cmdBox(cmd))));
   }
 
   function renderAbout() {
-    const lv = (l, cls) => el("div", { class: `lv tone--${cls}` }, icon(l), t(`level.${l}`));
-    $("about").replaceChildren(head("h-about", t("sec.about")), el("div", { class: "about" },
-      el("p", { text: t("about.p1") }), el("p", { text: t("about.p2") }),
-      el("div", { class: "levels" }, lv("safe", "good"), lv("check", "warn"), lv("stop", "bad")),
-      el("p", { text: t("about.levels") }), el("p", { text: t("about.p3") }),
-    ));
+    $("about").replaceChildren(el("h3", { id: "h-about", text: t("sec.about") }), el("div", { class: "about" },
+      el("p", { text: t("about.p1") }), el("p", { text: t("about.p2") }), el("p", { text: t("about.levels") }), el("p", { text: t("about.p3") })));
   }
 
   function render() {

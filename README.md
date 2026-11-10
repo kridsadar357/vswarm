@@ -196,7 +196,7 @@ registries. Nothing is sent anywhere.
 matters and what to do, and what is switched on. Thai or English, light or dark. `vswarm report --html` gives the
 same view as a file to send, with credentials masked.
 
-![vswarm ui: Check this, four cards, protection tiles and recent events](docs/img/ui-en-light.png)
+![vswarm ui: Stop, what vswarm is holding, what to do in order, protection and recent events](docs/img/ui-en-light.png)
 
 ## How it compares
 
