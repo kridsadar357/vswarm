@@ -12,11 +12,17 @@
 // Colour marks the state and the action only. NO_COLOR turns it off and nothing is lost: the dot, the words and the
 // tag carry the meaning. 24-bit colour where the terminal says it has it (COLORTERM), the 16 basic colours otherwise.
 // Lines wrap at the terminal's width; output to a file or a pipe is not wrapped.
+//
+// A check's summary reads top to bottom like a checkpoint slip: the verdict beside the worm (src/sec/mascot.ts) with
+// what vswarm's gates are holding, orange tape on Stop, then "Needs action" (each with an Urgent tag, why, and one
+// command), "Worth a look" one line each with its command at the right, and the next step last, where the eye ends.
+// vswarm's technical titles and details wait for --details.
 
 import type { Check } from "./engine";
 import { lang, t, tMaybe, type Key, type Lang, type Vars } from "../i18n";
 import { actionOf, groupOf, plainOf, type Group } from "../i18n/findings";
 import type { Finding, Verdict } from "./types";
+import { MASCOT_COLS, mascot, mascotMode } from "./mascot";
 
 /** 0: no colour; 16: the basic ANSI colours; 24: 24-bit colour. */
 export type Depth = 0 | 16 | 24;
@@ -55,7 +61,8 @@ export const c = palette(() => depth);
 
 // Names, paths and descriptions found on the machine are printed as they are. A control character in one could move
 // the cursor or erase the line that reports it, so only vswarm's own colour codes get through.
-const OWN_SGR_OR_CONTROL = /\x1b\[(?:0|1|2|3[0-7]|38;2;\d{1,3};\d{1,3};\d{1,3})m|[\x00-\x08\x0b-\x1f\x7f-\x9f]/g;
+// Colour codes only (foreground and background, basic, 256 or 24-bit), never a cursor move or an erase.
+const OWN_SGR_OR_CONTROL = /\x1b\[(?:0|1|2|[34][0-7]|[34]8;2;\d{1,3};\d{1,3};\d{1,3}(?:;48;2;\d{1,3};\d{1,3};\d{1,3})?|[34]8;5;\d{1,3}(?:;48;5;\d{1,3})?)m|[\x00-\x08\x0b-\x1f\x7f-\x9f]/g;
 
 export function clean(s: string): string {
   return s.replace(OWN_SGR_OR_CONTROL, (m) => (m.length > 1 ? m : ""));
@@ -231,16 +238,94 @@ export function checkedAt(at: number, now = Date.now()): string {
   return t("cli.when.at", { at: dateOf(at) });
 }
 
-/** The headline: the state in plain words and what it comes to, then when it was checked. */
-export function headline(v: Verdict, sentence: string, sub?: string) {
+/**
+ * The headline: the state in plain words and what it comes to, then when it was checked, and what vswarm's gates are
+ * doing about it (`held`). Beside the worm where the terminal can draw it (src/sec/mascot.ts).
+ */
+export function headline(v: Verdict, sentence: string, sub?: string, held?: string) {
+  const w = width();
+  const art = mascot(v, mascotMode(depth, w));
+  if (art.length) {
+    const space = w - 2 - MASCOT_COLS - 3;
+    const text = [
+      `${DOT[v]("●")} ${DOT[v](c.bold(verdictWord(v)))}  ${c.dim(TAG[v])}`,
+      ...wrap(sentence, space).map(c.bold),
+      ...(sub ? wrap(sub, space).map(c.dim) : []),
+      ...(held ? ["", ...wrap(held, space)] : []),
+    ];
+    const top = Math.max(0, Math.floor((art.length - text.length) / 2));
+    for (let i = 0; i < Math.max(art.length, top + text.length); i++) {
+      const a = art[i] ?? "";
+      line(`  ${a}${" ".repeat(MASCOT_COLS - cells(a))}   ${text[i - top] ?? ""}`.trimEnd());
+    }
+    return;
+  }
   const mark = verdictMark(v);
   const head = `${DOT[v]("●")} ${DOT[v](c.bold(verdictWord(v)))}`;
-  const w = width();
-  const room = w ? w - cells(mark) - 3 : 0;
-  const lines = wrap(sentence, room);
+  const lines = wrap(sentence, w ? w - cells(mark) - 3 : 0);
   line(`${head}  ${lines[0]}  ${c.dim(TAG[v])}`);
   for (const l of lines.slice(1)) line(`${" ".repeat(cells(head) + 2)}${l}`);
   if (sub) para(sub, 2, c.dim, "  ");
+  if (held) para(held, 2, (s) => s, "  ");
+}
+
+// ── the parts of a check's summary
+
+/** Columns a summary uses: the terminal's, up to 100 (wider reads as a stretched line); 0 into a pipe or file. */
+const room = () => Math.min(width(), 100);
+
+/** A section's heading with a rule to the edge: "Needs action ──────". */
+function section(g: Group) {
+  const label = t(GROUP_LABEL[g]);
+  const w = room() || 60;
+  line(`  ${GROUP_PAINT[g](c.bold(label))} ${c.dim("─".repeat(Math.max(4, w - cells(label) - 3)))}`);
+}
+
+/** Orange and grey tape across the screen when a check says stop (colour only: it says nothing the words don't). */
+function tape() {
+  const w = room();
+  if (!w || depth === 0) return;
+  line("");
+  line(`  ${Array.from({ length: Math.floor((w - 2) / 3) }, (_, i) => (i % 2 ? (depth === 24 ? "\x1b[38;2;70;76;86m▀▀▀\x1b[0m" : c.dim("▀▀▀")) : c.amber("▀▀▀"))).join("")}`);
+}
+
+/** A white-on-red tag, or [Urgent] without colour. */
+function badge(s: string): string {
+  if (depth === 0) return `[${s}]`;
+  const bg = depth === 24 ? "\x1b[48;2;217;72;15m\x1b[38;2;255;255;255m" : "\x1b[41m\x1b[37m";
+  return `${bg}\x1b[1m ${s} \x1b[0m`;
+}
+
+/** A finding that needs action: number and tag, the plain title, why it matters, and the one command. */
+function urgent(f: Finding, n: number | undefined, fixable: boolean) {
+  const p = plainOf(f);
+  const first = `  ${c.red(c.bold(n === undefined ? " ·" : String(n).padStart(2)))}  ${badge(t("cli.badge.urgent"))}  `;
+  const indent = cells(first);
+  para(p.title, indent, c.bold, first);
+  para(p.why, indent, c.dim);
+  const a = actionOf(f, n, fixable);
+  if (a) line(`${" ".repeat(indent)}${t(a.label).replace(/[:：]\s*$/, "")} ${c.cyan("▸")} ${c.cyan(c.bold(a.cmd))}`);
+  else if (f.fix) para(f.fix, indent + 2, (s) => s, `${" ".repeat(indent)}${c.cyan("▸")} `);
+}
+
+/** A finding worth a look, on one line: number, plain title, dots, and its command at the right. */
+function oneLine(f: Finding, n: number | undefined, fixable: boolean, why: boolean) {
+  const p = plainOf(f);
+  const g = groupOf(f);
+  const left = `  ${GROUP_PAINT[g](c.bold(n === undefined ? " ·" : String(n).padStart(2)))}  `;
+  const indent = cells(left);
+  const cmd = actionOf(f, n, fixable)?.cmd;
+  const w = room();
+  const right = cmd ? ` ${c.cyan(c.bold(cmd))}` : "";
+  const dots = w - indent - cells(p.title) - cells(right) - 1;
+  if (!w) line(`${left}${p.title}${cmd ? `  · ${cmd}` : ""}`);
+  else if (dots >= 3 && cmd) line(`${left}${p.title} ${c.dim("·".repeat(dots))}${right}`);
+  else {
+    para(p.title, indent, (s) => s, left);
+    if (cmd) line(`${" ".repeat(indent)}${c.cyan("▸")} ${c.cyan(c.bold(cmd))}`);
+  }
+  if (why) para(p.why, indent, c.dim);
+  if (!cmd && f.fix) para(f.fix, indent + 2, c.dim, `${" ".repeat(indent)}${c.cyan("▸")} `);
 }
 
 /** How the check comes out, in one sentence. */
@@ -257,18 +342,33 @@ export function notesOut(said: Say[]) {
   for (const s of said) para(say(s), 4, c.dim, `  ${c.dim("·")} `);
 }
 
-export function summary(r: Check, opt: { all?: boolean; title?: string; policy?: "allow" | "refuse"; numbered?: Map<string, number>; details?: boolean; fixable?: (f: Finding) => boolean } = {}) {
+export function summary(r: Check, opt: { all?: boolean; title?: string; policy?: "allow" | "refuse"; numbered?: Map<string, number>; details?: boolean; fixable?: (f: Finding) => boolean; held?: string[] } = {}) {
   const shown = opt.all ? r.findings : r.findings.filter((f) => f.severity !== "info" && f.severity !== "low");
   const hidden = r.findings.length - shown.length;
   const nums = opt.numbered ?? numbers(r.findings);
   const base = r.baseline ? t("cli.sum.baseline", { at: dateOf(r.baseline.at) }) : t("cli.sum.noBaseline");
-  headline(r.verdict, sentenceOf(r), `${checkedAt(Date.now())} · ${base}`);
+  const mark = r.verdict === "block" ? c.amber : c.green;
+  const held = opt.held?.length ? `${r.verdict === "block" ? `${c.dim(t("cli.held.title"))}  ` : ""}${opt.held.map((h) => `${mark("■")} ${h}`).join("   ")}` : undefined;
+  headline(r.verdict, sentenceOf(r), `${checkedAt(Date.now())} · ${base}`, held);
   if (r.lock) para(t("cli.sum.lock", { incident: r.lock.incident, why: r.lock.reason }), 2, c.red, "  ");
+  if (r.verdict === "block" && shown.length) tape();
   for (const g of ["action", "look", "fyi"] as Group[]) {
     const xs = shown.filter((f) => groupOf(f) === g);
     if (!xs.length) continue;
-    line(`\n${groupHeading(g)}`);
-    for (const f of xs) card(f, nums.get(f.id), { details: opt.details, fixable: opt.fixable?.(f) });
+    line("");
+    // --details: every finding as a full card, its technical title and details under it.
+    if (opt.details) {
+      line(groupHeading(g));
+      for (const f of xs) card(f, nums.get(f.id), { details: true, fixable: opt.fixable?.(f) });
+      continue;
+    }
+    section(g);
+    line("");
+    for (const [i, f] of xs.entries()) {
+      const fixable = !!opt.fixable?.(f);
+      if (g === "action") (i && line(""), urgent(f, nums.get(f.id), fixable));
+      else oneLine(f, nums.get(f.id), fixable, shown.length <= 3);
+    }
   }
   line("");
   if (hidden) para(t("cli.sum.hidden", { n: hidden }), 4, c.dim, "  ");
@@ -276,6 +376,12 @@ export function summary(r: Check, opt: { all?: boolean; title?: string; policy?:
   notesOut(r.said ?? r.notes.map((n) => ({ key: n })));
   // The way on, last, where the eye ends up.
   const next = r.verdict === "block" ? t("cli.sum.next.block") : r.verdict === "warn" ? t(opt.policy === "refuse" ? "cli.sum.next.warnRefused" : "cli.sum.next.warn") : "";
-  if (next) para(next, 2, r.verdict === "block" ? c.red : c.amber, "  ");
+  if (next) {
+    const paint = r.verdict === "block" ? c.red : c.amber;
+    line("");
+    line(`  ${paint("┃")} ${paint(c.bold(t("cli.sum.nextTitle")))}`);
+    for (const l of wrap(next, room() ? room() - 4 : 0)) line(`  ${paint("┃")} ${r.verdict === "block" ? c.bold(l) : l}`);
+    line("");
+  }
   para(t("cli.sum.foot", { items: r.scan.items.length, ms: r.ms, details: opt.details ? "" : t("cli.sum.footDetails") }), 2, c.dim, "  ");
 }

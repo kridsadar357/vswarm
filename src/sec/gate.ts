@@ -40,8 +40,9 @@ export async function verdictNow(opt: { fresh?: boolean; quiet?: boolean; offlin
       // said by the caller
     } else if (!opt.quiet || verdict === "block") {
       // The same card as vswarm scan: `vswarm fix n` where vswarm has a fix.
-      const canFix = await (await import("../commands")).fixable();
-      summary(r, { title: "preflight", policy: policy.warn, fixable: (f) => canFix(f, r.findings.indexOf(f) + 1) });
+      const { fixable, heldLines } = await import("../commands");
+      const canFix = await fixable();
+      summary(r, { title: "preflight", policy: policy.warn, fixable: (f) => canFix(f, r.findings.indexOf(f) + 1), held: await heldLines(r.verdict) });
     }
     else if (verdict === "warn") warned(r.findings.filter((f) => RANK[f.severity] >= RANK.medium).length);
     // Said even when quiet: a package installed since the last full check went unchecked.

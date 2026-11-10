@@ -18,7 +18,7 @@ if (!chrome) throw new Error("needs Chrome or Chromium");
 const BASIC = ["#3b4252", "#ef6b6b", "#45c07a", "#e3a33a", "#4fb3d1", "#b48cff", "#4fd8e8", "#d6e2ea"];
 const esc = (t: string) => t.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 
-/** SGR colours and bold/dim to spans; every other escape sequence is dropped. */
+/** SGR colours (foreground and background) and bold/dim to spans; every other escape sequence is dropped. */
 function toHtml(ansi: string): { html: string; lines: string[] } {
   const lines = ansi.replace(/\r\n/g, "\n").split("\n").map((l) => {
     // A line redrawn in place (progress bars): keep what was drawn last.
@@ -27,14 +27,14 @@ function toHtml(ansi: string): { html: string; lines: string[] } {
   });
   while (lines.length && !lines.at(-1)!.replace(/\x1b\[[0-9;?]*[A-Za-z]/g, "").trim()) lines.pop();
   while (lines.length && !lines[0].replace(/\x1b\[[0-9;?]*[A-Za-z]/g, "").trim()) lines.shift();
-  let fg: string | undefined, bold = false, dim = false;
+  let fg: string | undefined, bg: string | undefined, bold = false, dim = false;
   const html = lines.map((l) => {
     let o = "";
     let open = false;
     const flush = () => {
       if (open) o += "</span>";
       open = false;
-      const st = [fg ? `color:${fg}` : "", bold ? "font-weight:700" : "", dim ? "opacity:.62" : ""].filter(Boolean).join(";");
+      const st = [fg ? `color:${fg}` : "", bg ? `background:${bg}` : "", bold ? "font-weight:700" : "", dim ? "opacity:.62" : ""].filter(Boolean).join(";");
       if (st) (o += `<span style="${st}">`), (open = true);
     };
     for (const m of l.split(/(\x1b\[[0-9;?]*[A-Za-z])/)) {
@@ -43,20 +43,32 @@ function toHtml(ansi: string): { html: string; lines: string[] } {
         const codes = (sgr[1] || "0").split(";").map(Number);
         for (let i = 0; i < codes.length; i++) {
           const k = codes[i];
-          if (k === 0) (fg = undefined), (bold = false), (dim = false);
+          if (k === 0) (fg = bg = undefined), (bold = false), (dim = false);
           else if (k === 1) bold = true;
           else if (k === 2) dim = true;
           else if (k === 22) (bold = false), (dim = false);
           else if (k === 39) fg = undefined;
           else if (k >= 30 && k <= 37) fg = BASIC[k - 30];
           else if (k >= 90 && k <= 97) fg = BASIC[k - 90];
-          else if (k === 38 && codes[i + 1] === 2) (fg = `rgb(${codes[i + 2]},${codes[i + 3]},${codes[i + 4]})`), (i += 4);
+          else if (k === 49) bg = undefined;
+          else if (k >= 40 && k <= 47) bg = BASIC[k - 40];
+          else if ((k === 38 || k === 48) && codes[i + 1] === 2) {
+            const rgb = `rgb(${codes[i + 2]},${codes[i + 3]},${codes[i + 4]})`;
+            if (k === 38) fg = rgb;
+            else bg = rgb;
+            i += 4;
+          }
         }
         flush();
         continue;
       }
       if (m.startsWith("\x1b")) continue;
-      o += esc(m);
+      // Half blocks (the worm) as cells of exactly one line's height, so the pixels meet with no gap between lines.
+      o += m.split(/([▀▄])/).map((x) => {
+        if (x !== "▀" && x !== "▄") return esc(x);
+        const [top, bottom] = x === "▀" ? [fg, bg] : [bg, fg];
+        return `<i class="px" style="background:linear-gradient(${top ?? "transparent"} 50%,${bottom ?? "transparent"} 50%)"></i>`;
+      }).join("");
     }
     if (open) o += "</span>";
     return o;
@@ -79,6 +91,7 @@ html,body{margin:0;background:#0b1015}
 .d{width:12px;height:12px;border-radius:50%}.t{flex:1;text-align:center;color:#7f93a3;font:12px -apple-system,system-ui,sans-serif;margin-right:52px}
 pre{margin:0;padding:14px 20px;font:13.5px/${LINE}px Menlo,"DejaVu Sans Mono",monospace;color:#d6e2ea;white-space:pre-wrap;word-break:break-all}
 .p{color:#45c07a}
+.px{display:inline-block;width:1ch;height:${LINE}px;vertical-align:top}
 </style><div class="w"><div class="bar"><span class="d" style="background:#ff5f57"></span><span class="d" style="background:#febc2e"></span><span class="d" style="background:#28c840"></span><span class="t">dev@laptop — ${esc(cmd.slice(0, 80))}</span></div><pre><span class="p">$</span> ${esc(cmd)}\n${html}</pre></div>`;
   const file = join(tmp, `${name}.html`);
   writeFileSync(file, page);

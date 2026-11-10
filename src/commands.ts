@@ -10,7 +10,7 @@ import { check, STATE_RULE, type Check } from "./sec/engine";
 import { c, card, checkedAt, groupHeading, headline, line, notesOut, numbers, para, sentenceOf, summary, verdictMark } from "./sec/print";
 import { forBaseline } from "./sec/scan";
 import { files, loadAccepted, loadLast, saveAccepted, saveBaseline } from "./sec/store";
-import { RANK, type Finding } from "./sec/types";
+import { RANK, type Finding, type Verdict } from "./sec/types";
 
 /** How to start this vswarm again: the launcher once installed, this checkout otherwise. */
 export async function selfCommand(): Promise<string[]> {
@@ -23,6 +23,25 @@ export async function fixable(): Promise<(f: Finding, n: number) => boolean> {
   const { fixFor } = await import("./sec/fix");
   const self = await selfCommand();
   return (f, n) => !!fixFor(f, { n, self }).run;
+}
+
+/**
+ * What vswarm's gates do with this verdict, for the headline: on Stop, the ssh hosts it refuses and the production
+ * keys that will not sign; on Safe, the same as open. Nothing on "check this" (that depends on each key's policy) or
+ * when there are no gates.
+ */
+export async function heldLines(v: Verdict): Promise<string[]> {
+  if (v === "warn") return [];
+  const { agentHosts, gatedHosts, listVaults } = await import("./sec/agent");
+  const { readText } = await import("./sec/ctx");
+  const { homedir } = await import("node:os");
+  const cfg = readText(join(homedir(), ".ssh", "config")) ?? "";
+  const hosts = new Set([...gatedHosts(cfg), ...agentHosts(cfg)]).size;
+  const keys = listVaults().length;
+  const out: string[] = [];
+  if (hosts) out.push(t(v === "block" ? "cli.held.ssh" : "cli.open.ssh", { n: hosts }));
+  if (keys) out.push(t(v === "block" ? "cli.held.keys" : "cli.open.keys", { n: keys }));
+  return out;
 }
 
 /** The HIGH and CRIT findings a baseline would make normal, as `vswarm baseline` lists them when it refuses. */

@@ -4,7 +4,7 @@
 #   /src  the repository (read-only)   /out  where <name>.cmd and <name>.ansi are written
 # Every name, host, key and token below is made up for the demo.
 set -u
-export FORCE_COLOR=1 COLUMNS=110
+export FORCE_COLOR=3 COLUMNS=110
 OUT=/out
 mkdir -p "$OUT"
 

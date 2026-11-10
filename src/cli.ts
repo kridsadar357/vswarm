@@ -13,7 +13,7 @@ import { selftest } from "./sec/selftest";
 import { clearLock, files, loadAccepted, loadBaseline, loadLast, lockState, readLog, saveAccepted } from "./sec/store";
 import { RANK, type Finding } from "./sec/types";
 import { ask, banner, COMMANDS, completion, doctor, gate, guard, install, trust, uninstall, update, yes } from "./setup";
-import { baselineCommand, fixable, okCommand, secretsCommand, selfCommand, whyCommand } from "./commands";
+import { baselineCommand, fixable, heldLines, okCommand, secretsCommand, selfCommand, whyCommand } from "./commands";
 import { t, useWindowsUtf8, type Key } from "./i18n";
 import { pkgCheckCommand, pkgCommand } from "./sec/pkg";
 import { shot } from "./shot";
@@ -215,7 +215,7 @@ async function main() {
       if (json) console.log(JSON.stringify({ verdict: r.verdict, findings: forJson(r.findings), notes: r.notes, items: r.scan.items.length, ms: r.ms }, null, 2));
       else {
         const canFix = await fixable();
-        summary(r, { all, details, title: cmd === "check" ? "scan" : cmd, numbered, policy: (await readPolicy()).warn, fixable: (f) => canFix(f, numbered.get(f.id)!) });
+        summary(r, { all, details, title: cmd === "check" ? "scan" : cmd, numbered, policy: (await readPolicy()).warn, fixable: (f) => canFix(f, numbered.get(f.id)!), held: await heldLines(r.verdict) });
       }
       process.exitCode = r.verdict === "block" ? 3 : 0;
       return;
