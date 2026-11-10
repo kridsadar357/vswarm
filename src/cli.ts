@@ -82,7 +82,7 @@ export function reportsTo(cmd: string, args: string[]): boolean {
   if (cmd === "pkg") return args[0] === "check";
   if (cmd === "accept" || cmd === "ok" || cmd === "try") return args.includes("--list");
   if (["agent", "watch", "team", "ca"].includes(cmd)) return args[0] === undefined || ["status", "log"].includes(args[0]);
-  if (cmd === "canary") return args[0] === undefined || args[0] === "list";
+  if (cmd === "canary" || cmd === "feed") return args[0] === undefined || args[0] === "list";
   if (cmd === "lang") return args[0] === undefined;
   return false;
 }
@@ -153,6 +153,8 @@ export const HELP: [Key, [string, Key][]][] = [
     ["vswarm canary plant aws|dns|env · list", "cli.help.canary"],
     ["vswarm report --json [--sign key] [--out dir]", "cli.help.reportJson"],
     ["vswarm report --html [--out file]", "cli.help.reportHtml"],
+    ["vswarm feed add <https url> [--token-env VAR]", "cli.help.feed"],
+    ["vswarm feed update · list · remove <name>", "cli.help.feedUpdate"],
     ["vswarm team join <git url> [--fingerprint fp]", "cli.help.teamJoin"],
     ["vswarm team sync · status · leave", "cli.help.teamSync"],
     ["vswarm selftest", "cli.help.selftest"],
@@ -462,6 +464,14 @@ export async function main() {
     case "guard":
       noMoreOptions(cmd, args, ["--ignore-scripts", "--sandbox", "--strict"]);
       return guard(args);
+
+    case "feed": {
+      const { feedCommand } = await import("./sec/feed");
+      const action = args.shift() ?? "list";
+      const opt = { fingerprint: flag(args, "--fingerprint"), tokenEnv: flag(args, "--token-env"), key: flag(args, "--key"), yes: has(args, "--yes", "-y"), ask: yes };
+      noMoreOptions(cmd, args, ["--all"]);
+      return feedCommand(action, args, opt);
+    }
 
     case "team": {
       const { teamCommand } = await import("./sec/team");

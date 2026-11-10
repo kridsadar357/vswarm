@@ -75,6 +75,11 @@ export async function check(ctx: Ctx, opt: { offline?: boolean; osvNewOnly?: boo
   const pinned = await loadPins();
   const drift = mcpDrift(scanned.items, pinned.pins);
   all.push(...drift.findings);
+  // Lists of dangerous things this machine follows (vswarm feed), compared here; nothing is fetched during a check.
+  const { expired, feedFindings, keptLists } = await import("./feed");
+  const feeds = await keptLists();
+  all.push(...feedFindings(scanned.items, feeds.lists));
+  feeds.problems.forEach((p, i) => state(`feed-${i}`, "medium", `a vswarm feed is not used: ${p}`, [p], "Fetch it again: vswarm feed update (or vswarm feed remove <name>)"));
   if (pinned.untrusted && !pinned.nokey)
     state("mcp-pins", "medium", "vswarm's record of MCP tool definitions was changed outside vswarm; it is ignored", [`mcp-tools.json ${pinned.untrusted}`],
       "A changed record could hide a server that changed its tools. Inspect them again: vswarm agents --inspect");
@@ -113,6 +118,8 @@ export async function check(ctx: Ctx, opt: { offline?: boolean; osvNewOnly?: boo
     note(t("cli.note.neverInspected", { n: names.length, list }, "en"), { key: "cli.note.neverInspected.human", vars: { n: names.length, list } });
   }
   if (osv.error) note(osv.error, { key: "cli.note.osv", vars: { why: osv.error } });
+  const oldFeeds = expired(feeds.lists);
+  if (oldFeeds.length) note(t("cli.note.feedOld", { list: oldFeeds.join(", ") }, "en"), { key: "cli.note.feedOld", vars: { list: oldFeeds.join(", ") } });
   if (opt.offline) note(t("cli.note.offline", {}, "en"), { key: "cli.note.offline" });
   // Places skipped for the same reason are listed together; for people, with the way to include them where there is one.
   const byWhy = new Map<string, string[]>();

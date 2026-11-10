@@ -1,0 +1,13 @@
+{
+  "vswarm-feed": 1,
+  "name": "vswarm sample",
+  "serial": 1,
+  "expires": "2027-06-01",
+  "entries": [
+    { "id": "S-0001", "kind": "npm", "name": "event-stream", "versions": ["3.3.6"], "title": "pulled in flatmap-stream, which stole wallet keys (2018)" },
+    { "id": "S-0002", "kind": "npm", "name": "flatmap-stream", "title": "stole cryptocurrency wallet keys (2018)" },
+    { "id": "S-0003", "kind": "npm", "name": "ua-parser-js", "versions": ["0.7.29", "0.8.0", "1.0.0"], "title": "hijacked releases that installed a password stealer and a miner (2021)" },
+    { "id": "S-0004", "kind": "npm", "name": "coa", "versions": ["2.0.3", "2.0.4", "2.1.1", "2.1.3", "3.0.1", "3.1.3"], "title": "hijacked releases that installed a password stealer (2021)" },
+    { "id": "S-0005", "kind": "npm", "name": "rc", "versions": ["1.2.9", "1.3.9", "2.3.9"], "title": "hijacked releases that installed a password stealer (2021)" }
+  ]
+}

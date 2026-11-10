@@ -268,6 +268,32 @@ vswarm ui --no-open    # แค่พิมพ์ลิงก์ออกมา 
 `vswarm report --html [--out ไฟล์]` เขียนหน้าเดียวกันนี้เป็นไฟล์ HTML ไฟล์เดียวไว้ส่งให้ทีม ตรวจเครื่องใหม่ก่อนเขียน ไม่มี server
 ไม่มีปุ่ม รหัสผ่านและกุญแจถูกปิดไว้ โฟลเดอร์ home แสดงเป็น `~` และไม่มีชื่อผู้ใช้
 
+### รายการของอันตราย: vswarm feed
+
+นอกจากแหล่งสาธารณะที่ vswarm ใช้อยู่แล้ว (แพ็กเกจอันตรายจาก OSV และชื่อที่จงใจให้คล้ายของจริง) vswarm ยังติดตามรายการที่มีคนคอย
+อัปเดตให้ได้ด้วย ได้แก่ แพ็กเกจและเวอร์ชัน, MCP server, extension ของ editor และเบราว์เซอร์ และ IP ของผู้โจมตี พร้อมเหตุผลสั้นๆ
+
+```sh
+vswarm feed add https://feeds.example.com/vswarm/pro --token-env VSWARM_FEED_TOKEN
+vswarm feed update     # ดึงรายการใหม่
+vswarm feed list       # ที่ติดตามอยู่ กุญแจที่เซ็น และวันที่
+vswarm feed remove "Example Pro"
+```
+
+- **เทียบในเครื่องนี้:** vswarm ดาวน์โหลดรายการทั้งก้อนมาเทียบตอน `scan`, `preflight` และ watch ไม่ส่งข้อมูลของเครื่องออกไป
+  มีแค่คำขอดาวน์โหลดไฟล์ และตอนตรวจจะไม่ดึงอะไรจากเน็ต ต้องสั่ง `vswarm feed update` เอง
+- **มีลายเซ็น จำกุญแจไว้ และไม่ย้อนเวอร์ชัน:** feed คือโฟลเดอร์ที่มี `vswarm-feed.json`, ไฟล์ `.sig` (`ssh-keygen -Y sign -n
+  vswarm-feed`) และ `allowed_signers` ตอน `feed add` จะแสดงกุญแจที่เซ็นให้ดู และจำไว้เมื่อคุณยืนยัน หรือเมื่อตรงกับ `--fingerprint`
+  หลังจากนั้นจะรับรายการใหม่ก็ต่อเมื่อเซ็นด้วยกุญแจที่จำไว้ รายชื่อคนเซ็นไม่เปลี่ยน และเลข serial ไม่ลดลง
+- **token อยู่ในตัวแปร:** สำหรับ feed ที่เสียเงิน `--token-env` คือชื่อตัวแปรที่เก็บ token ไว้ vswarm จำแค่ชื่อตัวแปร ไม่เก็บ token
+  และส่ง token ไปที่ address ของ feed เท่านั้น
+- **จำกัดความเสียหายไว้:** feed เพิ่มได้แค่รายการที่ตรวจเจอ ระดับไม่เกิน HIGH และแต่ละรายการกดยอมรับว่าเป็นของคุณได้เหมือนรายการอื่น
+  feed สั่งรันอะไร ยอมรับอะไร หรือปิดอะไรไม่ได้ ถ้ากุญแจของ feed ถูกขโมย ผลเสียที่หนักที่สุดคือเตือนผิด รายการที่ถูกแก้ด้วยมือในเครื่อง
+  จะไม่ถูกใช้ และการตรวจจะบอกไว้ ส่วนรายการที่หมดอายุยังใช้อยู่ แต่การตรวจจะบอกว่าเก่าแล้ว
+
+ถ้าจะทำ feed เอง: เขียน `vswarm-feed.json` (ดูตัวอย่างที่ [feeds/sample](../feeds/sample/vswarm-feed.json)) เซ็นด้วย
+`vswarm feed sign vswarm-feed.json --key ~/.ssh/feed_signing_key` แล้ววางทั้งสามไฟล์ไว้บน https
+
 ## 4. credential ในเครื่อง: secrets
 
 `vswarm secrets` บอกว่า credential อายุยาวอยู่ที่ไหนในเครื่อง **ไม่อ่านค่าออกมาแสดงเด็ดขาด** บอกแค่ตำแหน่งและชนิด
@@ -956,6 +982,8 @@ vswarm trust           # fingerprint ของกุญแจที่เคร�
 | `vswarm ui [--no-open]` | หน้าสรุปแบบอ่านง่ายในเครื่อง (127.0.0.1 เท่านั้น กุญแจใช้ครั้งเดียว ไทยหรืออังกฤษ) |
 | `vswarm unlock [--force]` | ปิดเหตุการณ์ |
 | `vswarm accept <id…>` · `--all` · `--list` · `--remove <id>` | ยอมรับสิ่งที่ตรวจแล้ว |
+| `vswarm feed add <https url> [--fingerprint fp] [--token-env VAR]` · `update` · `list` · `remove <name>` · `sign <file> --key k` | รายการของอันตรายที่เซ็นแล้ว เทียบในเครื่อง ([ข้อ 3](#รายการของอันตราย-vswarm-feed)) |
+| `vswarm mcp` | MCP server ให้ AI agent อ่านสถานะและถามคุณ ([ข้อ 5](#vswarm-mcp)) |
 | `vswarm team join <git url> [--fingerprint fp]` · `sync` · `status` · `leave` · `sign <file> --key k` | นโยบายของทีมที่เซ็นแล้ว ([team.md](team.md)) |
 | `vswarm canary plant aws\|dns\|env` · `list` · `remove <id\|all>` | credential ล่อ |
 | `vswarm selftest [--all] [--json]` | วัดอัตราการจับและการแจ้งผิด แยกตามเทคนิค |
@@ -997,6 +1025,7 @@ vswarm trust           # fingerprint ของกุญแจที่เคร�
 - ชื่อและเวอร์ชันของ package ไปที่ `api.osv.dev` เพื่อเช็คกับรายการ package อันตราย (cache 1 วัน, `--offline` เพื่อปิด ส่วน `preflight --quiet` จะถามเฉพาะเวอร์ชันที่ยังไม่เคยถาม)
 - ถ้าเปิด `guard` ชื่อ package ที่กำลังจะติดตั้งจะถูกส่งไปถาม registry ต้นทาง (registry.npmjs.org, api.npmjs.org, api.deps.dev, pypi.org) ซึ่งเป็นชื่อเดียวกับที่ package manager กำลังจะส่งอยู่แล้ว
 - ถ้าใช้นโยบายของทีม `vswarm team join` / `sync` จะดึง git repository ที่เราระบุ ส่วนรายงาน (`report --json`) อยู่ในเครื่องจนกว่าเราจะย้ายไปเอง
+- ถ้าติดตาม feed `vswarm feed add` / `update` จะดาวน์โหลดสามไฟล์ของ feed จาก address ที่คุณให้ไว้ (พร้อม token จากตัวแปรที่คุณระบุ ถ้ามี) การเทียบทำในเครื่องนี้ และไม่ส่งข้อมูลของเครื่องออกไป
 - ไม่มีอย่างอื่น ไม่มี telemetry และไม่อ่านค่าของ credential ออกมา
 
 

@@ -348,6 +348,36 @@ out is in [SECURITY.md](../SECURITY.md#the-local-dashboard-vswarm-ui).
 `vswarm report --html [--out file]` writes the same view as one self-contained HTML file to send to your team: a
 fresh check, no server and no buttons, credentials masked, home folders shown as `~` and the user name left out.
 
+### Lists of dangerous things: vswarm feed
+
+Besides the public sources it uses on its own (OSV's known-malicious packages, look-alike names), vswarm can follow
+lists that someone keeps up to date: packages and versions, MCP servers, editor and browser extensions, and attacker
+addresses, each with a short reason.
+
+```sh
+vswarm feed add https://feeds.example.com/vswarm/pro --token-env VSWARM_FEED_TOKEN
+vswarm feed update     # fetch newer lists
+vswarm feed list       # what you follow, their signing keys and dates
+vswarm feed remove "Example Pro"
+```
+
+- **Compared on this machine.** vswarm downloads the whole list and checks it during `scan`, `preflight` and the
+  watch. Nothing about this machine is sent, only the request for the file. A check never fetches anything:
+  `vswarm feed update` does.
+- **Signed, pinned, never older.** A feed is a folder with `vswarm-feed.json`, its `.sig` (`ssh-keygen -Y sign -n
+  vswarm-feed`) and `allowed_signers`. `feed add` shows the signing keys and pins them once you confirm, or match
+  `--fingerprint`. After that, an update is taken only when a pinned key signed it, the signers did not change and the
+  serial did not go back.
+- **A token stays in a variable.** For a paid feed, `--token-env` names the variable that holds the token; vswarm keeps
+  the name, not the token, and sends it only to the feed's address.
+- **Limited on purpose.** A feed adds findings, at most HIGH, and each can be marked as yours like any other. It cannot
+  run anything, accept anything or switch anything off, so the worst a stolen feed key does is false alarms. A kept
+  list changed by hand is not used, and the check says so. A list past its date still counts, and the check says it
+  is old.
+
+Keeping a feed: write `vswarm-feed.json` (see [feeds/sample](../feeds/sample/vswarm-feed.json)), sign it with
+`vswarm feed sign vswarm-feed.json --key ~/.ssh/feed_signing_key`, and serve the three files over https.
+
 ## 4. Credentials on the machine: secrets
 
 `vswarm secrets` says where long-lived credentials are. **It never reads values out**, only where and what kind.
@@ -1315,6 +1345,8 @@ Maintainers: the release steps are in [SECURITY.md](../SECURITY.md#for-the-maint
 | `vswarm ui [--no-open]` | a local page in plain words (127.0.0.1 only, one-time key, Thai or English) |
 | `vswarm unlock [--force]` | close the incident |
 | `vswarm accept <id…>` · `--all` · `--list` · `--remove <id>` | accept reviewed findings |
+| `vswarm feed add <https url> [--fingerprint fp] [--token-env VAR]` · `update` · `list` · `remove <name>` · `sign <file> --key k` | follow a signed list of dangerous things, compared on this machine ([§3](#lists-of-dangerous-things-vswarm-feed)) |
+| `vswarm mcp` | an MCP server for AI agents: read the state, ask you ([§5](#vswarm-mcp)) |
 | `vswarm team join <git url> [--fingerprint fp]` · `sync` · `status` · `leave` · `sign <file> --key k` | a signed team policy ([team.md](team.md)) |
 | `vswarm canary plant aws\|dns\|env` · `list` · `remove <id\|all>` | decoy credentials |
 | `vswarm selftest [--all] [--json]` | measured detection and false alarms, per technique |
@@ -1364,6 +1396,8 @@ installer `VSWARM_REPO`, `VSWARM_REF`.
   registry.npmjs.org and files.pythonhosted.org, the same files the install downloads
 - with a team policy, `vswarm team join` / `sync` fetch the git repository you named; reports (`report --json`) stay
   local unless you move them
+- with a feed, `vswarm feed add` / `update` download its three files from the address you gave (with the token from
+  the variable you named, if any); the comparison happens here and nothing about this machine is sent
 - nothing else: no telemetry, and credential values are never read
 
 

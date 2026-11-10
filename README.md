@@ -161,6 +161,13 @@ refusal and ask you a Yes/No question. Commands that weaken protection (`ok`, `u
 gate, `uninstall` and others) always ask you, in a dialog an agent cannot answer. See the
 [guide](docs/guide.md#when-an-agent-runs-vswarm).
 
+### Lists of dangerous things
+
+`vswarm feed add <https url>` follows a signed list of dangerous packages, MCP servers, extensions and addresses that
+someone keeps up to date. vswarm downloads the whole list and compares it on this machine; nothing about the machine
+is sent. A feed can only add findings, so a stolen feed key means false alarms, not a way in. See the
+[guide](docs/guide.md#lists-of-dangerous-things-vswarm-feed).
+
 ### Going to production
 
 ```bash
@@ -328,6 +335,7 @@ vswarm guard on · pkg        # check installs · check a package by hand
 vswarm try                   # run untrusted code in a sandbox
 vswarm agents [--inspect]    # AI agents and MCP servers
 vswarm mcp                   # an MCP server for your agents (read-only, plus ask you)
+vswarm feed add <https url>  # follow a signed list of dangerous things
 vswarm preflight · gate      # check before production · put that check in front of ssh, aws, kube, gcloud, az
 vswarm agent                 # an ssh agent that signs only while the machine passes
 vswarm ca · cert             # 15-minute SSH certificates

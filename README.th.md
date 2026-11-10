@@ -156,6 +156,12 @@ agent ของคุณถาม vswarm เองได้ด้วย: `vswarm
 ใช่/ไม่ใช่ได้ ส่วนคำสั่งที่ลดการป้องกัน (`ok`, `unlock`, `policy warn allow`, การถอดด่าน, `uninstall` และอื่นๆ) จะถามคุณเสมอ
 ผ่านกล่องที่ agent กดตอบเองไม่ได้ ดู[คู่มือ](docs/guide.th.md#เมื่อ-ai-agent-เรียกใช้-vswarm)
 
+### รายการของอันตราย
+
+`vswarm feed add <https url>` ติดตามรายการแพ็กเกจ, MCP server, extension และ IP อันตรายที่มีลายเซ็นและมีคนคอยอัปเดต vswarm
+ดาวน์โหลดรายการทั้งก้อนมาเทียบในเครื่อง ไม่ส่งข้อมูลของเครื่องออกไป feed เพิ่มได้แค่รายการที่ตรวจเจอ ถ้ากุญแจของ feed ถูกขโมย
+ผลเสียคือเตือนผิด ไม่ใช่ช่องทางเจาะเครื่อง ดู[คู่มือ](docs/guide.th.md#รายการของอันตราย-vswarm-feed)
+
 ### ตอนจะเข้า production
 
 ```bash
@@ -291,6 +297,7 @@ vswarm guard on · pkg        # ตรวจการติดตั้ง · �
 vswarm try                   # รันโค้ดที่ไม่ไว้ใจใน sandbox
 vswarm agents [--inspect]    # AI agent และ MCP server
 vswarm mcp                   # MCP server ให้ agent ของคุณ (อ่านอย่างเดียว และถามคุณได้)
+vswarm feed add <https url>  # ติดตามรายการของอันตรายที่มีลายเซ็น
 vswarm preflight · gate      # ตรวจก่อนเข้า production · ตั้งด่านหน้า ssh, aws, kube, gcloud, az
 vswarm agent                 # ssh agent ที่เซ็นเฉพาะตอนเครื่องผ่าน
 vswarm ca · cert             # SSH certificate อายุ 15 นาที
