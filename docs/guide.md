@@ -527,6 +527,32 @@ approves nothing in vswarm. What the tools return has credentials masked and the
 given by number, not by name, since what an agent reads also reaches its model's provider. File, package and server
 names in it are marked as data, because an attacker can choose them.
 
+### vswarm hook
+
+A check in front of Claude Code's shell commands, before they run (a PreToolUse hook):
+
+```sh
+vswarm hook install claude    # adds it to ~/.claude/settings.json, keeping the rest; a backup first
+vswarm hook status
+vswarm hook remove claude     # asks you first
+```
+
+- A command that reaches production (ssh, scp, rsync to a host, aws, kubectl, helm, gcloud, az, `terraform apply`,
+  deploy commands of vercel, fly, firebase, wrangler and others, a tool behind `vswarm gate cmd`) while this machine
+  does not pass: refused, and the agent is told why and what you have to do.
+- A command that weakens vswarm (`vswarm ok`, `unlock`, `policy warn allow`, a gate or the guard off, or editing
+  `~/.vswarm` or the ssh gate by hand): Claude Code asks you before it runs it.
+- Anything else: the hook says nothing, and Claude Code's own permissions decide. It never answers "allow", so it
+  cannot skip a question you set up.
+
+It is a first line, not the wall: the ssh gate, the vault and the gated tools refuse on their own whatever an agent
+runs. The hook stops the agent earlier and in words, before it looks for another way. Codex and Gemini CLI get the
+same once their hooks can be relied on; until then, `vswarm mcp` and the gates cover them.
+
+The check also reports an agent that may run any command without asking (bypass permissions, or `Bash` allowed
+outright) on a machine whose production ssh keys have no passphrase: together, one poisoned README is enough to use
+them. Put the keys in the vault (`vswarm fix <n>` on each) or let the agent ask.
+
 ## 6. Gate production access: preflight and gate
 
 ### vswarm preflight
@@ -1347,6 +1373,7 @@ Maintainers: the release steps are in [SECURITY.md](../SECURITY.md#for-the-maint
 | `vswarm accept <id…>` · `--all` · `--list` · `--remove <id>` | accept reviewed findings |
 | `vswarm feed add <https url> [--fingerprint fp] [--token-env VAR]` · `update` · `list` · `remove <name>` · `sign <file> --key k` | follow a signed list of dangerous things, compared on this machine ([§3](#lists-of-dangerous-things-vswarm-feed)) |
 | `vswarm mcp` | an MCP server for AI agents: read the state, ask you ([§5](#vswarm-mcp)) |
+| `vswarm hook install claude` · `remove claude` · `status` | Claude Code asks vswarm before shell commands ([§5](#vswarm-hook)) |
 | `vswarm team join <git url> [--fingerprint fp]` · `sync` · `status` · `leave` · `sign <file> --key k` | a signed team policy ([team.md](team.md)) |
 | `vswarm canary plant aws\|dns\|env` · `list` · `remove <id\|all>` | decoy credentials |
 | `vswarm selftest [--all] [--json]` | measured detection and false alarms, per technique |

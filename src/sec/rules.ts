@@ -2,6 +2,7 @@
 //   always   things that are wrong whatever the history (known-malicious package, code running from /tmp)
 //   change   things that appeared or changed since the baseline you marked as clean
 
+import { createHash } from "node:crypto";
 import { redact } from "./ctx";
 import { distance, lookAlike, nameSignals, signature, type Malicious, type Signature } from "./intel";
 import { argvOf, under } from "./collect/agents";
@@ -351,6 +352,20 @@ export async function evaluate(input: RuleInput): Promise<Finding[]> {
         detail: [i.meta?.command ? redact(String(i.meta.command).slice(0, 200)) : "", i.meta?.filter ? `when: ${i.meta.filter}` : "not bound to an event filter"].filter(Boolean),
         fix: "Almost no software uses these; unless you know this one, vswarm respond", item: i });
     }
+  }
+
+  // An agent that runs any command without asking, on a machine whose production ssh keys need no passphrase: one
+  // poisoned README away from using them. Each half alone is a smaller finding of its own; together they are a path.
+  const loose = scan.items.filter((i) => i.kind === "agent-perm" && (i.meta?.bypass || i.meta?.wide));
+  const prodKeys = input.secrets.filter((f) => f.meta?.production);
+  if (loose.length && prodKeys.length) {
+    const ids = [...loose.map((i) => i.id), ...prodKeys.map((f) => f.id)].sort().join("|");
+    add({
+      id: `agent-prod:${createHash("sha256").update(ids).digest("hex").slice(0, 12)}`, rule: "agent-prod", severity: "medium",
+      title: `${loose.map((i) => i.name).join(", ")} may run any command without asking, and ${prodKeys.length === 1 ? "a production ssh key here has" : `${prodKeys.length} production ssh keys here have`} no passphrase`,
+      detail: [...prodKeys.map((f) => String(f.meta?.file ?? f.id).replace(home, "~")), ...loose.map((i) => `${i.meta?.bypass ? "bypass permissions" : `allows ${i.meta?.wide}`}: ${String(i.path ?? "").replace(home, "~")}`)],
+      fix: "Put the production keys in vswarm's vault (vswarm fix <n> on each key), or let the agent ask before shell commands; vswarm hook install claude also checks production commands before they run",
+    });
   }
 
   // A package source over plain http, at a bare IP address or on a look-alike host is wrong whenever it is there. With

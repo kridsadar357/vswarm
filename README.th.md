@@ -154,7 +154,7 @@ sandbox ที่ใช้: Seatbelt บน macOS, bubblewrap กับ strace �
 
 agent ของคุณถาม vswarm เองได้ด้วย: `vswarm mcp` เป็น MCP server ที่ให้ agent อ่านสถานะ อธิบายว่าทำไมถูกปฏิเสธ และถามคุณแบบ
 ใช่/ไม่ใช่ได้ ส่วนคำสั่งที่ลดการป้องกัน (`ok`, `unlock`, `policy warn allow`, การถอดด่าน, `uninstall` และอื่นๆ) จะถามคุณเสมอ
-ผ่านกล่องที่ agent กดตอบเองไม่ได้ ดู[คู่มือ](docs/guide.th.md#เมื่อ-ai-agent-เรียกใช้-vswarm)
+ผ่านกล่องที่ agent กดตอบเองไม่ได้ และ `vswarm hook install claude` ทำให้ Claude Code ถาม vswarm ก่อนรันคำสั่งที่เข้า production ดู[คู่มือ](docs/guide.th.md#เมื่อ-ai-agent-เรียกใช้-vswarm)
 
 ### รายการของอันตราย
 

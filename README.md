@@ -158,7 +158,8 @@ The tool definitions are pinned. If a server changes them later (a "rug pull"), 
 
 Your agents can also ask vswarm themselves: `vswarm mcp` is an MCP server that lets them read the state, explain a
 refusal and ask you a Yes/No question. Commands that weaken protection (`ok`, `unlock`, `policy warn allow`, removing a
-gate, `uninstall` and others) always ask you, in a dialog an agent cannot answer. See the
+gate, `uninstall` and others) always ask you, in a dialog an agent cannot answer. `vswarm hook install claude`
+makes Claude Code check with vswarm before a shell command reaches production. See the
 [guide](docs/guide.md#when-an-agent-runs-vswarm).
 
 ### Lists of dangerous things

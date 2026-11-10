@@ -22,6 +22,8 @@ plain words (English and Thai).
   guard or the watch away, `uninstall` and others) ask a person first: on the terminal they are at, or in a desktop
   dialog an agent cannot answer. An agent that hits a gate is told to hand it to the user. `vswarm mcp` lets an
   agent read the state, explain a refusal and ask the person a Yes/No question; it cannot unlock or accept anything.
+  `vswarm hook install claude` checks Claude Code's shell commands before they run, and the check reports an agent
+  free to run anything on a machine with production keys that have no passphrase.
 - **Feeds:** `vswarm feed add <https url>` follows a signed list of dangerous packages, MCP servers, extensions and
   addresses, compared on this machine; a feed can only add findings.
 - **Seeing it:** the terminal reads like a checkpoint slip, with the vswarm worm beside the verdict; `vswarm ui` and

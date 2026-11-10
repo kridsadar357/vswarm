@@ -116,6 +116,7 @@ export const HELP: [Key, [string, Key][]][] = [
     ["vswarm secrets", "cli.help.secrets"],
     ["vswarm agents", "cli.help.agents"],
     ["vswarm mcp", "cli.help.mcp"],
+    ["vswarm hook install claude · remove · status", "cli.help.hook"],
     ["vswarm guard on [--ignore-scripts] [--sandbox] [--strict]", "cli.help.guard"],
     ["vswarm pkg check npm|pip <name>[@v] [--sandbox]", "cli.help.pkgCheck"],
     ["vswarm try <folder|git URL|zip> [-- cmd]", "cli.help.try"],
@@ -201,7 +202,7 @@ export async function main() {
   if (process.platform === "win32" && NOT_ON_WINDOWS.has(cmd)) throw new Error(notOnWindows(cmd));
   // After an update, once: what the old version's update could not do (setup.ts). Not on the paths ssh and installs
   // wait for.
-  if (!["preflight", "agent", "cert", "pkg", "cmdgate", "mcp", "complete", "__complete"].includes(cmd)) (await import("./setup")).afterUpdate();
+  if (!["preflight", "agent", "cert", "pkg", "cmdgate", "mcp", "hook", "complete", "__complete"].includes(cmd)) (await import("./setup")).afterUpdate();
 
   switch (cmd) {
     case "scan":
@@ -464,6 +465,12 @@ export async function main() {
     case "guard":
       noMoreOptions(cmd, args, ["--ignore-scripts", "--sandbox", "--strict"]);
       return guard(args);
+
+    case "hook": {
+      // Claude Code's PreToolUse hook (src/sec/hook.ts): `hook claude` answers on stdout; install, remove, status.
+      noMoreOptions(cmd, args);
+      return (await import("./sec/hook")).hookCommand(args);
+    }
 
     case "feed": {
       const { feedCommand } = await import("./sec/feed");

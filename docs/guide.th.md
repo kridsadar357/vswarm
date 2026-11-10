@@ -418,6 +418,31 @@ gemini mcp add vswarm vswarm mcp        # Gemini CLI
 credential ไว้และย่อ home เป็น `~` ด่านจะบอกเป็นจำนวนเครื่อง ไม่บอกชื่อ เพราะสิ่งที่ agent อ่านจะไปถึงผู้ให้บริการโมเดลด้วย
 ส่วนชื่อไฟล์ แพ็กเกจ และ server จะถูกระบุว่าเป็นข้อมูล เพราะผู้โจมตีตั้งชื่อเหล่านี้เองได้
 
+### vswarm hook
+
+ด่านหน้าคำสั่ง shell ของ Claude Code ก่อนที่คำสั่งจะรัน (hook แบบ PreToolUse):
+
+```sh
+vswarm hook install claude    # เพิ่มเข้า ~/.claude/settings.json โดยไม่แตะส่วนอื่น และสำรองไฟล์ไว้ก่อน
+vswarm hook status
+vswarm hook remove claude     # ถามคุณก่อน
+```
+
+- คำสั่งที่เข้า production (ssh, scp, rsync ไปเครื่องอื่น, aws, kubectl, helm, gcloud, az, `terraform apply`, คำสั่ง deploy ของ
+  vercel, fly, firebase, wrangler และอื่นๆ, เครื่องมือที่อยู่หลัง `vswarm gate cmd`) ตอนที่เครื่องไม่ผ่าน: ถูกปฏิเสธ และ agent
+  จะได้รู้เหตุผลและสิ่งที่คุณต้องทำ
+- คำสั่งที่ลดการป้องกันของ vswarm (`vswarm ok`, `unlock`, `policy warn allow`, ปิดด่านหรือ guard หรือแก้ `~/.vswarm` หรือด่าน ssh
+  ด้วยมือ): Claude Code จะถามคุณก่อนรัน
+- คำสั่งอื่น: hook ไม่ตอบอะไร ให้สิทธิ์ของ Claude Code เองเป็นตัวตัดสิน hook ไม่เคยตอบว่า "allow" จึงข้ามคำถามที่คุณตั้งไว้ไม่ได้
+
+hook เป็นด่านแรก ไม่ใช่กำแพงหลัก ด่าน ssh ตู้เซฟกุญแจ และเครื่องมือที่ตั้งด่านไว้ ปฏิเสธเองได้ไม่ว่า agent จะรันอะไร hook แค่หยุด agent
+ให้เร็วขึ้นพร้อมเหตุผล ก่อนที่มันจะหาทางอื่น สำหรับ Codex และ Gemini CLI จะทำแบบเดียวกันเมื่อ hook ของทั้งสองตัวเชื่อถือได้ ระหว่างนี้ใช้
+`vswarm mcp` และด่านต่างๆ ไปก่อน
+
+การตรวจยังแจ้งเตือนเมื่อ agent รันคำสั่งอะไรก็ได้โดยไม่ถาม (bypass permissions หรืออนุญาต `Bash` ทั้งหมด) ในขณะที่กุญแจ ssh
+ของ production ในเครื่องไม่มีรหัสผ่าน เมื่อสองอย่างนี้มาคู่กัน README ที่ฝังคำสั่งไว้อันเดียวก็พอให้ใช้กุญแจนั้นได้ ให้เก็บกุญแจไว้ในตู้เซฟ
+(`vswarm fix <n>` ทีละกุญแจ) หรือตั้งให้ agent ถามก่อน
+
 ## 6. ด่านก่อนเข้า production: preflight และ gate
 
 ### vswarm preflight
@@ -984,6 +1009,7 @@ vswarm trust           # fingerprint ของกุญแจที่เคร�
 | `vswarm accept <id…>` · `--all` · `--list` · `--remove <id>` | ยอมรับสิ่งที่ตรวจแล้ว |
 | `vswarm feed add <https url> [--fingerprint fp] [--token-env VAR]` · `update` · `list` · `remove <name>` · `sign <file> --key k` | รายการของอันตรายที่เซ็นแล้ว เทียบในเครื่อง ([ข้อ 3](#รายการของอันตราย-vswarm-feed)) |
 | `vswarm mcp` | MCP server ให้ AI agent อ่านสถานะและถามคุณ ([ข้อ 5](#vswarm-mcp)) |
+| `vswarm hook install claude` · `remove claude` · `status` | ให้ Claude Code ถาม vswarm ก่อนรันคำสั่ง shell ([ข้อ 5](#vswarm-hook)) |
 | `vswarm team join <git url> [--fingerprint fp]` · `sync` · `status` · `leave` · `sign <file> --key k` | นโยบายของทีมที่เซ็นแล้ว ([team.md](team.md)) |
 | `vswarm canary plant aws\|dns\|env` · `list` · `remove <id\|all>` | credential ล่อ |
 | `vswarm selftest [--all] [--json]` | วัดอัตราการจับและการแจ้งผิด แยกตามเทคนิค |
