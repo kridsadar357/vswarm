@@ -28,9 +28,32 @@ const PROD: Record<string, RegExp | true> = {
 
 /** vswarm commands that weaken protection (the ones human.ts asks about), installed or run from a checkout (cli.ts). */
 const WEAKEN = /(?:\bvswarm|\bcli\.ts)\s+(?:ok|accept|baseline|unlock|uninstall|setup)\b|(?:\bvswarm|\bcli\.ts)\s+policy\s+warn\s+allow\b|(?:\bvswarm|\bcli\.ts)\s+(?:gate|guard|watch|agent|team|canary|feed|trust|hook)\b[^;&|\n]*\b(?:remove|off|unprotect|leave|pin|--off|--allow-warn)\b/;
-/** Writing to vswarm's own files or the ssh config (where the gate is) by hand. */
-const BY_HAND = /(?:\.vswarm\b|\.ssh\/config\b|vswarm-gate|vswarm agent)/;
-const WRITES = /(?:>>?|\btee\b|\bsed\s+-i|\bperl\s+-[a-z]*i|\brm\b|\bmv\b|\bcp\b|\btruncate\b|\bchmod\b|\bln\b|\bpython3?\b|\bnode\b)/;
+/** vswarm's own folder, or the ssh config where the gate and the agent blocks are. Quotes around a word are ignored. */
+const PROTECTED = (word: string) => /(^|\/)\.vswarm(\/|$)|(^|\/)\.ssh\/config$/.test(word.replace(/^['"]|['"]$/g, "").replace(/^(\$HOME|\$\{HOME\})/, "~"));
+/** Commands that change every path they are given; those that change only the last one (the destination); in place with -i. */
+const CHANGES_ALL = new Set(["rm", "rmdir", "unlink", "shred", "truncate", "touch", "chmod", "chown", "chflags", "ln", "mv", "tee"]);
+const CHANGES_LAST = new Set(["cp", "rsync", "install", "ditto"]);
+const IN_PLACE = new Set(["sed", "gsed", "perl"]);
+
+/**
+ * Whether a line writes to vswarm's files or the ssh config: a redirection into one, or a command that changes one
+ * (rm, mv, chmod … on it, cp or rsync onto it, sed -i on it, dd of= it). Reading them (cat, grep, cp from, git -C) is
+ * fine. A script that writes them (python, node) is not seen here; the next check sees the change (vswarm knows its
+ * own blocks by hash).
+ */
+export function writesProtected(line: string): boolean {
+  for (const m of line.matchAll(/(?:^|[^<>&\d])\d?>>?\|?\s*(\S+)/g)) if (PROTECTED(m[1])) return true;
+  for (const w of commandsOf(line)) {
+    const name = w[0].split("/").pop()!;
+    const args = w.slice(1).filter((a) => !/^\d?>/.test(a));
+    const paths = args.filter((a) => !a.startsWith("-"));
+    if (CHANGES_ALL.has(name) && paths.some(PROTECTED)) return true;
+    if (CHANGES_LAST.has(name) && paths.length > 1 && PROTECTED(paths[paths.length - 1])) return true;
+    if (IN_PLACE.has(name) && args.some((a) => /^-[a-zA-Z]*i/.test(a)) && paths.some(PROTECTED)) return true;
+    if (name === "dd" && args.some((a) => a.startsWith("of=") && PROTECTED(a.slice(3)))) return true;
+  }
+  return false;
+}
 
 /** The commands of a shell line: split on ; && || | and new lines, leading VAR=x, sudo, env, exec and time dropped. */
 export function commandsOf(line: string): string[][] {
@@ -48,7 +71,7 @@ export function classify(line: string, gated: string[] = []): Verdict {
   // Listing what was accepted only reads.
   line = line.replace(/(?:\bvswarm|\bcli\.ts)\s+(?:ok|accept)\s+--list\b/g, "");
   if (WEAKEN.test(line)) return { kind: "weaken", what: "it weakens vswarm's protection" };
-  if (BY_HAND.test(line) && WRITES.test(line)) return { kind: "weaken", what: "it changes vswarm's files or the ssh gate by hand" };
+  if (writesProtected(line)) return { kind: "weaken", what: "it changes vswarm's files or the ssh gate by hand" };
   for (const w of commandsOf(line)) {
     const name = w[0].split("/").pop()!;
     const rule = PROD[name];

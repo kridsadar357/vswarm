@@ -543,7 +543,9 @@ vswarm hook remove claude     # asks you first
 - A command that weakens vswarm (`vswarm ok`, `unlock`, `policy warn allow`, a gate or the guard off, or editing
   `~/.vswarm` or the ssh gate by hand): refused, and the agent is told to ask you to run it yourself in your own
   terminal. A refusal rather than a question, because in Claude Code's auto mode a question can be answered for you;
-  a refusal holds in every mode. Listing what you accepted (`ok --list`) only reads and is not refused.
+  a refusal holds in every mode. Reading is not refused: listing what you accepted (`ok --list`), `cat`, `grep`, or
+  copying out of `~/.vswarm`. A script that writes there (python, node) is not seen by the hook; the next check reports
+  a gate or the guard changed by hand.
 - Anything else: the hook says nothing, and Claude Code's own permissions decide. It never answers "allow", so it
   cannot skip a question you set up.
 

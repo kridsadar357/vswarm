@@ -30,6 +30,19 @@ describe("what a command line is", () => {
     for (const l of ["vswarm why", "vswarm scan --json", "vswarm policy", "cat ~/.ssh/config", "ls ~/.vswarm", "vswarm gate status", "vswarm ok --list", "bun src/cli.ts accept --list"])
       expect(classify(l)?.kind).not.toBe("weaken");
   });
+
+  test("by hand: writing into ~/.vswarm or the ssh config is caught; reading them, or copying out of them, is not", () => {
+    const writes = [
+      "cp evil ~/.vswarm/bin/vswarm", "mv ~/.vswarm/sec /tmp/x", "tee -a ~/.ssh/config < x", "printf x>~/.ssh/config", "echo y 2>> \"$HOME/.vswarm/sec/last.json\"",
+      "dd if=x of=$HOME/.vswarm/sec/last.json", "chmod 777 ~/.vswarm/sec", "perl -pi -e s/a/b/ ~/.ssh/config", "rsync -a x/ /Users/u/.vswarm/app", "sudo rm ~/.ssh/config",
+    ];
+    for (const l of writes) expect([l, classify(l)?.kind]).toEqual([l, "weaken"]);
+    const reads = [
+      "cp -R ~/.vswarm/app /tmp/copy", "python3 -c 'print(open(\"/Users/u/.vswarm/x\").read())'", "git -C ~/.vswarm/app tag -l", "cat ~/.ssh/config | grep Host",
+      "~/.vswarm/bin/vswarm version", "ls -la ~/.vswarm > /tmp/listing", "sed -n 1,5p ~/.ssh/config", "diff ~/.ssh/config /tmp/old 2>&1", "rm -rf /tmp/vswarm-test",
+    ];
+    for (const l of reads) expect([l, classify(l)?.kind]).toEqual([l, undefined]);
+  });
 });
 
 describe("the answer Claude Code gets", () => {
