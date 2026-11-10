@@ -102,7 +102,8 @@ jobs:
           if (Get-ScheduledTask -TaskPath '\vswarm\' -TaskName 'watch' -ErrorAction SilentlyContinue) { throw 'uninstall left the task behind' }
           if (Test-Path $vs) { throw 'uninstall left the launcher behind' }
           if (Select-String -Path $prof -Pattern 'vswarm guard' -Quiet) { throw 'uninstall left the guard behind' }
-          if (Select-String -Path (Join-Path $HOME '.ssh\config') -Pattern 'vswarm gate' -Quiet) { throw 'uninstall left the gate behind' }
+          $sshcfg = Join-Path $HOME '.ssh\config'
+          if ((Test-Path $sshcfg) -and (Select-String -Path $sshcfg -Pattern 'vswarm gate' -Quiet)) { throw 'uninstall left the gate behind' }
       # vswarm agent on Windows, end to end, in the default data folder: its Task Scheduler task starts the agent
       # without the step's environment, so a VSWARM_HOME here would leave the task's agent on another pipe.
       - name: Windows agent
@@ -157,4 +158,6 @@ jobs:
           if ($diff -match 'vswarm\\agent') { throw "the scan reported vswarm's own agent task" }
           vswarm uninstall
           if (Get-ScheduledTask -TaskPath '\vswarm\' -TaskName 'agent' -ErrorAction SilentlyContinue) { throw 'uninstall left the agent task behind' }
-          if (Select-String -Path (Join-Path $HOME '.ssh\config') -Pattern 'vswarm agent' -Quiet) { throw 'uninstall left the agent block behind' }
+          # A config that held only vswarm's block is removed with it.
+          $sshcfg = Join-Path $HOME '.ssh\config'
+          if ((Test-Path $sshcfg) -and (Select-String -Path $sshcfg -Pattern 'vswarm agent' -Quiet)) { throw 'uninstall left the agent block behind' }
