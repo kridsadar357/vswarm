@@ -21,6 +21,8 @@ Fixes from the first days of 0.1.0 on real machines, most of them Windows.
 - **Updates and installs** drop tags the repository removed, so a copy from a 2.x build moves to the newest release.
 - `doctor` says when the launcher is not on PATH and how to add it; `uninstall` says how many copies of
   `~/.ssh/config` it leaves.
+- `vswarm agent off` stops every vswarm agent process and removes `~/.ssh/config` when only vswarm's block was in it.
+- `vswarm <command> --help` (or `-h`) shows that command's help instead of refusing the option.
 
 ## 0.1.0 (first public beta)
 
