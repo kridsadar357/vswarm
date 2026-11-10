@@ -920,8 +920,9 @@ const unitWord = (s: string) => (/^[A-Za-z0-9_./-]+$/.test(s) ? s : `"${s.replac
 export function agentJobFiles(launcher: string, home = homedir(), platform = process.platform, winUser?: string): Record<string, string> {
   if (platform === "win32") {
     // At your logon, as you, without a time limit, started again a minute after it stops (as KeepAlive and Restart do).
-    // RestartOnFailure covers a failed exit only; a killed process ends with code 0, so the logon trigger also repeats
-    // every minute, and IgnoreNew keeps that from starting a second agent while one runs.
+    // RestartOnFailure covers a failed exit only; a killed process ends with code 0. A repetition on the logon trigger
+    // starts counting only at the next logon, so a time trigger (from a date in the past, every minute, no end) brings
+    // it back within a minute from the moment it is registered; IgnoreNew keeps that to one agent while one runs.
     const a = winAgentAction(launcher);
     const x = (v: string) => xml(v).replace(/"/g, "&quot;");
     // Your SID when known (an Azure AD account's DOMAIN\name may not resolve), else DOMAIN\name.
@@ -930,7 +931,7 @@ export function agentJobFiles(launcher: string, home = homedir(), platform = pro
       [winTaskFile()]: `<?xml version="1.0" encoding="UTF-16"?>
 <Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
   <RegistrationInfo><Description>vswarm agent: ssh keys that sign only while this machine passes</Description></RegistrationInfo>
-  <Triggers><LogonTrigger><Enabled>true</Enabled><UserId>${x(user)}</UserId><Repetition><Interval>PT1M</Interval><StopAtDurationEnd>false</StopAtDurationEnd></Repetition></LogonTrigger></Triggers>
+  <Triggers><LogonTrigger><Enabled>true</Enabled><UserId>${x(user)}</UserId></LogonTrigger><TimeTrigger><StartBoundary>2020-01-01T00:00:00</StartBoundary><Enabled>true</Enabled><Repetition><Interval>PT1M</Interval><StopAtDurationEnd>false</StopAtDurationEnd></Repetition></TimeTrigger></Triggers>
   <Principals><Principal id="Author"><LogonType>InteractiveToken</LogonType><RunLevel>LeastPrivilege</RunLevel></Principal></Principals>
   <Settings>
     <MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>
@@ -1219,7 +1220,7 @@ const ps = (script: string, env: Record<string, string> = {}) =>
 /**
  * Stops the task and waits until its agent no longer answers, so the next one can own the pipe. Stopping the task
  * ends what it started; an agent that still answers after that (started by hand, or left over) is ended by its
- * command line, which names this vswarm's cli.ts.
+ * command line (vswarm's cli.ts, agent run).
  */
 async function winTaskStop() {
   await ps(`Stop-ScheduledTask ${WIN_TASK_ARGS} -ErrorAction SilentlyContinue`);
@@ -1231,8 +1232,9 @@ async function winTaskStop() {
     return false;
   };
   if (await gone()) return;
-  const { CLI } = await import("../setup");
-  await ps(`Get-CimInstance Win32_Process -Filter "Name = 'bun.exe'" | Where-Object { $_.CommandLine -and $_.CommandLine.Contains($env:VSWARM_CLI) -and $_.CommandLine -match ' agent run' -and $_.ProcessId -ne $PID } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force }`, { VSWARM_CLI: CLI });
+  // Any vswarm's agent, not only this copy's: the task may start the installed copy while this is a checkout, and
+  // there is one agent pipe per user either way.
+  await ps(`Get-CimInstance Win32_Process -Filter "Name = 'bun.exe'" | Where-Object { $_.CommandLine -and $_.CommandLine -match 'vswarm' -and $_.CommandLine -match 'cli\\.ts' -and $_.CommandLine -match ' agent run' -and $_.ProcessId -ne $PID } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force }`);
   await gone();
 }
 
@@ -1252,7 +1254,11 @@ export async function agentOff(home = homedir()): Promise<string[]> {
     await run(["systemctl", "--user", "daemon-reload"], 10_000);
   }
   const cfg = join(home, ".ssh", "config");
-  if (existsSync(cfg) && readFileSync(cfg, "utf8").includes(AGENT_START) && setAgentBlock(cfg, null).changed) gone.push(`the IdentityAgent block in ${cfg}`);
+  if (existsSync(cfg) && readFileSync(cfg, "utf8").includes(AGENT_START) && setAgentBlock(cfg, null).changed) {
+    gone.push(`the IdentityAgent block in ${cfg}`);
+    // Nothing left but the block vswarm wrote: the file goes too, as it was before.
+    if (!readFileSync(cfg, "utf8").trim()) (rmSync(cfg), gone.push(cfg));
+  }
   return gone;
 }
 

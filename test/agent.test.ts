@@ -608,8 +608,10 @@ describe("vswarm agent: how it is wired in", () => {
   test("on Windows the agent is a Task Scheduler task: at logon, no time limit, started again, no console window", () => {
     const [file, text] = Object.entries(agentJobFiles("C:\\Users\\t\\.vswarm\\bin\\vswarm.cmd", "C:\\Users\\t", "win32", "S-1-5-21-1-2-3-1001"))[0];
     expect(file.endsWith("agent-task.xml")).toBe(true);
-    expect(text).toContain("<LogonTrigger><Enabled>true</Enabled><UserId>S-1-5-21-1-2-3-1001</UserId><Repetition><Interval>PT1M</Interval><StopAtDurationEnd>false</StopAtDurationEnd></Repetition></LogonTrigger>");
-    // A killed agent ends with code 0, which RestartOnFailure ignores: the repetition starts it again, IgnoreNew keeps it single.
+    expect(text).toContain("<LogonTrigger><Enabled>true</Enabled><UserId>S-1-5-21-1-2-3-1001</UserId></LogonTrigger>");
+    // A killed agent ends with code 0, which RestartOnFailure ignores, and a logon trigger's repetition waits for the next
+    // logon: a time trigger every minute starts it again from now on, IgnoreNew keeps it single.
+    expect(text).toContain("<TimeTrigger><StartBoundary>2020-01-01T00:00:00</StartBoundary><Enabled>true</Enabled><Repetition><Interval>PT1M</Interval><StopAtDurationEnd>false</StopAtDurationEnd></Repetition></TimeTrigger>");
     expect(text).toContain("<MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>");
     expect(text).toContain("<ExecutionTimeLimit>PT0S</ExecutionTimeLimit>");
     expect(text).toContain("<RestartOnFailure>");
