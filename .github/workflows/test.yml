@@ -24,6 +24,12 @@ jobs:
       - run: bun install --frozen-lockfile
       - run: bunx tsc --noEmit
       - run: bun test
+        if: runner.os != 'Windows'
+      # Bun 1.3 on Windows crashes itself now and then, at a different test each run: there the tests run file by
+      # file, and only a file whose run crashed Bun is run again (scripts/test-each.sh). A failing test still fails.
+      - run: scripts/test-each.sh
+        if: runner.os == 'Windows'
+        shell: bash
       # The machine-check bench: every planted technique and benign look-alike, offline, in a fake home (a few seconds).
       # The package-name bench needs a 260 MB download and stays a manual script: bun scripts/bench-names.ts
       - name: Selftest (machine-check bench)
