@@ -101,7 +101,8 @@ jobs:
           vswarm uninstall
           if (Get-ScheduledTask -TaskPath '\vswarm\' -TaskName 'watch' -ErrorAction SilentlyContinue) { throw 'uninstall left the task behind' }
           if (Test-Path $vs) { throw 'uninstall left the launcher behind' }
-          if (Select-String -Path $prof -Pattern 'vswarm guard' -Quiet) { throw 'uninstall left the guard behind' }
+          # A profile that held only the guard is removed with it.
+          if ((Test-Path $prof) -and (Select-String -Path $prof -Pattern 'vswarm guard' -Quiet)) { throw 'uninstall left the guard behind' }
           $sshcfg = Join-Path $HOME '.ssh\config'
           if ((Test-Path $sshcfg) -and (Select-String -Path $sshcfg -Pattern 'vswarm gate' -Quiet)) { throw 'uninstall left the gate behind' }
       # vswarm agent on Windows, end to end, in the default data folder: its Task Scheduler task starts the agent
