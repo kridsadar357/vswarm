@@ -1,0 +1,517 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>How vswarm works</title>
+<meta name="description" content="An interactive 3D flowchart of how vswarm checks your machine and stands in front of package installs, AI agent commands and ssh to production.">
+<!-- Self-contained on purpose: no CDN, no web fonts, nothing fetched. Open it from a clone, offline. -->
+<style>
+/* Two floors in 3D: requests travel on the top floor; the machine check is the slab underneath; checkpoints drop a beam down to it. */
+:root {
+  --bg: #eef1f5; --panel: #ffffff; --ink: #16202c; --muted: #5a6779; --line: #cfd6e0; --soft: #e4e9f0;
+  --floor-top: rgba(255,255,255,.72); --floor-low: rgba(222,229,239,.85);
+  --accent: #2c55c9; --accent-soft: #dce5fb;
+  --pass: #1d8049; --pass-soft: #d9f0e2; --warn: #a86b0c; --warn-soft: #f7e8cc; --block: #c12f2f; --block-soft: #f8dcdc;
+  --term-bg: #121922; --term-fg: #d6dfeb; --term-dim: #7f8ea3;
+  --sans: system-ui, -apple-system, "Segoe UI", "Noto Sans Thai", "Sukhumvit Set", "Leelawadee UI", Roboto, sans-serif;
+  --mono: ui-monospace, "SF Mono", Menlo, Consolas, "Noto Sans Mono", monospace;
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+  --bg: #0d1219; --panel: #151c26; --ink: #e5eaf1; --muted: #94a1b3; --line: #2b3545; --soft: #1b2431;
+  --floor-top: rgba(28,37,50,.78); --floor-low: rgba(18,25,35,.9);
+  --accent: #7ea3ff; --accent-soft: #1f2c4d;
+  --pass: #4cc386; --pass-soft: #163527; --warn: #e3ab4c; --warn-soft: #3a2c13; --block: #f07070; --block-soft: #3d1c1e;
+  --term-bg: #080c12; color-scheme: dark } }
+:root[data-theme="dark"] {
+  --bg: #0d1219; --panel: #151c26; --ink: #e5eaf1; --muted: #94a1b3; --line: #2b3545; --soft: #1b2431;
+  --floor-top: rgba(28,37,50,.78); --floor-low: rgba(18,25,35,.9);
+  --accent: #7ea3ff; --accent-soft: #1f2c4d;
+  --pass: #4cc386; --pass-soft: #163527; --warn: #e3ab4c; --warn-soft: #3a2c13; --block: #f07070; --block-soft: #3d1c1e;
+  --term-bg: #080c12; color-scheme: dark }
+
+* { box-sizing: border-box }
+html, body { margin: 0 }
+body { background: var(--bg); color: var(--ink); font: 15px/1.6 var(--sans);
+  padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); padding-block: 24px 48px }
+.wrap { max-width: 1240px; margin: 0 auto; display: grid; gap: 22px }
+h1, h2, h3 { margin: 0; line-height: 1.25; text-wrap: balance }
+h1 { font-size: clamp(24px, 3.6vw, 34px) }
+h2 { font-size: 20px }
+p { margin: 0 }
+code { font-family: var(--mono); font-size: .9em }
+.top { display: flex; justify-content: space-between; align-items: start; gap: 16px; flex-wrap: wrap }
+.top header { display: grid; gap: 8px; max-width: 760px; min-width: 0 }
+.top header p { color: var(--muted) }
+.eyebrow { font: 12px var(--mono); letter-spacing: .08em; text-transform: uppercase; color: var(--accent) }
+.toggles { display: flex; gap: 8px; flex-wrap: wrap }
+.pillbtn { font: inherit; font-size: 13px; padding: 6px 12px; border-radius: 999px; border: 1px solid var(--line); background: var(--panel); color: var(--ink); cursor: pointer }
+.pillbtn[aria-pressed="true"] { background: var(--accent-soft); color: var(--accent); border-color: var(--accent) }
+
+.main { display: grid; grid-template-columns: 290px minmax(0, 1fr); gap: 18px; align-items: start }
+@media (max-width: 920px) { .main { grid-template-columns: minmax(0, 1fr) } }
+.panel { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 16px; display: grid; gap: 14px; min-width: 0 }
+.gt { font: 12px var(--mono); letter-spacing: .06em; text-transform: uppercase; color: var(--muted) }
+.group { display: grid; gap: 7px }
+.finding { display: grid; grid-template-columns: auto 1fr; gap: 10px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; cursor: pointer }
+.finding:hover { border-color: var(--accent) }
+.finding:focus-within { outline: 2px solid var(--accent); outline-offset: 2px }
+.finding input { margin-top: 4px; width: 16px; height: 16px; accent-color: var(--accent) }
+.finding .name { font-size: 13.5px; line-height: 1.45 }
+.sev { display: inline-block; font: 11px var(--mono); padding: 0 6px; border-radius: 4px; margin-top: 3px }
+.sev.medium { background: var(--warn-soft); color: var(--warn) } .sev.high, .sev.lock { background: var(--block-soft); color: var(--block) }
+.seg { display: grid; grid-template-columns: 1fr 1fr; border: 1px solid var(--line); border-radius: 8px; overflow: hidden }
+.seg button { font: inherit; font-size: 13px; padding: 7px 6px; border: 0; background: var(--panel); color: var(--muted); cursor: pointer }
+.seg button + button { border-left: 1px solid var(--line) }
+.seg button[aria-pressed="true"] { background: var(--accent-soft); color: var(--accent); font-weight: 600 }
+.hint { font-size: 12.5px; color: var(--muted); line-height: 1.5 }
+.vcard { border-radius: 8px; padding: 10px 12px; display: grid; gap: 2px; border: 1px solid }
+.vcard b { font-size: 19px }
+.vcard span { font-size: 13px }
+.vcard.pass { background: var(--pass-soft); color: var(--pass) } .vcard.warn { background: var(--warn-soft); color: var(--warn) } .vcard.block { background: var(--block-soft); color: var(--block) }
+
+.stage { display: grid; gap: 12px; min-width: 0 }
+.actions { display: flex; flex-wrap: wrap; gap: 8px }
+.act { font: inherit; font-size: 13.5px; display: inline-flex; gap: 8px; align-items: center; padding: 7px 11px; border-radius: 7px; border: 1px solid var(--line); background: var(--panel); color: var(--ink); cursor: pointer }
+.act:hover { border-color: var(--accent); color: var(--accent) }
+.act:disabled { opacity: .55; cursor: wait }
+.act code { font-size: 12.5px }
+.who { font: 11px var(--mono); color: var(--muted); border: 1px solid var(--line); border-radius: 4px; padding: 0 5px }
+button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px }
+
+/* ── the 3D scene */
+.scene-box { position: relative; background: radial-gradient(ellipse at 50% 35%, var(--panel), var(--bg) 75%); border: 1px solid var(--line); border-radius: 12px; overflow: hidden; touch-action: none; cursor: grab; user-select: none }
+.scene-box:active { cursor: grabbing }
+.scene { position: relative; width: 100%; height: 600px; perspective: 2200px; perspective-origin: 50% 20% }
+@media (max-width: 640px) { .scene { height: 420px } }
+.world { position: absolute; left: 50%; top: 50%; width: 900px; height: 420px; margin: -210px 0 0 -450px; transform-style: preserve-3d; transition: transform .6s cubic-bezier(.2,.7,.2,1) }
+.world.dragging { transition: none }
+.floor { position: absolute; inset: 0; transform-style: preserve-3d; border-radius: 16px }
+.floor.low { background: var(--floor-low); border: 1px solid var(--line); box-shadow: 0 30px 60px rgba(0,0,0,.12) }
+.floor.top { background: transparent; border: 1.5px dashed var(--line); transform: translateZ(230px) }
+.floor svg { position: absolute; inset: 0; width: 900px; height: 420px; overflow: visible }
+.flabel { position: absolute; font: 11px var(--mono); letter-spacing: .1em; text-transform: uppercase; color: var(--muted) }
+.node { position: absolute; width: 180px; height: 58px; padding: 8px 12px; border-radius: 9px; background: var(--panel); border: 1.5px solid var(--line); transform: translateZ(12px); box-shadow: 0 10px 0 -2px var(--soft), 0 12px 18px rgba(0,0,0,.14); transition: background .25s, border-color .25s; display: grid; align-content: center }
+.node b { font-size: 14px; line-height: 1.25; white-space: nowrap; overflow: hidden; text-overflow: ellipsis }
+.node small { font: 10.5px var(--mono); color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis }
+.node.on { border-color: var(--accent); background: var(--accent-soft) }
+.node.ok { border-color: var(--pass); background: var(--pass-soft) }
+.node.bad { border-color: var(--block); background: var(--block-soft) }
+.node.warn { border-color: var(--warn); background: var(--warn-soft) }
+.node.skip { opacity: .35 }
+.slab { position: absolute; left: 250px; top: 110px; width: 630px; height: 218px; border-radius: 14px; background: var(--panel); border: 2px solid var(--line); transform: translateZ(26px); box-shadow: 0 14px 0 -2px var(--soft), 0 18px 30px rgba(0,0,0,.18); padding: 16px 18px; display: grid; align-content: start; gap: 6px; transition: border-color .25s }
+.slab.pulse { border-color: var(--accent) }
+.slab b { font-size: 17px }
+.slab small { font: 11.5px var(--mono); color: var(--muted) }
+.slab .vp { position: absolute; right: 18px; bottom: 16px; padding: 8px 18px; border-radius: 999px; font-weight: 800; font-size: 18px; letter-spacing: .04em; color: var(--panel); transition: background .3s }
+.vp.pass { background: var(--pass) } .vp.warn { background: var(--warn) } .vp.block { background: var(--block) }
+.edge { fill: none; stroke: var(--line); stroke-width: 2.4; transition: stroke .25s }
+.edge.q { opacity: 0 }
+.edge.by { stroke-dasharray: 3 6 }
+.edge.on { stroke: var(--accent); stroke-width: 3.4 } .edge.ok { stroke: var(--pass); stroke-width: 3.4 } .edge.bad { stroke: var(--block); stroke-width: 3.4 } .edge.warn { stroke: var(--warn); stroke-width: 3.4 }
+.packet { fill: var(--accent); opacity: 0 }
+.beam { position: absolute; width: 4px; height: 230px; margin-left: -2px; transform-origin: 50% 0; transform: rotateX(90deg); background: repeating-linear-gradient(to bottom, var(--line) 0 6px, transparent 6px 11px); transition: background .25s }
+.beam.on { background: repeating-linear-gradient(to bottom, var(--accent) 0 6px, transparent 6px 11px) }
+.beam i { position: absolute; left: -5px; width: 14px; height: 14px; border-radius: 50%; background: var(--accent); top: 100%; opacity: 0 }
+.beam.go i { animation: beam 1s ease-in-out }
+@keyframes beam { 0% { top: 100%; opacity: 1 } 50% { top: 0; opacity: 1 } 100% { top: 100%; opacity: 1 } }
+.view-ctl { position: absolute; right: 10px; top: 10px; display: flex; gap: 6px; z-index: 2 }
+.view-ctl button { font: 12px var(--sans); padding: 5px 10px; border-radius: 6px; border: 1px solid var(--line); background: var(--panel); color: var(--ink); cursor: pointer }
+.scene-hint { position: absolute; left: 12px; bottom: 10px; font-size: 12px; color: var(--muted); z-index: 2 }
+
+.term-head { display: flex; justify-content: space-between; align-items: baseline; gap: 10px }
+.term { background: var(--term-bg); color: var(--term-fg); border-radius: 10px; font: 12.6px/1.6 var(--mono); padding: 12px 14px; height: 210px; overflow: auto; white-space: pre-wrap; word-break: break-word }
+.term .cmd { color: #fff } .term .cmd::before { content: "$ "; color: var(--term-dim) }
+.term .dim { color: var(--term-dim) } .term .ok { color: #5fd394 } .term .warn { color: #f0bf5e } .term .bad { color: #ff8585 } .term .note { color: #9db8ff }
+.linkbtn { font: inherit; font-size: 12.5px; background: none; border: 0; color: var(--accent); cursor: pointer; padding: 0 }
+
+.steps { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 12px }
+.step { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 14px; display: grid; gap: 6px; align-content: start; min-width: 0 }
+.step .n { font: 600 12px var(--mono); color: var(--accent) }
+.step p { font-size: 14px; color: var(--muted) }
+.step code { color: var(--ink) }
+.limits { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 16px; display: grid; gap: 8px }
+.limits ul { margin: 0; padding-left: 20px; display: grid; gap: 5px; font-size: 14.5px }
+footer { font-size: 13px; color: var(--muted) }
+footer a { color: var(--accent) }
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; animation: none !important } }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="top">
+    <header>
+      <span class="eyebrow" data-t="eyebrow"></span>
+      <h1 data-t="title"></h1>
+      <p data-t="lede"></p>
+    </header>
+    <div class="toggles" role="group" aria-label="Language">
+      <button class="pillbtn" id="lang-en" type="button">English</button>
+      <button class="pillbtn" id="lang-th" type="button">ภาษาไทย</button>
+    </div>
+  </div>
+
+  <div class="main">
+    <aside class="panel">
+      <div class="group">
+        <span class="gt" data-t="found"></span>
+        <label class="finding"><input type="checkbox" id="f-hook" checked><span><span class="name" data-t="fHook"></span><br><span class="sev medium">medium</span></span></label>
+        <label class="finding"><input type="checkbox" id="f-key" checked><span><span class="name" data-t="fKey"></span><br><span class="sev medium">medium</span></span></label>
+        <label class="finding"><input type="checkbox" id="f-job"><span><span class="name" data-t="fJob"></span><br><span class="sev high">high</span></span></label>
+        <label class="finding"><input type="checkbox" id="f-lock"><span><span class="name" data-t="fLock"></span><br><span class="sev lock">lock</span></span></label>
+      </div>
+      <div class="vcard warn" id="vcard" aria-live="polite"><b id="vname"></b><span id="vwhy"></span></div>
+      <div class="group">
+        <span class="gt" data-t="policy"></span>
+        <div class="seg" role="group"><button type="button" id="p-allow" aria-pressed="true" data-t="allow"></button><button type="button" id="p-refuse" aria-pressed="false" data-t="refuse"></button></div>
+        <span class="hint" data-t="policyHint"></span>
+      </div>
+      <div class="group">
+        <span class="gt" data-t="keyT"></span>
+        <div class="seg" role="group"><button type="button" id="k-vault" aria-pressed="true" data-t="vault"></button><button type="button" id="k-file" aria-pressed="false" data-t="file"></button></div>
+        <span class="hint" data-t="keyHint"></span>
+      </div>
+    </aside>
+
+    <div class="stage">
+      <div class="actions" role="group">
+        <button class="act" data-s="ssh"><span class="who" data-t="you"></span><code>ssh prod</code></button>
+        <button class="act" data-s="bypass"><span class="who" data-t="you"></span><code>ssh -F /dev/null prod</code></button>
+        <button class="act" data-s="axois"><span class="who" data-t="you"></span><code>npm install axois</code></button>
+        <button class="act" data-s="react"><span class="who" data-t="you"></span><code>npm install react</code></button>
+        <button class="act" data-s="aiSsh"><span class="who">AI</span><code>ssh prod</code></button>
+        <button class="act" data-s="aiOk"><span class="who">AI</span><code>vswarm ok 1</code></button>
+        <button class="act" data-s="aiTest"><span class="who">AI</span><code>npm test</code></button>
+      </div>
+
+      <div class="scene-box" id="box">
+        <div class="view-ctl">
+          <button type="button" id="v-3d">3D</button>
+          <button type="button" id="v-flat" data-t="flat"></button>
+        </div>
+        <div class="scene" id="scene">
+          <div class="world" id="world">
+            <div class="floor low" id="low">
+              <span class="flabel" style="left:20px;top:330px" data-t="laneWatch"></span>
+              <svg id="svg-low" viewBox="0 0 900 420"></svg>
+              <div class="slab" id="slab">
+                <b data-t="slabT"></b>
+                <small data-t="slab1"></small>
+                <small data-t="slab2"></small>
+                <small data-t="slab3"></small>
+                <small data-t="slab4"></small>
+                <span class="vp warn" id="vp">WARN</span>
+              </div>
+            </div>
+            <div class="floor top" id="top">
+              <span class="flabel" style="left:20px;top:12px" data-t="laneInstall"></span>
+              <span class="flabel" style="left:20px;top:132px" data-t="laneAi"></span>
+              <span class="flabel" style="left:20px;top:252px" data-t="laneProd"></span>
+              <svg id="svg-top" viewBox="0 0 900 420"></svg>
+            </div>
+          </div>
+        </div>
+        <span class="scene-hint" data-t="drag"></span>
+      </div>
+
+      <div class="term-head"><h2 data-t="termT"></h2><span class="hint"><span data-t="termHint"></span> · <button class="linkbtn" id="clear" type="button" data-t="clear"></button></span></div>
+      <div class="term" id="term" aria-live="polite"></div>
+    </div>
+  </div>
+
+  <section class="steps" aria-label="The pieces">
+    <div class="step"><span class="n">1 · scan · watch</span><h3 data-t="s1t"></h3><p data-t="s1"></p></div>
+    <div class="step"><span class="n">2 · guard · try · agents</span><h3 data-t="s2t"></h3><p data-t="s2"></p></div>
+    <div class="step"><span class="n">3 · gate · agent · hook</span><h3 data-t="s3t"></h3><p data-t="s3"></p></div>
+    <div class="step"><span class="n">4 · respond</span><h3 data-t="s4t"></h3><p data-t="s4"></p></div>
+  </section>
+
+  <section class="limits">
+    <h2 data-t="limT"></h2>
+    <ul><li data-t="lim1"></li><li data-t="lim2"></li><li data-t="lim3"></li></ul>
+  </section>
+
+  <footer data-t="foot"></footer>
+</div>
+
+<script>
+(() => {
+  // ── words, in both languages. Tool output in the terminal stays in English, as vswarm prints it.
+  const T = {
+    eyebrow: ["vswarm · how it works", "vswarm · หลักการทำงาน"],
+    title: ["Check your own machine before it touches production", "เช็คเครื่องตัวเองก่อนแตะ production"],
+    lede: ["vswarm checks your machine and sums it up in one verdict: PASS, WARN or BLOCK. Every checkpoint in front of production asks for that verdict before it lets anything through. Requests travel on the top floor; the machine check is the slab underneath. Turn findings on and off on the left, then press a scenario.",
+           "vswarm ตรวจเครื่องของคุณแล้วสรุปเป็นผลเดียว คือ PASS, WARN หรือ BLOCK จุดตรวจทุกจุดที่อยู่หน้า production จะถามผลนี้ก่อนปล่อยให้ผ่าน ชั้นบนคือทางที่คำขอวิ่ง ชั้นล่างคือการตรวจเครื่อง ลองเปิดปิดสิ่งที่เครื่องเจอทางซ้าย แล้วกดสถานการณ์"],
+    found: ["What the check found", "สิ่งที่การตรวจเจอ"],
+    fHook: ["A new AI agent hook in ~/.claude/settings.json", "hook ใหม่ของ AI agent ใน ~/.claude/settings.json"],
+    fKey: ["Production ssh keys without a passphrase", "กุญแจ ssh ของ production ไม่มี passphrase"],
+    fJob: ["An unknown login job planted in ~/Library/LaunchAgents", "login job แปลกถูกวางไว้ใน ~/Library/LaunchAgents"],
+    fLock: ["An open incident (vswarm respond locked production)", "มี incident เปิดอยู่ (vswarm respond ล็อกไว้)"],
+    policy: ["When the verdict is WARN", "เมื่อผลเป็น WARN"],
+    allow: ["let through", "ให้ผ่าน"], refuse: ["refuse", "ไม่ให้ผ่าน"],
+    policyHint: ["vswarm policy warn allow|refuse: one answer for every gate. BLOCK never passes.", "vswarm policy warn allow|refuse ใช้ค่าเดียวกันทุกประตู ส่วน BLOCK ไม่ผ่านเสมอ"],
+    keyT: ["The production key", "กุญแจ production"],
+    vault: ["in the vault", "อยู่ใน vault"], file: ["a file on disk", "เป็นไฟล์บนดิสก์"],
+    keyHint: ["After vswarm agent protect the key is no longer on disk; the agent signs only while the machine passes.", "หลัง vswarm agent protect กุญแจจะไม่อยู่บนดิสก์ agent เซ็นต์ให้เฉพาะตอนที่เครื่องผ่าน"],
+    you: ["you", "คุณ"],
+    flat: ["Flat", "มุมบน"],
+    drag: ["Drag to turn the view", "ลากเพื่อหมุนมุมมอง"],
+    laneInstall: ["Installing a package", "ติดตั้งแพ็กเกจ"], laneAi: ["AI agent", "AI agent"], laneProd: ["Going to production", "เข้า production"], laneWatch: ["Watching the machine", "เฝ้าดูเครื่อง"],
+    slabT: ["Machine check", "ตรวจเครื่อง"],
+    slab1: ["collectors → rules → findings → one verdict", "collectors → rules → findings → ผลเดียว"],
+    slab2: ["high or critical → BLOCK · medium → WARN", "high ขึ้นไป → BLOCK · medium → WARN"],
+    slab3: ["sealed with the OS keychain · reused for 2 minutes", "seal ด้วย keychain ของระบบ · ใช้ซ้ำได้ 2 นาที"],
+    slab4: ["an open incident is always BLOCK", "มี incident เปิดอยู่ = BLOCK เสมอ"],
+    termT: ["Terminal", "เทอร์มินัล"], termHint: ["shortened from real output", "ย่อมาจากข้อความจริง"], clear: ["clear", "ล้าง"],
+    s1t: ["It knows your machine", "รู้จักเครื่องของคุณ"],
+    s1: ["vswarm scan lists what can run on its own: login jobs, shell files, packages, extensions, MCP servers, agent hooks, ssh keys. It compares them with your clean starting point (vswarm baseline). vswarm watch on checks again in the background and the moment an important file changes.",
+         "vswarm scan เก็บรายการสิ่งที่รันเองได้ เช่น login job, shell rc, แพ็กเกจ, ส่วนขยาย, MCP server, hook ของ agent และกุญแจ ssh แล้วเทียบกับจุดเริ่มต้นที่สะอาด (vswarm baseline) ส่วน vswarm watch on ตรวจซ้ำเบื้องหลัง และตรวจทันทีที่ไฟล์สำคัญเปลี่ยน"],
+    s2t: ["It stops things on the way in", "กันของไม่ดีตั้งแต่ทางเข้า"],
+    s2: ["vswarm guard on checks npm, pip, brew and the rest before an install script runs. vswarm try runs code someone sent you in a sandbox with no home folder and no network. vswarm agents --inspect reads what an MCP server tells the model.",
+         "vswarm guard on ตรวจ npm, pip, brew และตัวอื่นก่อน install script จะได้รัน vswarm try รันโค้ดที่คนอื่นส่งมาใน sandbox ที่ไม่เห็น home และ network ส่วน vswarm agents --inspect อ่านสิ่งที่ MCP server บอก model"],
+    s3t: ["It guards the doors to production", "เฝ้าประตู production"],
+    s3: ["vswarm gate puts a check in front of ssh, aws, kubectl and tools like psql. vswarm agent keeps the key itself: it signs only while the machine passes, whatever client asks. vswarm hook install claude makes Claude Code ask first.",
+         "vswarm gate วางจุดตรวจไว้หน้า ssh, aws, kubectl และเครื่องมืออย่าง psql ส่วน vswarm agent ถือกุญแจไว้เอง และเซ็นต์ให้เฉพาะตอนที่เครื่องผ่าน ไม่ว่าโปรแกรมไหนจะขอ และ vswarm hook install claude ทำให้ Claude Code ต้องถามก่อนรันคำสั่ง"],
+    s4t: ["It helps when something got in", "ช่วยตอนโดนจริง"],
+    s4: ["vswarm respond locks every door to production at once, keeps the suspicious files with SHA-256 hashes, lists the credentials to rotate, and asks before each cleanup step. Nothing is sent anywhere.",
+         "vswarm respond ล็อกทุกประตูเข้า production ทันที เก็บไฟล์ต้องสงสัยพร้อม SHA-256 บอกรายการ credential ที่ต้องเปลี่ยน และถามก่อนลบทุกขั้น โดยไม่ส่งข้อมูลออกไปไหน"],
+    limT: ["What it can't do", "สิ่งที่ทำไม่ได้"],
+    lim1: ["It is not antivirus or EDR. Malware already running as you can switch it off. It is good at the step before: keeping the bad thing out, and keeping production keys away from a machine that looks wrong.",
+           "vswarm ไม่ใช่ antivirus หรือ EDR มัลแวร์ที่รันอยู่แล้วในชื่อคุณปิด vswarm ได้ จุดแข็งคือขั้นก่อนหน้านั้น คือกันของไม่ดีไม่ให้เข้ามา และไม่ให้เครื่องที่ดูผิดปกติได้ใช้กุญแจ production"],
+    lim2: ["A program that ignores ~/.ssh/config walks past the gate. That is what the vault is for: try ssh -F /dev/null with the key as a file on disk.",
+           "โปรแกรมที่ไม่อ่าน ~/.ssh/config เดินผ่าน gate ได้ vault มีไว้กันกรณีนี้ ลองกด ssh -F /dev/null ตอนที่เลือกกุญแจเป็นไฟล์บนดิสก์"],
+    lim3: ["The Claude Code hook sees Bash commands only. A file changed through another tool is caught by the next check, not by the hook.",
+           "hook ของ Claude Code เห็นเฉพาะคำสั่ง Bash ถ้าไฟล์ถูกแก้ผ่านเครื่องมืออื่น การตรวจรอบถัดไปจะเห็นเอง แต่ hook จะไม่เห็น"],
+    foot: ["Part of vswarm · the logic here follows src/sec/types.ts (verdictOf), src/sec/gate.ts and src/sec/hook.ts · <a href=\"../README.md\">README</a> · <a href=\"guide.md\">Guide</a>",
+           "ส่วนหนึ่งของ vswarm · ตรรกะในหน้านี้ทำตาม src/sec/types.ts (verdictOf), src/sec/gate.ts และ src/sec/hook.ts · <a href=\"../README.th.md\">README</a> · <a href=\"guide.th.md\">คู่มือ</a>"],
+  };
+  const N = {
+    dev:   [["You", "คุณ"], "npm install …"],
+    guard: [["Install guard", "Install guard"], "OSV · look-alikes · scripts"],
+    pkg:   [["Installed", "ติดตั้งแล้ว"], "npm ran"],
+    ai:    [["AI agent", "AI agent"], "Claude Code · Bash"],
+    hook:  [["Hook", "Hook"], "PreToolUse"],
+    run:   [["Command runs", "คำสั่งได้รัน"], "the agent's own rules"],
+    cli:   [["ssh client", "ssh client"], "ssh prod"],
+    gate:  [["ssh gate", "ssh gate"], "Match exec preflight"],
+    agent: [["vswarm agent", "vswarm agent"], "signs while it passes"],
+    prod:  [["Production", "Production"], "prod-db · 10.0.0.12"],
+    change:[["Machine changes", "เครื่องเปลี่ยน"], "files · jobs · packages"],
+    watch: [["watch", "watch"], "background + real-time"],
+  };
+  let lang = (navigator.language || "").toLowerCase().startsWith("th") ? 1 : 0;
+  try { const s = localStorage.getItem("vswarm-how-lang"); if (s === "0" || s === "1") lang = Number(s); } catch {}
+  const tr = (k) => T[k][lang];
+
+  // ── layout of the two floors (900 × 420 each)
+  const POS = { dev: [20, 30], guard: [250, 30], pkg: [700, 30], ai: [20, 150], hook: [250, 150], run: [700, 150], cli: [20, 270], gate: [250, 270], agent: [480, 270], prod: [700, 270] };
+  const LOW = { change: [20, 352], watch: [250, 352] };
+  const TOP_EDGES = {
+    "dev-guard": "M200 59 H250", "guard-pkg": "M430 59 H700",
+    "ai-hook": "M200 179 H250", "hook-run": "M430 179 H700",
+    "cli-gate": "M200 299 H250", "gate-agent": "M430 299 H480", "agent-prod": "M660 299 H700",
+    "by-agent": "M110 328 C110 400, 560 400, 570 330", "by-prod": "M110 270 C110 236, 790 236, 790 268",
+  };
+  const LOW_EDGES = { "change-watch": "M200 381 H250", "watch-slab": "M340 352 V330" };
+  const BEAMS = { hook: [340, 179], gate: [340, 299], agent: [570, 299] };
+
+  const NS = "http://www.w3.org/2000/svg";
+  const mk = (tag, attrs, parent) => { const e = document.createElementNS(NS, tag); for (const k in attrs) e.setAttribute(k, attrs[k]); parent.appendChild(e); return e; };
+  const $ = (id) => document.getElementById(id);
+  const edges = {}, nodes = {}, beams = {}, packets = {};
+  for (const [svgId, set] of [["svg-top", TOP_EDGES], ["svg-low", LOW_EDGES]]) {
+    const svg = $(svgId);
+    for (const [id, d] of Object.entries(set)) edges[id] = mk("path", { d, class: `edge${id.startsWith("by-") ? " by" : ""}` }, svg);
+    packets[svgId] = mk("circle", { r: 7, class: "packet" }, svg);
+  }
+  const place = (floor, map) => { for (const [id, [x, y]] of Object.entries(map)) { const d = document.createElement("div"); d.className = "node"; d.style.left = x + "px"; d.style.top = y + "px"; d.innerHTML = "<b></b><small></small>"; $(floor).appendChild(d); nodes[id] = d; } };
+  place("top", POS); place("low", LOW);
+  for (const [id, [x, y]] of Object.entries(BEAMS)) { const b = document.createElement("div"); b.className = "beam"; b.style.left = x + "px"; b.style.top = y + "px"; b.appendChild(document.createElement("i")); $("low").appendChild(b); beams[id] = b; }
+
+  function paint() {
+    document.documentElement.lang = lang ? "th" : "en";
+    document.querySelectorAll("[data-t]").forEach((e) => { const v = tr(e.dataset.t); if (e.dataset.t === "foot") e.innerHTML = v; else e.textContent = v; });
+    for (const [id, [t, s]] of Object.entries(N)) { nodes[id].querySelector("b").textContent = t[lang]; nodes[id].querySelector("small").textContent = s; }
+    $("lang-en").setAttribute("aria-pressed", String(!lang)); $("lang-th").setAttribute("aria-pressed", String(!!lang));
+    renderVerdict();
+  }
+  $("lang-en").onclick = () => { lang = 0; try { localStorage.setItem("vswarm-how-lang", "0"); } catch {} paint(); };
+  $("lang-th").onclick = () => { lang = 1; try { localStorage.setItem("vswarm-how-lang", "1"); } catch {} paint(); };
+
+  // ── the verdict, as vswarm computes it: verdictOf (types.ts), verdictNow (gate.ts: a lock is BLOCK), the WARN policy (policy.ts)
+  const state = { policy: "allow", vault: true };
+  const sevs = () => [$("f-hook").checked && "medium", $("f-key").checked && "medium", $("f-job").checked && "high"].filter(Boolean);
+  const locked = () => $("f-lock").checked;
+  const verdict = () => locked() || sevs().includes("high") ? "block" : sevs().length ? "warn" : "pass";
+  const allowed = (v) => v === "pass" || (v === "warn" && state.policy === "allow");
+  function renderVerdict() {
+    const v = verdict(), s = sevs(), med = s.filter((x) => x === "medium").length, high = s.filter((x) => x === "high").length;
+    $("vcard").className = `vcard ${v}`;
+    $("vname").textContent = { pass: ["PASS · Safe", "PASS · ปลอดภัย"], warn: ["WARN · Check this", "WARN · ควรดู"], block: ["BLOCK · Stop", "BLOCK · หยุด"] }[v][lang];
+    const doors = allowed(v) ? ["production: open", "production: เปิด"][lang] : ["production: closed", "production: ปิด"][lang];
+    const parts = [];
+    if (locked()) parts.push(["locked by vswarm respond", "ล็อกโดย vswarm respond"][lang]);
+    if (high) parts.push(`high ${high}`);
+    if (med) parts.push(`medium ${med}`);
+    if (!parts.length) parts.push(["nothing to look at", "ไม่มีอะไรต้องดู"][lang]);
+    $("vwhy").textContent = `${parts.join(" · ")} · ${doors}`;
+    $("vp").className = `vp ${v}`; $("vp").textContent = v.toUpperCase();
+  }
+
+  // ── the view: drag to turn, 3D and flat presets, scaled to fit
+  const world = $("world"), box = $("box");
+  const view = { rx: 64, rz: -18 };
+  let scale = 1;
+  const apply = () => { world.style.transform = `scale(${scale}) rotateX(${view.rx}deg) rotateZ(${view.rz}deg) translateZ(-110px)`; };
+  const fit = () => { scale = Math.min(1, (box.clientWidth - 24) / 980); apply(); };
+  addEventListener("resize", fit);
+  $("v-3d").onclick = () => { view.rx = 64; view.rz = -18; apply(); };
+  $("v-flat").onclick = () => { view.rx = 0; view.rz = 0; apply(); };
+  let drag = null;
+  box.addEventListener("pointerdown", (e) => { if (e.target.closest("button")) return; drag = { x: e.clientX, y: e.clientY, rx: view.rx, rz: view.rz }; world.classList.add("dragging"); box.setPointerCapture(e.pointerId); });
+  box.addEventListener("pointermove", (e) => { if (!drag) return; view.rz = drag.rz + (e.clientX - drag.x) * 0.3; view.rx = Math.max(0, Math.min(80, drag.rx - (e.clientY - drag.y) * 0.3)); apply(); });
+  const end = () => { drag = null; world.classList.remove("dragging"); };
+  box.addEventListener("pointerup", end); box.addEventListener("pointercancel", end);
+
+  // ── terminal
+  const term = $("term");
+  const log = (cls, en, th) => { const d = document.createElement("div"); d.className = cls; d.textContent = lang && th ? th : en; term.appendChild(d); term.scrollTop = term.scrollHeight; };
+  $("clear").onclick = () => { term.textContent = ""; };
+
+  // ── playing a path: a packet runs along each edge, beams go down to the slab and back
+  const reduce = matchMedia("(prefers-reduced-motion: reduce)").matches;
+  const sleep = (ms) => new Promise((r) => setTimeout(r, reduce ? 0 : ms));
+  function runPacket(id) {
+    const path = edges[id], dot = packets[path.ownerSVGElement.id];
+    if (reduce) return Promise.resolve();
+    const len = path.getTotalLength(), t0 = performance.now(), dur = Math.max(320, Math.min(900, len * 2.2));
+    dot.style.opacity = 1;
+    // A browser that holds back animation frames (a background tab) still finishes the path, from the timer.
+    return new Promise((res) => {
+      let done = false;
+      const finish = () => { if (done) return; done = true; dot.style.opacity = 0; res(); };
+      const f = (t) => { if (done) return; const k = Math.min(1, (t - t0) / dur), p = path.getPointAtLength(len * k); dot.setAttribute("cx", p.x); dot.setAttribute("cy", p.y); k < 1 ? requestAnimationFrame(f) : finish(); };
+      requestAnimationFrame(f);
+      setTimeout(finish, dur + 150);
+    });
+  }
+  let busy = false;
+  function reset() {
+    Object.values(edges).forEach((e) => e.classList.remove("on", "ok", "bad", "warn"));
+    Object.values(nodes).forEach((n) => n.classList.remove("on", "ok", "bad", "warn", "skip"));
+    Object.values(beams).forEach((b) => b.classList.remove("on", "go"));
+    $("slab").classList.remove("pulse");
+  }
+  async function play(steps) {
+    busy = true; document.querySelectorAll(".act").forEach((b) => (b.disabled = true));
+    reset();
+    for (const s of steps) {
+      if (s.e) { edges[s.e].classList.add("on"); await runPacket(s.e); edges[s.e].classList.remove("on"); edges[s.e].classList.add(s.ec || "on"); }
+      if (s.beam) { const b = beams[s.beam]; b.classList.add("on"); b.classList.remove("go"); void b.offsetWidth; b.classList.add("go"); $("slab").classList.add("pulse"); await sleep(500); }
+      if (s.slab) $("slab").classList.add("pulse");
+      if (s.n) { nodes[s.n].classList.remove("on", "ok", "bad", "warn"); nodes[s.n].classList.add(s.c || "on"); }
+      (s.log || []).forEach((l) => log(...l));
+      await sleep(s.beam ? 520 : 260);
+    }
+    busy = false; document.querySelectorAll(".act").forEach((b) => (b.disabled = false));
+  }
+  const tone = (v) => (v === "pass" ? "ok" : v === "warn" ? "warn" : "bad");
+  const V = (v) => v.toUpperCase();
+  const why = (v) => v === "block" ? "BLOCK" : ["WARN, and the policy refuses WARN", "WARN และนโยบายไม่ให้ WARN ผ่าน"][lang];
+
+  const S = {
+    ssh() {
+      const v = verdict(), ok = allowed(v);
+      const s = [
+        { n: "cli", log: [["cmd", "ssh prod"]] },
+        { e: "cli-gate", n: "gate", log: [["dim", "~/.ssh/config: Match originalhost prod !exec \"vswarm preflight --quiet --host %h\""]] },
+        { beam: "gate", log: [[tone(v), `preflight → ${V(v)}`]] },
+      ];
+      if (!ok) return [...s, { n: "gate", c: "bad", log: [["bad", "vswarm: not connecting: this machine did not pass preflight (the reason is above) · vswarm why"], ["note", `→ stopped at the gate: ${why(v)}`, `→ หยุดที่ gate เพราะ ${why(v)}`]] }];
+      s.push({ n: "gate", c: "ok" });
+      if (state.vault) s.push(
+        { e: "gate-agent", ec: "ok", n: "agent", log: [["dim", "IdentityAgent ~/.vswarm/agent/agent.sock: sign this login"]] },
+        { beam: "agent", log: [["dim", "the agent checks the machine itself (a forged last result does not count)", "agent ตรวจเครื่องเอง (ผลล่าสุดที่ถูกปลอมใช้ไม่ได้)"]] },
+        { n: "agent", c: "ok", log: [["ok", `agent: signed · ${V(v)} · written to the sealed audit log`]] });
+      else s.push({ e: "gate-agent", ec: "warn", n: "agent", c: "skip", log: [["warn", "using the key file ~/.ssh/prod_ed25519 directly: the agent is not involved", "ใช้ไฟล์กุญแจ ~/.ssh/prod_ed25519 ตรงๆ agent ไม่ได้เกี่ยว"]] });
+      return [...s, { e: "agent-prod", ec: "ok", n: "prod", c: "ok", log: [["ok", "Welcome to Ubuntu · deploy@prod-db"]] }];
+    },
+    bypass() {
+      const v = verdict(), ok = allowed(v);
+      const s = [{ n: "cli", log: [["cmd", "ssh -F /dev/null deploy@10.0.0.12"], ["dim", "-F /dev/null: ~/.ssh/config is not read, so the gate is never asked", "-F /dev/null: ไม่อ่าน ~/.ssh/config จึงไม่เจอ gate"]] }, { n: "gate", c: "skip" }];
+      if (state.vault) {
+        s.push({ e: "by-agent", n: "agent", log: [["dim", "no key file on disk: ssh has to ask the agent (SSH_AUTH_SOCK)", "ไม่มีไฟล์กุญแจบนดิสก์ ssh ต้องขอ agent (SSH_AUTH_SOCK)"]] }, { beam: "agent", log: [[tone(v), `agent: machine check → ${V(v)}`]] });
+        if (!ok) return [...s, { n: "agent", c: "bad", log: [["bad", "sign_and_send_pubkey: signing failed for ED25519 \"prod\" from agent: agent refused operation"], ["note", "→ past the gate, but the key will not sign", "→ ข้าม gate ได้ แต่กุญแจไม่ยอมเซ็นต์"]] }];
+        return [...s, { n: "agent", c: "ok", log: [["ok", "agent: signed, the machine passes"]] }, { e: "agent-prod", ec: "ok", n: "prod", c: "ok", log: [["ok", "Welcome to Ubuntu · deploy@prod-db"]] }];
+      }
+      return [...s, { e: "by-prod", ec: ok ? "warn" : "bad", n: "prod", c: ok ? "warn" : "bad", log: ok
+        ? [["warn", "in with the key file, and nothing checked the machine", "เข้าได้ด้วยไฟล์กุญแจ โดยไม่มีอะไรเช็คเครื่องเลย"], ["note", "→ this is why keys go in the vault: vswarm agent protect ~/.ssh/prod_ed25519", "→ นี่คือเหตุผลที่ต้องย้ายกุญแจเข้า vault: vswarm agent protect ~/.ssh/prod_ed25519"]]
+        : [["bad", `in, although the machine is ${V(v)}`, `เข้าได้ ทั้งที่เครื่องเป็น ${V(v)}`], ["note", "→ a key file works from anywhere; the gate alone cannot stop it", "→ ไฟล์กุญแจใช้ได้จากทุกที่ gate อย่างเดียวกันไม่ได้"]] }];
+    },
+    axois: () => [
+      { n: "dev", log: [["cmd", "npm install axois"]] },
+      { e: "dev-guard", n: "guard", log: [["dim", "vswarm guard: checking axois before npm runs anything"]] },
+      { n: "guard", c: "bad", log: [["bad", "✖ npm axois: known malicious (OSV) · looks like axios"], ["bad", "Nothing was installed. (exit 3)"], ["note", "→ not one line of its install script ran", "→ install script ไม่ได้รันแม้แต่บรรทัดเดียว"]] },
+    ],
+    react: () => [
+      { n: "dev", log: [["cmd", "npm install react"]] },
+      { e: "dev-guard", ec: "ok", n: "guard", c: "ok", log: [["dim", "vswarm guard: react · not in OSV · not a look-alike · no install script"]] },
+      { e: "guard-pkg", ec: "ok", n: "pkg", c: "ok", log: [["ok", "added 2 packages in 1s"], ["note", "→ the guard judges the package, not the machine", "→ guard ตัดสินที่ตัวแพ็กเกจ ไม่ได้ดูผลตรวจเครื่อง"]] },
+    ],
+    aiSsh() {
+      const v = verdict(), ok = allowed(v);
+      const s = [
+        { n: "ai", log: [["cmd", "(Claude Code) Bash: ssh prod uptime"]] },
+        { e: "ai-hook", n: "hook", log: [["dim", "vswarm hook claude: this reaches production, so it asks for the verdict"]] },
+        { beam: "hook", log: [[tone(v), `→ ${V(v)}`]] },
+      ];
+      if (!ok) return [...s, { n: "hook", c: "bad", log: [["bad", "deny · If you are an AI agent: vswarm stopped this on purpose. Do not try another way in. Tell the user."]] }];
+      return [...s, { n: "hook", c: "ok", log: [["dim", "the hook says nothing: Claude Code's own permissions decide (it never answers allow)", "hook ไม่ตอบอะไร ให้สิทธิ์ของ Claude Code ตัดสินเอง (hook ไม่เคยตอบ allow)"]] },
+        { e: "hook-run", ec: "ok", n: "run", c: "ok", log: [["note", "→ the ssh still meets the gate and the agent, as if you typed it", "→ คำสั่ง ssh ยังต้องผ่าน gate และ agent เหมือนตอนคุณพิมพ์เอง"]] }];
+    },
+    aiOk: () => [
+      { n: "ai", log: [["cmd", "(Claude Code) Bash: vswarm ok 1"]] },
+      { e: "ai-hook", n: "hook", log: [["dim", "vswarm hook claude: this weakens vswarm"]] },
+      { n: "hook", c: "bad", log: [["bad", "deny · vswarm: not run, because it weakens vswarm's protection. That is the person's decision, not the agent's."], ["note", "→ no verdict needed: these are always refused; the person types them in their own terminal", "→ ไม่ต้องดูผลตรวจ คำสั่งแบบนี้ถูกปฏิเสธเสมอ คนต้องพิมพ์เองใน Terminal"]] },
+    ],
+    aiTest: () => [
+      { n: "ai", log: [["cmd", "(Claude Code) Bash: npm test"]] },
+      { e: "ai-hook", ec: "ok", n: "hook", c: "ok", log: [["dim", "vswarm hook claude: not production, does not weaken vswarm"]] },
+      { e: "hook-run", ec: "ok", n: "run", c: "ok", log: [["ok", "479 pass · 0 fail"], ["note", "→ ordinary commands are left alone, with no wait", "→ คำสั่งทั่วไปไม่ถูกยุ่ง และไม่ต้องรอ"]] },
+    ],
+  };
+  const gap = () => { if (term.childElementCount) log("dim", " "); };
+  document.querySelectorAll(".act").forEach((b) => b.addEventListener("click", () => { if (busy) return; gap(); play(S[b.dataset.s]()); }));
+
+  const seg = (a, b, on) => { $(a).setAttribute("aria-pressed", String(on)); $(b).setAttribute("aria-pressed", String(!on)); };
+  $("p-allow").onclick = () => { state.policy = "allow"; seg("p-allow", "p-refuse", true); renderVerdict(); };
+  $("p-refuse").onclick = () => { state.policy = "refuse"; seg("p-allow", "p-refuse", false); renderVerdict(); };
+  $("k-vault").onclick = () => { state.vault = true; seg("k-vault", "k-file", true); };
+  $("k-file").onclick = () => { state.vault = false; seg("k-vault", "k-file", false); };
+
+  const onToggle = {
+    "f-job": () => [
+      { n: "change", log: [["dim", "+ ~/Library/LaunchAgents/com.update.helper.plist"]] },
+      { e: "change-watch", n: "watch", log: [["dim", "watch (real-time): a login job changed → checking now"]] },
+      { e: "watch-slab", slab: 1, log: [["bad", "BLOCK · New login job: com.update.helper · notified · vswarm why 1"]] },
+    ],
+    "f-lock": () => [{ slab: 1, log: [["cmd", "vswarm respond"], ["bad", "production locked: the ssh gate, the agent, aws and kube refuse until vswarm unlock"]] }],
+  };
+  ["f-hook", "f-key", "f-job", "f-lock"].forEach((id) => $(id).addEventListener("change", (ev) => {
+    renderVerdict();
+    if (busy) return;
+    gap();
+    if (ev.target.checked && onToggle[id]) return play(onToggle[id]());
+    log("dim", ev.target.checked ? "the next check finds it" : id === "f-lock" ? "vswarm unlock (typed by the person)" : "vswarm ok / vswarm fix: no longer counted",
+               ev.target.checked ? "การตรวจรอบถัดไปเจอเรื่องนี้" : id === "f-lock" ? "vswarm unlock (คนพิมพ์เอง)" : "vswarm ok / vswarm fix: ไม่นับเรื่องนี้แล้ว");
+    log(tone(verdict()), `→ ${V(verdict())}`);
+  }));
+
+  paint(); fit();
+  log("dim", "This machine now: a new agent hook and keys without a passphrase → WARN, and WARN is let through.", "เครื่องนี้ตอนนี้: hook ใหม่ และกุญแจไม่มี passphrase → WARN และนโยบายให้ WARN ผ่าน");
+  log("dim", "Press a scenario above the diagram.", "กดปุ่มสถานการณ์ด้านบนแผนภาพ");
+})();
+</script>
+</body>
+</html>

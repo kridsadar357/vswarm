@@ -46,6 +46,16 @@ vswarm เป็นเครื่องมือ command line ฟรี รั�
 
 <sub>ผลจากการรันจริงกับ `test/fixtures/fake-interview` ซึ่งเป็นของจำลองที่ไม่มีอันตราย เลียนแบบ repo สัมภาษณ์งานปลอมที่ใช้โจมตีกันจริง</sub>
 
+## หลักการทำงาน
+
+vswarm ตรวจเครื่องแล้วสรุปเป็นผลเดียว คือ PASS, WARN หรือ BLOCK ทุกประตูที่จะเข้า production (ssh gate, กุญแจใน
+`vswarm agent`, gate ของ AWS และ kube, hook ของ Claude Code) จะถามผลนี้ก่อนปล่อยให้ผ่าน
+[docs/how-it-works.html](docs/how-it-works.html) แสดงเรื่องนี้เป็น flowchart 3 มิติที่กดเล่นได้ ลองเปิดปิดสิ่งที่เครื่องเจอ
+แล้วส่ง `ssh`, `npm install` หรือคำสั่งของ AI agent ผ่านเข้าไปดู GitHub จะแสดงไฟล์นี้เป็น source ให้ clone แล้วเปิดใน
+browser (`open docs/how-it-works.html`) ไม่ต้องใช้อินเทอร์เน็ต และสลับเป็นภาษาไทยได้ที่มุมขวาบน
+
+[![flowchart 3 มิติ: คำขอวิ่งบนชั้นบน การตรวจเครื่องอยู่ชั้นล่าง gate, agent และ hook ถามผลจากชั้นล่าง](docs/img/how-it-works.png)](docs/how-it-works.html)
+
 ## ไม่มี vswarm กับมี vswarm
 
 | เหตุการณ์ | ไม่มี vswarm | มี vswarm |
