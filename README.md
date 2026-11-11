@@ -51,11 +51,11 @@ your machine is let near production.
 
 vswarm checks the machine and sums it up in one verdict: PASS, WARN or BLOCK. Every door to production (the ssh
 gate, the key in `vswarm agent`, the AWS and kube gates, the Claude Code hook) asks for that verdict before it lets
-anything through. [docs/how-it-works.html](docs/how-it-works.html) shows it as a 3D flowchart you can play with:
-turn findings on and off, then send `ssh`, `npm install` or an AI agent's command through it. GitHub shows that file
-as source; open it in a browser from a clone (`open docs/how-it-works.html`). It needs no network.
+anything through. [The 3D flowchart](https://kridsadar357.github.io/vswarm/how-it-works.html) shows it as a diagram you can play with: turn findings on and
+off, then send `ssh`, `npm install` or an AI agent's command through it. From a clone it also opens offline:
+`open docs/how-it-works.html`.
 
-[![The 3D flowchart: requests on the top floor, the machine check underneath, the gate, the agent and the hook asking it](docs/img/how-it-works.png)](docs/how-it-works.html)
+[![The 3D flowchart: requests on the top floor, the machine check underneath, the gate, the agent and the hook asking it](docs/img/how-it-works.png)](https://kridsadar357.github.io/vswarm/how-it-works.html)
 
 ## Without it, and with it
 
