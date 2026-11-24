@@ -143,7 +143,7 @@ interface ToolDef {
   run: (a: Record<string, unknown>) => Promise<string>;
 }
 
-const READ = { readOnlyHint: true, destructiveHint: false, openWorldHint: false };
+const READ = { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false };
 
 export const TOOLS: ToolDef[] = [
   {
@@ -178,7 +178,7 @@ export const TOOLS: ToolDef[] = [
     run: (a) => refusalText(typeof a.command === "string" ? a.command : undefined),
   },
   {
-    name: "ask_human", annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false, title: "Ask the person" },
+    name: "ask_human", annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false, title: "Ask the person" },
     description: "Show the person a Yes/No question in a dialog on their desktop, marked as coming from you, and return their answer. For when they are not watching the chat. Their answer is for you only: it does not approve anything in vswarm, whose own commands ask them separately. At most one question every 20 seconds.",
     inputSchema: { type: "object", properties: { question: { type: "string", maxLength: 500, description: "A short Yes/No question, with what happens on each answer" } }, required: ["question"], additionalProperties: false },
     run: (a) => askHuman(String(a.question ?? "")),

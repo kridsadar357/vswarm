@@ -63,6 +63,8 @@ describe("vswarm mcp: the protocol", () => {
       expect(x.run).toBeUndefined();
       expect(x.inputSchema.type).toBe("object");
       if (x.name !== "ask_human") expect(x.annotations.readOnlyHint).toBe(true);
+      // All four hints, each a boolean: some MCP directories reject a tool that leaves one out.
+      for (const hint of ["readOnlyHint", "destructiveHint", "idempotentHint", "openWorldHint"]) expect([x.name, hint, typeof x.annotations[hint]]).toEqual([x.name, hint, "boolean"]);
     }
     expect(names.join(" ")).not.toMatch(/ok|accept|unlock|policy|gate|baseline|off|remove/);
   });
