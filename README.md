@@ -39,6 +39,15 @@ AWS session. So attackers stopped going for the server. They go for your laptop:
 
 None of this needs an exploit. You run it yourself, it runs as you, and what it takes looks like you to the server.
 
+It already happened, at scale. In August 2025 new versions of the `nx` packages ran an install script that collected
+developers' tokens and keys, and asked the AI coding CLIs it found on the machine to search the disk for more. A few
+weeks later the Shai-Hulud worm did the same through hundreds of npm packages, publishing itself again with every
+token it stole. Both arrived as fresh versions with an install script: the two things vswarm's install guard holds
+back and reads before anything runs.
+
+**Try it in 30 seconds.** Install (below), open a new terminal and run `vswarm scan`. Nothing to set up first, nothing
+leaves the machine, and it changes nothing: you see what can run code, start by itself or hold access on your laptop.
+
 vswarm is a free, local command line tool for macOS, Linux and Windows. It steps in at the few moments where that
 happens: before an install, before running code you got from someone, before an AI tool gets a new server, and before
 your machine is let near production.
