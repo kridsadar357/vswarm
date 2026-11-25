@@ -238,6 +238,7 @@ export const COMMANDS: [string, string][] = [
   ["mcp", "MCP server for AI agents: read vswarm's state, ask you"],
   ["hook", "Claude Code asks vswarm before shell commands"],
   ["feed", "follow a signed list of dangerous packages and servers"],
+  ["notify", "send vswarm's alerts to your phone (Thak), off until you turn it on"],
   ["preflight", "gate before production access (ssh/aws/kubectl)"],
   ["ui", "open the dashboard in your browser"],
   ["why", "each finding with the command to fix or accept it"],

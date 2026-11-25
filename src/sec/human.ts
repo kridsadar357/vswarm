@@ -107,6 +107,8 @@ export async function confirmWeakening(cmdline: string, opt: { env?: Record<stri
     throw new Error(t("cli.human.refused", { cmd: cmdline }));
   }
   const io = opt.io ?? (await defaultAsker());
+  // Asked on the real machine: the phone hears that a question is waiting (only the command's first words).
+  if (!opt.io) await (await import("./notify")).send((await import("./notify")).askEvent(cmdline));
   const tty = opt.tty ?? (!!process.stdin.isTTY && !!process.stderr.isTTY);
   if (tty && !agentSaysSo(env)) {
     const a = (await io.terminal(t("cli.human.askTerm", { cmd: cmdline }))).trim().toLowerCase();

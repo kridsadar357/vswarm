@@ -27,7 +27,7 @@ const PROD: Record<string, RegExp | true> = {
 };
 
 /** vswarm commands that weaken protection (the ones human.ts asks about), installed or run from a checkout (cli.ts). */
-const WEAKEN = /(?:\bvswarm|\bcli\.ts)\s+(?:ok|accept|baseline|unlock|uninstall|setup)\b|(?:\bvswarm|\bcli\.ts)\s+policy\s+warn\s+allow\b|(?:\bvswarm|\bcli\.ts)\s+(?:gate|guard|watch|agent|team|canary|feed|trust|hook)\b[^;&|\n]*\b(?:remove|off|unprotect|leave|pin|--off|--allow-warn)\b/;
+const WEAKEN = /(?:\bvswarm|\bcli\.ts)\s+(?:ok|accept|baseline|unlock|uninstall|setup)\b|(?:\bvswarm|\bcli\.ts)\s+policy\s+warn\s+allow\b|(?:\bvswarm|\bcli\.ts)\s+(?:gate|guard|watch|agent|team|canary|feed|trust|hook|notify)\b[^;&|\n]*\b(?:remove|off|unprotect|leave|pin|--off|--allow-warn)\b/;
 /** vswarm's own folder, or the ssh config where the gate and the agent blocks are. Quotes around a word are ignored. */
 const PROTECTED = (word: string) => /(^|\/)\.vswarm(\/|$)|(^|\/)\.ssh\/config$/.test(word.replace(/^['"]|['"]$/g, "").replace(/^(\$HOME|\$\{HOME\})/, "~"));
 /** Commands that change every path they are given; those that change only the last one (the destination); in place with -i. */

@@ -189,7 +189,8 @@ same code as `baseline`, `ok`, `fix`, `watch on`, `guard on`, `agents --inspect`
   through the proxy (without `--localhost`), or reads another process's files through `/proc`.
 - Ways to make `vswarm update` or the installer accept a release that is not signed by a pinned key, or an older one.
 - Ways to make vswarm run code, change files, or send data it should not (it should only send package names and
-  versions to api.osv.dev and the registries, and download package archives from the registries).
+  versions to api.osv.dev and the registries, download package archives from the registries, and, only after
+  `vswarm notify thak`, send summaries without paths or names to thak.app).
 - Archives that the package reader reads differently from npm (node-tar) or pip (tarfile, zipfile) without calling
   them damaged: a file the installer would write that vswarm does not see, or sees with other contents.
 - Archives that make the package reader write outside its folder, run anything, or exhaust memory or time past its

@@ -45,8 +45,8 @@ weeks later the Shai-Hulud worm did the same through hundreds of npm packages, p
 token it stole. Both arrived as fresh versions with an install script: the two things vswarm's install guard holds
 back and reads before anything runs.
 
-**Try it in 30 seconds.** Install (below), open a new terminal and run `vswarm scan`. Nothing to set up first, nothing
-leaves the machine, and it changes nothing: you see what can run code, start by itself or hold access on your laptop.
+**Try it in 30 seconds.** Install (below), open a new terminal and run `vswarm scan`. Nothing to set up first, it changes
+nothing, and only package names and versions leave the machine (to OSV; `--offline` skips that): you see what can run code, start by itself or hold access on your laptop.
 
 vswarm is a free, local command line tool for macOS, Linux and Windows. It steps in at the few moments where that
 happens: before an install, before running code you got from someone, before an AI tool gets a new server, and before
@@ -295,7 +295,8 @@ unless it matters, honest about its limits, open source, and nothing sent anywhe
 
 Everything stays on your machine, in `~/.vswarm`. No account, no telemetry. The network calls it makes: package names
 and versions to `api.osv.dev`, and with the guard on, the package you are installing to its own registry. Credential
-checks say where and what kind, never the value.
+checks say where and what kind, never the value. If you turn on alerts on your phone (`vswarm notify thak`), they go
+to Thak as a summary: verdict, counts and the command to run, never paths or names.
 
 ## Updates are signed
 

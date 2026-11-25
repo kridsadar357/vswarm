@@ -70,6 +70,12 @@ export function toAgent(env: Record<string, string | undefined> = process.env) {
   if (agentSaysSo(env)) line(c.amber(t("cli.pre.agent")));
 }
 
+/** A refusal, to the phone when notify is on: once per five minutes, and ssh waits at most two seconds for it. */
+async function tellPhone(verdict: string) {
+  const { refusedEvent, send } = await import("./notify");
+  await send(refusedEvent(verdict), { timeoutMs: 2000 });
+}
+
 /**
  * The verdict and what the policy makes of it. A WARN the policy refuses is said on stderr with the way out, so the
  * person at the terminal sees why ssh, aws or kubectl stopped.
@@ -79,11 +85,13 @@ export async function gateVerdict(opt: Parameters<typeof verdictNow>[0] & { stri
   const verdict = await verdictNow({ ...opt, policy });
   if (verdict === "block") {
     toAgent();
+    await tellPhone(verdict);
     return { verdict, allowed: false, code: 3, policy };
   }
   if (verdict === "warn" && (opt.strict || policy.warn === "refuse")) {
     line(c.amber(t("cli.pre.refused", { by: opt.strict ? "--strict" : t("cli.pre.policyWord") })) + c.dim(`${t("cli.pre.refusedHow")}${opt.strict ? "" : t("cli.pre.allowAgain")}`));
     toAgent();
+    await tellPhone(verdict);
     return { verdict, allowed: false, code: 2, policy };
   }
   return { verdict, allowed: true, code: 0, policy };

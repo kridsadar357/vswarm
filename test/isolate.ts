@@ -16,6 +16,9 @@ answerWith(async () => true);
 // at one and wait for someone to type. Commands the tests start inherit this too.
 process.env.VSWARM_NO_KEYBOARD = "1";
 
+// A Thak token in the shell that runs the tests must not turn notify on: nothing a test does reaches the phone.
+delete process.env.THAK_NOTIFY_TOKEN;
+
 // Words in English, whatever this machine's language or saved choice: tests that need Thai ask for it.
 process.env.VSWARM_LANG = "en";
 

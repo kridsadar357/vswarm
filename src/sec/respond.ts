@@ -255,6 +255,7 @@ export async function respond(ctx: Ctx, check: Check, ask: Ask, opt: { yes?: boo
   if (locked.unsealed) line(`  ${c.amber("!")} ${locked.unsealed}`);
   line(`  ${c.green("✔")} preflight now blocks production access from this machine until ${c.cyan("vswarm unlock")}`);
   line(`  ${c.dim("if a finding is critical, also disconnect from the network (Wi-Fi off) before going on")}`);
+  await (await import("./notify")).send((await import("./notify")).lockedEvent(id));
 
   line(`\n${c.bold("2  evidence")}`);
   await collectEvidence(inc, ctx);

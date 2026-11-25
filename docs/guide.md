@@ -1430,6 +1430,9 @@ installer `VSWARM_REPO`, `VSWARM_REF`.
   local unless you move them
 - with a feed, `vswarm feed add` / `update` download its three files from the address you gave (with the token from
   the variable you named, if any); the comparison happens here and nothing about this machine is sent
+- with `vswarm notify thak` (off until you run it), alerts go to thak.app as a summary: the verdict, counts by
+  severity, the command to run, an incident number, the first words of a command waiting for you, and the machine's
+  name. Never a path, a host name, a package name or a finding's text. `vswarm notify off` stops it and deletes the token
 - nothing else: no telemetry, and credential values are never read
 
 

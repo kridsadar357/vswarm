@@ -375,10 +375,11 @@ async function announce(r: Check, tell: (title: string, body: string) => Promise
   const fresh = r.findings.filter((f) => RANK[f.severity] >= RANK.medium && !told.has(f.id) && f.rule !== "secret");
   if (fresh.length) {
     const top = fresh.sort((a, b) => RANK[b.severity] - RANK[a.severity])[0];
-    await tell(
-      r.verdict === "block" ? "vswarm: production access blocked" : "vswarm: something changed",
-      `${top.title}${fresh.length > 1 ? ` (+${fresh.length - 1} more)` : ""}. Run: ${top.rule === "mcp-drift" || top.rule === "mcp-changed" ? "vswarm agents --inspect" : "vswarm diff"}`,
-    );
+    const cmd = top.rule === "mcp-drift" || top.rule === "mcp-changed" ? "vswarm agents --inspect" : "vswarm diff";
+    await tell(r.verdict === "block" ? "vswarm: production access blocked" : "vswarm: something changed", `${top.title}${fresh.length > 1 ? ` (+${fresh.length - 1} more)` : ""}. Run: ${cmd}`);
+    // The phone gets the counts and the command, not the finding's text (notify.ts).
+    const { send, verdictEvent } = await import("./notify");
+    await send(verdictEvent(r.verdict, fresh, cmd));
   }
   return { fresh, told: [...new Set([...told, ...fresh.map((f) => f.id)])].slice(-500) };
 }
@@ -394,6 +395,13 @@ export async function watchRun(): Promise<{ fresh: Finding[]; verdict: string }>
     const prev = watchState().state;
     const a = await announce(r, notify, prev);
     writePrivate(stateFile(), { ...prev, at: Date.now(), verdict: r.verdict, told: a.told, last: a.fresh[0]?.title ?? prev?.last, seen: now } satisfies State);
+    // Once a day (notify.ts keeps the time), where the machine stands, when notify is on.
+    const { digestEvent, notifyOn, send } = await import("./notify");
+    if (notifyOn()) {
+      const counts: Record<string, number> = {};
+      for (const f of r.findings) counts[f.severity] = (counts[f.severity] ?? 0) + 1;
+      await send(digestEvent(r.verdict, counts));
+    }
     await refreshRealtime();
     return { fresh: a.fresh, verdict: r.verdict };
   } finally {

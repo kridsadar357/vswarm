@@ -4,6 +4,16 @@ vswarm is in beta. Every release is a git tag signed by a key in [`trust/allowed
 `vswarm update` takes only those and never goes to a lower version. Full notes for each release are on the
 [releases page](https://github.com/kridsadar357/vswarm/releases).
 
+## 0.1.2
+
+- **`vswarm notify`: alerts on your phone through Thak.** `vswarm notify thak` asks for the token (pasted, not
+  shown, never on the command line where shell history keeps it). From then on a block or a new finding from the
+  watch, a refused production command, `respond` locking the machine, a question waiting for you, and a daily check
+  also arrive as a card. Only a summary goes out: verdict, counts, the command to run, the machine's name. Never a
+  path, a host name, a package name or a finding's text. Off until you turn it on; `notify off` asks a person.
+- MCP tools declare all four hints (`idempotentHint` was missing), as stricter MCP directories require.
+- The Claude Code hook treats `vswarm notify off` as weakening protection.
+
 ## 0.1.1
 
 Fixes from the first days of 0.1.0 on real machines, most of them Windows.
