@@ -64,13 +64,56 @@ export function commandsOf(line: string): string[][] {
   }).filter((w) => w.length);
 }
 
+/** A shell (or eval) that runs the quoted text after it: `bash -c "…"`, `powershell -Command "…"`, `eval "…"`. */
+const RUNS_QUOTED = /(?:(?:^|[\s;&|(/\\])(?:(?:ba|z|da|k)?sh|fish|pwsh|powershell|cmd)(?:\.exe)?(?:\s+-{1,2}\w+)*\s+(?:-[a-zA-Z]*c|-Command|\/c|\/C)|(?:^|[\s;&|(])eval)\s*$/;
+/** A shell reading a here-document as its script: `bash <<EOF`. */
+const SHELL_READS = /(?:^|[;&|\n(])\s*(?:\S*\/)?(?:(?:ba|z|da|k)?sh|fish|pwsh)\b[^;&|\n]*$/;
+
+/**
+ * The parts of a line the shell runs as commands: quoted text and here-documents are text (an argument to grep, a
+ * script for python, a help line in a file being written) unless a shell runs them (`bash -c "…"`, `eval`, `sh <<EOF`).
+ * `$(…)` and backquotes inside double quotes still run, so they stay. Text handed to another interpreter (python -c,
+ * node -e) is not read here; vswarm asks the person before a weakening command whoever starts it (human.ts).
+ */
+export function runnable(line: string): string {
+  let out = "";
+  for (let i = 0; i < line.length; ) {
+    const ch = line[i];
+    const doc = ch === "<" ? /^<<-?\s*(['"]?)(\w+)\1/.exec(line.slice(i)) : null;
+    if (doc) {
+      // The here-document starts on the next line and ends at a line holding only its word.
+      const start = line.indexOf("\n", i);
+      const end = start < 0 ? -1 : line.slice(start + 1).search(new RegExp(`^\\s*${doc[2]}\\s*$`, "m"));
+      const body = start < 0 ? "" : end < 0 ? line.slice(start + 1) : line.slice(start + 1, start + 1 + end);
+      const after = start < 0 ? line.length : end < 0 ? line.length : start + 1 + end + line.slice(start + 1 + end).search(/\n|$/);
+      out += line.slice(i + doc[0].length, start < 0 ? line.length : start) + "\n" + (SHELL_READS.test(out) ? body : "") + "\n";
+      i = after;
+      continue;
+    }
+    if (ch === "'" || ch === '"') {
+      let j = i + 1;
+      while (j < line.length && line[j] !== ch) j += ch === '"' && line[j] === "\\" ? 2 : 1;
+      const inside = line.slice(i + 1, j);
+      // One word in quotes is still that word to the shell: "vswarm" ok 1 runs vswarm.
+      if (RUNS_QUOTED.test(out) || !/\s/.test(inside)) out += ` ${inside} `;
+      else if (ch === '"') out += ` ${[...inside.matchAll(/\$\(([^)]*)\)|`([^`]*)`/g)].map((m) => `; ${m[1] ?? m[2]} ;`).join(" ")} `;
+      else out += " '' ";
+      i = j + 1;
+      continue;
+    }
+    out += ch;
+    i++;
+  }
+  return out;
+}
+
 export type Verdict = { kind: "prod"; what: string } | { kind: "weaken"; what: string } | undefined;
 
 /** What a command line is to vswarm. `gated` are the tools `vswarm gate cmd` guards (psql, mysql …). */
 export function classify(line: string, gated: string[] = []): Verdict {
   // Listing what was accepted only reads.
   line = line.replace(/(?:\bvswarm|\bcli\.ts)\s+(?:ok|accept)\s+--list\b/g, "");
-  if (WEAKEN.test(line)) return { kind: "weaken", what: "it weakens vswarm's protection" };
+  if (WEAKEN.test(runnable(line))) return { kind: "weaken", what: "it weakens vswarm's protection" };
   if (writesProtected(line)) return { kind: "weaken", what: "it changes vswarm's files or the ssh gate by hand" };
   for (const w of commandsOf(line)) {
     const name = w[0].split("/").pop()!;
