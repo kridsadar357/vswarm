@@ -13,6 +13,9 @@ vswarm is in beta. Every release is a git tag signed by a key in [`trust/allowed
   path, a host name, a package name or a finding's text. Off until you turn it on; `notify off` asks a person.
 - MCP tools declare all four hints (`idempotentHint` was missing), as stricter MCP directories require.
 - The Claude Code hook treats `vswarm notify off` as weakening protection.
+- The hook no longer refuses a command that only mentions a vswarm command in quoted text or a here-document (a
+  search, a file being written, a commit message). Run through `bash -c`, `eval`, `$(…)` or a shell reading a
+  here-document, it is still refused.
 
 ## 0.1.1
 
