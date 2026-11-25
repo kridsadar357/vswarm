@@ -44,7 +44,8 @@ interface Config {
 
 /** At most one of each per this many ms; findings are already told once each by the watch. */
 const QUIET: Partial<Record<Kind, number>> = { refused: 5 * 60_000, ask: 60_000, digest: 20 * 3600_000 };
-const ACCENT: Record<Level, string> = { info: "#3b82f6", success: "#16a34a", warning: "#d97706", critical: "#dc2626" };
+/** Thak's tone names: the level colours the card itself (and critical is a high-priority push). */
+const TONE: Record<Level, string> = { info: "accent", success: "positive", warning: "warning", critical: "danger" };
 
 function readConfig(): Config | undefined {
   try {
@@ -66,21 +67,32 @@ export function validToken(t: string): boolean {
   return /^[\x21-\x7e]{8,512}$/.test(t);
 }
 
-/** The card Thak shows; `alt` is the text a notification or an older app shows instead. */
+const VERDICT_TONE: Record<string, string> = { SAFE: "positive", CHECK: "warning", STOP: "danger" };
+
+/**
+ * The message Thak shows (thak.app/v1/notify/send): `level` colours it, the verdict is a badge, counts are metrics,
+ * other rows key and value; `alt` is what a notification or an older app shows instead. Sizes are xs|s|m|l|xl and
+ * tones default|muted|accent|positive|warning|danger: the server refuses anything else.
+ */
 export function card(e: Event, host = hostname().split(".")[0]) {
-  const alt = [e.title, ...(e.rows ?? []).map(([k, v]) => `${k}: ${v}`), e.hint].filter(Boolean).join(" · ");
+  const alt = [e.title, ...(e.rows ?? []).map(([k, v]) => `${k}: ${v}`), e.hint].filter(Boolean).join(" · ").slice(0, 4000);
+  const rows = e.rows ?? [];
+  const verdict = rows.find(([k]) => k === "Verdict")?.[1];
+  const counts = rows.filter(([k, v]) => k !== "Verdict" && /^\d+$/.test(v));
+  const rest = rows.filter((r) => r[0] !== "Verdict" && !counts.includes(r));
   return {
-    text: alt.slice(0, 4000),
+    level: e.level,
     card: {
-      alt: alt.slice(0, 4000),
-      accent: ACCENT[e.level],
+      alt,
       size: "m",
       body: [
-        { type: "text", text: e.title, size: "lg", weight: "bold", ...(e.level === "critical" ? { tone: "danger" } : e.level === "warning" ? { tone: "warning" } : e.level === "success" ? { tone: "success" } : {}) },
-        ...(e.rows ?? []).map(([label, value]) => ({ type: "kv", label, value })),
-        ...(e.hint ? [{ type: "text", text: e.hint, size: "sm", tone: "muted" }] : []),
+        { type: "text", text: e.title, size: "l", weight: "bold" },
+        ...(verdict ? [{ type: "badges", items: [{ type: "badge", text: verdict, tone: VERDICT_TONE[verdict] ?? TONE[e.level] }] }] : []),
+        ...(counts.length ? [{ type: "row", items: counts.map(([label, value]) => ({ type: "metric", label, value: Number(value) })) }] : []),
+        ...rest.map(([label, value]) => ({ type: "kv", label, value })),
+        ...(e.hint ? [{ type: "text", text: e.hint, size: "s", tone: "muted" }] : []),
       ],
-      footer: [{ type: "text", text: `vswarm ${VERSION} · ${host}`, size: "sm", tone: "muted" }],
+      footer: [{ type: "text", text: `vswarm ${VERSION} · ${host}`, size: "s", tone: "muted" }],
     },
   };
 }
@@ -111,7 +123,12 @@ export async function send(e: Event, opt: { post?: Poster; timeoutMs?: number; n
       redirect: "error",
       signal: stop.signal,
     });
-    what = r.ok ? "sent" : r.status === 401 || r.status === 403 ? `refused by Thak (${r.status}): the token is wrong or was revoked` : `Thak answered ${r.status}`;
+    // Thak says why in {"error":{"code","message"}}: kept for `notify status`, cut short, never with the token in it.
+    const why = r.ok ? "" : await r.json().then((j: any) => [j?.error?.code, j?.error?.message].filter(Boolean).join(": "), () => "");
+    what = r.ok ? "sent"
+      : r.status === 401 || r.status === 403 ? `refused by Thak (${r.status}): the token is wrong or was revoked`
+      : r.status === 429 ? `Thak's limit was reached (${why || "429"}); later alerts are folded into one`
+      : `Thak answered ${r.status}${why ? `: ${why.replaceAll(tok.value, "…").slice(0, 200)}` : ""}`;
   } catch (err: any) {
     what = stop.signal.aborted ? "Thak did not answer in time" : `could not reach Thak (${String(err?.message ?? err).replace(tok.value, "…").slice(0, 120)})`;
   } finally {

@@ -54,17 +54,36 @@ describe("off until a token is given", () => {
 });
 
 describe("what goes out", () => {
-  test("a card Thak accepts: alt, accent, text and kv rows, a footer with the machine's name", () => {
-    const c = card(verdictEvent("block", [{ severity: "medium" }, { severity: "critical" }], "vswarm diff"), "laptop");
-    expect(c.text).toBe(c.card.alt);
-    expect(c.card.accent).toMatch(/^#[0-9a-f]{6}$/);
-    expect(c.card.body[0]).toMatchObject({ type: "text", weight: "bold", tone: "danger" });
-    expect(c.card.body.filter((b: any) => b.type === "kv")).toEqual([
-      { type: "kv", label: "Verdict", value: "STOP" },
-      { type: "kv", label: "New findings", value: "2" },
-      { type: "kv", label: "Most serious", value: "CRITICAL" },
-    ]);
+  test("a card Thak accepts: a level, the verdict as a badge, counts as metrics, a footer with the machine's name", () => {
+    const c: any = card(verdictEvent("block", [{ severity: "medium" }, { severity: "critical" }], "vswarm diff"), "laptop");
+    expect(c.level).toBe("critical");
+    expect(c.text).toBeUndefined();
+    expect(c.card.alt).toContain("STOP");
+    expect(c.card.body[0]).toMatchObject({ type: "text", weight: "bold", size: "l" });
+    expect(c.card.body[1]).toEqual({ type: "badges", items: [{ type: "badge", text: "STOP", tone: "danger" }] });
+    expect(c.card.body[2]).toEqual({ type: "row", items: [{ type: "metric", label: "New findings", value: 2 }] });
+    expect(c.card.body).toContainEqual({ type: "kv", label: "Most serious", value: "CRITICAL" });
     expect(c.card.footer[0].text).toContain("laptop");
+  });
+
+  test("every size and tone is one Thak accepts, and there is no hex accent (Thak answers 400 otherwise)", () => {
+    const SIZES = ["xs", "s", "m", "l", "xl"], TONES = ["default", "muted", "accent", "positive", "warning", "danger"];
+    const walk = (x: any): void => {
+      if (Array.isArray(x)) return x.forEach(walk);
+      if (!x || typeof x !== "object") return;
+      if ("size" in x) expect([x.size, SIZES.includes(x.size)]).toEqual([x.size, true]);
+      if ("tone" in x) expect([x.tone, TONES.includes(x.tone)]).toEqual([x.tone, true]);
+      expect(x.accent).toBeUndefined();
+      Object.values(x).forEach(walk);
+    };
+    for (const e of [verdictEvent("warn", [{ severity: "high" }], "vswarm diff"), refusedEvent("block"), lockedEvent("1"), askEvent("vswarm gate ssh"), digestEvent("pass", {}), digestEvent("block", { critical: 1, high: 2 })]) walk(card(e));
+  });
+
+  test("Thak's reason for a 400 or a 429 is kept for notify status", async () => {
+    turnOn();
+    const bad = (status: number, code: string) => async () => new Response(JSON.stringify({ error: { code, message: "body[0]: size must be xs, s, m, l or xl" } }), { status });
+    expect(await send(lockedEvent("x"), { post: bad(400, "invalid_message") })).toBe("Thak answered 400: invalid_message: body[0]: size must be xs, s, m, l or xl");
+    expect(await send(lockedEvent("x"), { post: bad(429, "notify_daily_quota") })).toContain("notify_daily_quota");
   });
 
   test("a question sends the command and its first words, not the hosts or numbers after them", () => {

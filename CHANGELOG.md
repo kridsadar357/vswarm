@@ -4,6 +4,13 @@ vswarm is in beta. Every release is a git tag signed by a key in [`trust/allowed
 `vswarm update` takes only those and never goes to a lower version. Full notes for each release are on the
 [releases page](https://github.com/kridsadar357/vswarm/releases).
 
+## 0.1.3
+
+- **`vswarm notify` reaches Thak.** 0.1.2 sent card values Thak refuses (sizes, tones and a colour), so every alert
+  came back with 400. Cards now use Thak's own names, a level that colours the card (STOP is a high-priority push),
+  the verdict as a badge and counts as numbers. When Thak refuses a message or a limit is reached, `notify status`
+  shows Thak's reason.
+
 ## 0.1.2
 
 - **`vswarm notify`: alerts on your phone through Thak.** `vswarm notify thak` asks for the token (pasted, not
