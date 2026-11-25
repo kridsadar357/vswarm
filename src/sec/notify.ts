@@ -99,17 +99,23 @@ export async function send(e: Event, opt: { post?: Poster; timeoutMs?: number; n
   const gap = QUIET[e.kind];
   if (!opt.force && gap && now - (cfg.sent?.[e.kind] ?? 0) < gap) return "quiet";
   let what: string;
+  // A plain timer, not AbortSignal.timeout: that one does not keep the process alive, and on Windows Bun can then wait
+  // on the request forever.
+  const stop = new AbortController();
+  const timer = setTimeout(() => stop.abort(), opt.timeoutMs ?? 4000);
   try {
     const r = await (opt.post ?? fetch)(ENDPOINT, {
       method: "POST",
       headers: { authorization: `Bearer ${tok.value}`, "content-type": "application/json" },
       body: JSON.stringify(card(e)),
       redirect: "error",
-      signal: AbortSignal.timeout(opt.timeoutMs ?? 4000),
+      signal: stop.signal,
     });
     what = r.ok ? "sent" : r.status === 401 || r.status === 403 ? `refused by Thak (${r.status}): the token is wrong or was revoked` : `Thak answered ${r.status}`;
   } catch (err: any) {
-    what = err?.name === "TimeoutError" ? "Thak did not answer in time" : `could not reach Thak (${String(err?.message ?? err).replace(tok.value, "…").slice(0, 120)})`;
+    what = stop.signal.aborted ? "Thak did not answer in time" : `could not reach Thak (${String(err?.message ?? err).replace(tok.value, "…").slice(0, 120)})`;
+  } finally {
+    clearTimeout(timer);
   }
   const next: Config = { ...cfg, sent: { ...cfg.sent, ...(what === "sent" ? { [e.kind]: now } : {}) } };
   if (what === "sent") delete next.error;

@@ -6,9 +6,9 @@ $ErrorActionPreference = 'Continue'
 $failed = @()
 foreach ($f in Get-ChildItem test -Filter *.test.ts | Sort-Object Name) {
   for ($try = 1; $try -le 3; $try++) {
-    $out = (& bun test ".\test\$($f.Name)" 2>&1 | ForEach-Object { "$_" }) -join "`n"
+    # Each line goes to the log as it comes, so a test that hangs shows where.
+    $out = (& bun test ".\test\$($f.Name)" 2>&1 | ForEach-Object { Write-Host "$_"; "$_" }) -join "`n"
     $code = $LASTEXITCODE
-    Write-Output $out
     if ($code -eq 0) { break }
     $crashed = $out -match 'Bun has crashed'
     $failedTest = $out -match '(?m)^\(fail\)'

@@ -93,7 +93,7 @@ describe("it never gets in the way", () => {
   test("a wrong token, a slow server, no network: said in status, never thrown, the token never in the error", async () => {
     turnOn();
     expect(await send(lockedEvent("x"), { post: async () => new Response("no", { status: 401 }) })).toContain("token is wrong or was revoked");
-    expect(await send(lockedEvent("x"), { post: (_u, init) => new Promise((_r, no) => init.signal!.addEventListener("abort", () => no(Object.assign(new Error("t"), { name: "TimeoutError" })))), timeoutMs: 50 })).toBe("Thak did not answer in time");
+    expect(await send(lockedEvent("x"), { post: (_u, init) => new Promise((_r, no) => init.signal!.addEventListener("abort", () => no(new Error("aborted")))), timeoutMs: 50 })).toBe("Thak did not answer in time");
     const r = await send(lockedEvent("x"), { post: async () => { throw new Error(`connect failed for ${TOKEN}`); } });
     expect(r).toContain("could not reach Thak");
     expect(r).not.toContain(TOKEN);
