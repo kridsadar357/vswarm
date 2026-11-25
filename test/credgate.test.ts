@@ -471,7 +471,8 @@ describe("vswarm gate aws / gate kube dispatch", () => {
         else process.env[k] = v;
       process.exitCode = keep.code;
     }
-  }));
+    // Taking each gate off asks a person, and on Windows finding the real home for that starts PowerShell: seconds.
+  }), 20_000);
 });
 
 /** A last check as vswarm writes it, sealed with the key in that temp state folder (the CLI there reads the same key). */
